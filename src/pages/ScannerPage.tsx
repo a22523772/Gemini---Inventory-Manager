@@ -8,10 +8,11 @@ export default function ScannerPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { products } = useStore();
-  const returnTo = searchParams.get('returnTo') || '/';
+  const returnTo = searchParams.get('returnTo') || '';
   
   const [scannedResult, setScannedResult] = useState<string | null>(null);
   const scannerRef = useRef<Html5QrcodeScanner | null>(null);
+  const isRoutingRef = useRef(false);
 
   useEffect(() => {
     // Config
@@ -23,6 +24,8 @@ export default function ScannerPage() {
     
     scannerRef.current.render(
       (decodedText) => {
+        if (isRoutingRef.current) return;
+        isRoutingRef.current = true;
         setScannedResult(decodedText);
         let pid = decodedText;
         
@@ -30,21 +33,39 @@ export default function ScannerPage() {
         const product = products.find(p => p.barcode === decodedText || p.product_id === decodedText);
         if (product) pid = product.product_id;
 
-        // Cleanup and navigate
-        if(scannerRef.current) {
-            scannerRef.current.clear().catch(e => console.error(e));
+        // Determine destination path if no specific returnTo is provided
+        let targetPath = returnTo;
+        if (!targetPath || targetPath === '/') {
+          if (product) {
+            targetPath = '/products';
+          } else {
+            targetPath = '/add-product';
+          }
         }
         
-        const separator = returnTo.includes('?') ? '&' : '?';
-        navigate(`${returnTo}${separator}pid=${encodeURIComponent(pid)}`, { replace: true });
+        const separator = targetPath.includes('?') ? '&' : '?';
+        const finalUrl = `${targetPath}${separator}pid=${encodeURIComponent(pid)}`;
+
+        // Cleanup before navigating to avoid React unmount crash
+        if (scannerRef.current) {
+            scannerRef.current.clear().then(() => {
+               navigate(finalUrl, { replace: true });
+            }).catch(e => {
+               console.error('Scanner clear error', e);
+               navigate(finalUrl, { replace: true });
+            });
+        } else {
+           navigate(finalUrl, { replace: true });
+        }
       },
       (error) => {
-        // usually ignore
+        // usually ignore background scan errors
       }
     );
 
     return () => {
-      if(scannerRef.current) {
+      // If we unmount naturally (e.g. hitting back button)
+      if (scannerRef.current && !isRoutingRef.current) {
           scannerRef.current.clear().catch(e => console.error(e));
       }
     };
