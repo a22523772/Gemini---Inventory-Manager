@@ -4,9 +4,10 @@ import { Users, Plus, Phone, User, Building2, Pencil, Trash2, X } from 'lucide-r
 import { Vendor } from '../lib/db';
 
 export default function Vendors() {
-  const { vendors, addVendor, editVendor, deleteVendor } = useStore();
+  const { vendors, addVendor, editVendor, deleteVendor, showToast } = useStore();
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   
   // Form State
   const [vendorName, setVendorName] = useState('');
@@ -44,6 +45,7 @@ export default function Vendors() {
         contact,
         phone
       });
+      showToast('✅ 供應商已更新！');
     } else {
       await addVendor({
         vendor_id: `V${Date.now().toString().slice(-6)}`,
@@ -51,13 +53,18 @@ export default function Vendors() {
         contact,
         phone
       });
+      showToast('✅ 新供應商已新增！');
     }
     closeForm();
   };
 
-  const handleDelete = async (vendorId: string) => {
-    if (confirm('確定要刪除這位供應商嗎？此操作將在同步後生效。')) {
+  const executeDelete = async (vendorId: string) => {
+    try {
       await deleteVendor(vendorId);
+      showToast('✅ 供應商已刪除！');
+      setConfirmDeleteId(null);
+    } catch (e: any) {
+      showToast('❌ 刪除失敗: ' + e.message);
     }
   };
 
@@ -157,12 +164,22 @@ export default function Vendors() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => openForm(v)} className="p-2 glass-panel rounded-xl text-[var(--color-accent-blue)] hover:bg-white/10 transition-colors">
-                  <Pencil className="w-4 h-4" />
-                </button>
-                <button onClick={() => handleDelete(v.vendor_id)} className="p-2 glass-panel rounded-xl text-red-400 hover:bg-red-500/20 hover:border-red-500/30 transition-colors">
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                {confirmDeleteId === v.vendor_id ? (
+                   <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-2">
+                     <span className="text-xs font-bold text-red-400 mr-1">確定刪除？</span>
+                     <button onClick={() => executeDelete(v.vendor_id)} className="p-1 px-3 glass-panel rounded-lg text-red-400 hover:bg-red-500/20 text-xs font-bold transition-colors">確認</button>
+                     <button onClick={() => setConfirmDeleteId(null)} className="p-1 px-3 glass-panel rounded-lg text-white hover:bg-white/10 text-xs transition-colors">取消</button>
+                   </div>
+                ) : (
+                  <>
+                    <button onClick={() => openForm(v)} className="p-2 glass-panel rounded-xl text-[var(--color-accent-blue)] hover:bg-white/10 transition-colors">
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => setConfirmDeleteId(v.vendor_id)} className="p-2 glass-panel rounded-xl text-red-400 hover:bg-red-500/20 hover:border-red-500/30 transition-colors">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           ))

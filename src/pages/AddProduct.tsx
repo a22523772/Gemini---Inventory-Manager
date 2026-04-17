@@ -6,7 +6,7 @@ import { ArrowLeft, Save, ScanBarcode, PackagePlus, Pencil } from 'lucide-react'
 export default function AddProduct() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { addProduct, editProduct, products, vendors } = useStore();
+  const { addProduct, editProduct, products, vendors, showToast } = useStore();
 
   const editId = searchParams.get('editId');
   const existingProduct = editId ? products.find(p => p.product_id === editId) : null;
@@ -50,8 +50,10 @@ export default function AddProduct() {
 
     if (existingProduct) {
       await editProduct({ ...existingProduct, ...productData });
+      showToast('✅ 商品已更新！');
     } else {
       await addProduct(productData);
+      showToast('✅ 新商品已建立！');
     }
     
     // Navigate back to products listing

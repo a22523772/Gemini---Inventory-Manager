@@ -11,7 +11,7 @@ import Vendors from './pages/Vendors';
 import { useStore } from './store/useStore';
 
 export default function App() {
-  const { loadInitialData, fetchRemoteData } = useStore();
+  const { loadInitialData, fetchRemoteData, toastMessage } = useStore();
 
   useEffect(() => {
     const init = async () => {
@@ -32,7 +32,13 @@ export default function App() {
   }, [loadInitialData, fetchRemoteData]);
 
   return (
-    <HashRouter>
+    <>
+      {toastMessage && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-[#0f172a] border border-[var(--color-accent-blue)] text-white px-6 py-3 rounded-full shadow-2xl animate-in slide-in-from-top-4 fade-in font-bold flex items-center whitespace-nowrap">
+          {toastMessage}
+        </div>
+      )}
+      <HashRouter>
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<Home />} />
@@ -45,5 +51,6 @@ export default function App() {
         <Route path="/scan" element={<ScannerPage />} />
       </Routes>
     </HashRouter>
+    </>
   );
 }

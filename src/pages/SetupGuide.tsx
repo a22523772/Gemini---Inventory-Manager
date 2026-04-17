@@ -100,30 +100,30 @@ export default function SetupGuide() {
            <div className="glass-panel p-4 rounded-2xl text-sm space-y-4">
              <div className="p-4 bg-[var(--color-accent-blue)]/10 border border-[var(--color-accent-blue)]/30 rounded-xl text-blue-100">
                <FileCode2 className="w-6 h-6 mb-2 text-[var(--color-accent-blue)]" />
-               <h3 className="font-bold text-[var(--color-accent-blue)]">Important Notice about PWA vs Flutter</h3>
+               <h3 className="font-bold text-[var(--color-accent-blue)]">關於 PWA (漸進式網頁應用) 的重要提醒</h3>
                <p className="mt-1 text-white/90">
-                 As requested, this system provides offline functionality, barcode scanning, and fast local search. Because this is a Web development platform, we have built this as a <strong>PWA (Progressive Web App)</strong>. 
+                 此系統提供離線操作、條碼掃描以及快速的本地搜尋功能。為了讓您能在各平台順暢使用，我們已將其建置為 <strong>PWA (漸進式網頁應用程式)</strong>。
                </p>
                <ul className="list-disc pl-5 mt-2 space-y-1 text-white/90">
-                 <li><strong>iOS Usage:</strong> Open this URL in Safari, tap "Share", and select <strong>"Add to Home Screen"</strong>. It will function identically to a native app and work offline.</li>
-                 <li><strong>Flutter Requirement:</strong> If you strictly need to compile a Flutter app, the guidelines are provided below.</li>
+                 <li><strong>iOS 使用方式：</strong> 請在 Safari 開啟此網址，點擊「分享」圖示，然後選擇 <strong>「加入主畫面」</strong>。它的運作會與一般的原生 App 一模一樣且支援離線。</li>
+                 <li><strong>Android/電腦版：</strong> 請使用 Chrome 開啟，根據提示選擇「安裝應用程式」。</li>
                </ul>
              </div>
 
              <section>
-                <h3 className="text-base font-bold text-[var(--color-text-main)]">1. Google Sheets Setup</h3>
-                <p className="text-[var(--color-text-dim)] mt-1">Create a new Google Sheet and add these tabs:</p>
+                <h3 className="text-base font-bold text-[var(--color-text-main)]">1. Google Sheets 結構設定</h3>
+                <p className="text-[var(--color-text-dim)] mt-1">請建立一個新的 Google Sheet，並確保下方有這四個工作表 (區分大小寫)：</p>
                 <ul className="list-disc pl-5 mt-2 space-y-1 text-white/80 font-mono text-xs">
-                  <li><strong>products</strong>: product_id, barcode, name, category, unit, cost_price, vendor_id, has_expiry, created_at</li>
-                  <li><strong>vendors</strong>: vendor_id, vendor_name, contact, phone</li>
-                  <li><strong>stock</strong>: stock_id, product_id, location, floor, area, quantity, expiry_date, last_update</li>
-                  <li><strong>transactions</strong>: transaction_id, product_id, type, quantity, location, floor, area, cost_price, vendor_id, date, note, operator</li>
+                  <li><strong>products</strong> (商品表): product_id, barcode, name, category, unit, cost_price, vendor_id, has_expiry, created_at</li>
+                  <li><strong>vendors</strong> (供應商): vendor_id, vendor_name, contact, phone</li>
+                  <li><strong>stock</strong> (庫存表): stock_id, product_id, location, floor, area, quantity, expiry_date, last_update</li>
+                  <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, type, quantity, location, floor, area, cost_price, vendor_id, date, note, operator</li>
                 </ul>
              </section>
 
              <section>
-                <h3 className="text-base font-bold text-[var(--color-text-main)] mt-6">2. Google Apps Script API</h3>
-                <p className="text-[var(--color-text-dim)] mt-1">In your Google Sheet, go to Extensions &gt; Apps Script. Paste this code and deploy as a Web App (Anyone with link):</p>
+                <h3 className="text-base font-bold text-[var(--color-text-main)] mt-6">2. Google Apps Script 伺服器代碼</h3>
+                <p className="text-[var(--color-text-dim)] mt-1">在您的 Google Sheet 中，點選選單的 「擴充功能 &gt; Apps Script」。將以下代碼完全貼上，並部署為「網頁應用程式 (任何人皆可存取)」：</p>
                 <pre className="bg-black/40 border border-white/10 text-[var(--color-text-dim)] p-4 rounded-xl mt-3 overflow-x-auto text-xs font-mono">
 {`function doPost(e) {
   var action = e.parameter.action;
@@ -341,8 +341,8 @@ function doGet(e) {
              </section>
 
              <section>
-                <h3 className="text-base font-bold text-[var(--color-text-main)] mt-8">3. Native Flutter App (Optional)</h3>
-                <p className="text-[var(--color-text-dim)] mt-1">If you specifically want to compile a native App instead of using this Web App (PWA), here is the main logic you need using <code>mobile_scanner</code> and <code>sqflite</code>:</p>
+                <h3 className="text-base font-bold text-[var(--color-text-main)] mt-8">3. 原生 Flutter App (選填)</h3>
+                <p className="text-[var(--color-text-dim)] mt-1">如果您仍希望編譯成原生的手機 App 而非使用上述的 PWA，您可以使用 Flutter，並搭配 <code>mobile_scanner</code> 及 <code>sqflite</code> 開發，以下為核心邏輯參考：</p>
                 <pre className="bg-black/40 border border-white/10 text-[var(--color-text-dim)] p-4 rounded-xl mt-3 overflow-x-auto text-xs font-mono">
 {`// Example Flutter Main Logic (Reference)
 import 'package:flutter/material.dart';

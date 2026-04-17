@@ -23,6 +23,8 @@ interface AppState {
   addVendor: (vendor: Vendor) => Promise<void>;
   editVendor: (vendor: Vendor) => Promise<void>;
   deleteVendor: (vendorId: string) => Promise<void>;
+  toastMessage: string | null;
+  showToast: (msg: string) => void;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -34,6 +36,14 @@ export const useStore = create<AppState>((set, get) => ({
   operator: 'staff',
   isLoading: false,
   error: null,
+  toastMessage: null,
+
+  showToast: (msg: string) => {
+    set({ toastMessage: msg });
+    setTimeout(() => {
+      set((state) => state.toastMessage === msg ? { toastMessage: null } : state);
+    }, 3000);
+  },
 
   loadInitialData: async () => {
     set({ isLoading: true });

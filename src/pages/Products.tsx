@@ -1,13 +1,22 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 export default function Products() {
-  const { products, stock, deleteProduct } = useStore();
-  const [searchTerm, setSearchTerm] = useState('');
+  const { products, stock, deleteProduct, showToast } = useStore();
+  const [searchParams] = useSearchParams();
+  const [searchTerm, setSearchTerm] = useState(searchParams.get('pid') || '');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const pid = searchParams.get('pid');
+    if (pid) {
+      setSearchTerm(pid);
+    }
+  }, [searchParams]);
 
   // 模糊搜尋，本地快取中查找 (支援 < 100ms 要求)
   const filteredProducts = useMemo(() => {
@@ -25,9 +34,14 @@ export default function Products() {
     return stock.filter(s => s.product_id === pid).reduce((a, b) => a + b.quantity, 0);
   };
 
-  const handleDelete = async (pid: string) => {
-    if (confirm('確定要刪除這個商品嗎？此操作將在同步後生效。')) {
+  const executeDelete = async (pid: string) => {
+    try {
       await deleteProduct(pid);
+      showToast('✅ 商品已刪除！');
+      setConfirmDeleteId(null);
+      setExpandedId(null);
+    } catch (e: any) {
+      showToast('❌ 刪除失敗: ' + e.message);
     }
   };
 
@@ -90,12 +104,26 @@ export default function Products() {
               
               {expandedId === p.product_id && (
                 <div className="mb-3 pt-2 border-t border-white/5 flex gap-2 animate-in fade-in slide-in-from-top-2">
-                  <button onClick={() => navigate(`/add-product?editId=${p.product_id}`)} className="flex-1 py-1.5 glass-panel hover:bg-white/10 text-[var(--color-accent-blue)] text-xs font-bold rounded-lg flex items-center justify-center transition-colors">
-                    <Pencil className="w-3.5 h-3.5 mr-1.5" /> 編輯
-                  </button>
-                  <button onClick={() => handleDelete(p.product_id)} className="flex-1 py-1.5 glass-panel hover:bg-red-500/20 text-red-400 text-xs font-bold rounded-lg flex items-center justify-center transition-colors">
-                    <Trash2 className="w-3.5 h-3.5 mr-1.5" /> 刪除
-                  </button>
+                  {confirmDeleteId === p.product_id ? (
+                    <div className="flex-1 flex gap-2 w-full animate-in slide-in-from-right-2">
+                       <div className="flex-1 py-1.5 flex items-center justify-center text-sm font-bold text-red-400">確定刪除？</div>
+                       <button onClick={() => executeDelete(p.product_id)} className="flex-1 py-1.5 glass-panel hover:bg-red-500/20 text-red-400 text-xs font-bold rounded-lg flex items-center justify-center transition-colors border-red-500/30">
+                         確認
+                       </button>
+                       <button onClick={() => setConfirmDeleteId(null)} className="flex-1 py-1.5 glass-panel hover:bg-white/10 text-white text-xs font-bold rounded-lg flex items-center justify-center transition-colors">
+                         取消
+                       </button>
+                    </div>
+                  ) : (
+                    <>
+                      <button onClick={() => navigate(`/add-product?editId=${p.product_id}`)} className="flex-1 py-1.5 glass-panel hover:bg-white/10 text-[var(--color-accent-blue)] text-xs font-bold rounded-lg flex items-center justify-center transition-colors">
+                        <Pencil className="w-3.5 h-3.5 mr-1.5" /> 編輯
+                      </button>
+                      <button onClick={() => setConfirmDeleteId(p.product_id)} className="flex-1 py-1.5 glass-panel hover:bg-red-500/20 text-red-400 text-xs font-bold rounded-lg flex items-center justify-center transition-colors">
+                        <Trash2 className="w-3.5 h-3.5 mr-1.5" /> 刪除
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
 

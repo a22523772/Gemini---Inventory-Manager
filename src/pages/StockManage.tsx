@@ -9,10 +9,9 @@ export default function StockManage() {
   const { enqueueAction, products, operator } = useStore();
   
   const initialType = (searchParams.get('type') as 'stock_in' | 'stock_out' | 'adjust') || 'stock_in';
-  const initialPid = searchParams.get('pid') || '';
   
   const [type, setType] = useState(initialType);
-  const [pid, setPid] = useState(initialPid);
+  const [pid, setPid] = useState(searchParams.get('pid') || '');
   const [quantity, setQuantity] = useState('');
   const [location, setLocation] = useState('倉庫');
   const [floor, setFloor] = useState('1F');
@@ -20,6 +19,13 @@ export default function StockManage() {
   const [costPrice, setCostPrice] = useState('');
   const [vendorId, setVendorId] = useState('');
   const [note, setNote] = useState('');
+
+  useEffect(() => {
+    const scannedPid = searchParams.get('pid');
+    if (scannedPid) {
+      setPid(scannedPid);
+    }
+  }, [searchParams]);
 
   const product = products.find(p => p.product_id === pid);
 
