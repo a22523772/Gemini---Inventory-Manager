@@ -1,12 +1,15 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore } from '../store/useStore';
-import { ArrowLeft, Save, ScanBarcode, PackagePlus } from 'lucide-react';
+import { ArrowLeft, Save, ScanBarcode, PackagePlus, Pencil } from 'lucide-react';
 
 export default function AddProduct() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-    const { addProduct, vendors } = useStore();
+  const { addProduct, editProduct, products, vendors } = useStore();
+
+  const editId = searchParams.get('editId');
+  const existingProduct = editId ? products.find(p => p.product_id === editId) : null;
 
   // Form state
   const [productId, setProductId] = useState(`P${Date.now().toString().slice(-6)}`);
@@ -18,9 +21,23 @@ export default function AddProduct() {
   const [vendorId, setVendorId] = useState('');
   const [hasExpiry, setHasExpiry] = useState(false);
 
+  useEffect(() => {
+    if (existingProduct) {
+      setProductId(existingProduct.product_id);
+      setBarcode(existingProduct.barcode || '');
+      setName(existingProduct.name);
+      setCategory(existingProduct.category || '');
+      setUnit(existingProduct.unit || '個');
+      setCostPrice(existingProduct.cost_price?.toString() || '');
+      setVendorId(existingProduct.vendor_id || '');
+      setHasExpiry(existingProduct.has_expiry || false);
+    }
+  }, [existingProduct]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await addProduct({
+    
+    const productData = {
       product_id: productId,
       barcode,
       name,
@@ -29,7 +46,13 @@ export default function AddProduct() {
       cost_price: Number(costPrice) || 0,
       vendor_id: vendorId,
       has_expiry: hasExpiry
-    });
+    };
+
+    if (existingProduct) {
+      await editProduct({ ...existingProduct, ...productData });
+    } else {
+      await addProduct(productData);
+    }
     
     // Navigate back to products listing
     navigate('/products', { replace: true });
@@ -42,8 +65,8 @@ export default function AddProduct() {
           <ArrowLeft className="w-6 h-6" />
         </button>
         <h1 className="ml-2 text-xl font-bold text-[var(--color-text-main)] flex items-center">
-          <PackagePlus className="w-5 h-5 mr-2 text-[var(--color-accent-blue)]" />
-          新增商品
+          {existingProduct ? <Pencil className="w-5 h-5 mr-2 text-[var(--color-accent-blue)]" /> : <PackagePlus className="w-5 h-5 mr-2 text-[var(--color-accent-blue)]" />}
+          {existingProduct ? '編輯商品' : '新增商品'}
         </h1>
       </header>
 
@@ -55,9 +78,10 @@ export default function AddProduct() {
             <input
               type="text"
               required
+              disabled={!!existingProduct}
               value={productId}
               onChange={(e) => setProductId(e.target.value)}
-              className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] outline-none transition-all"
+              className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             />
           </div>
 
@@ -85,7 +109,7 @@ export default function AddProduct() {
               />
               <button 
                 type="button" 
-                onClick={() => navigate(`/scan?returnTo=/add-product`)}
+                onClick={() => navigate(`/scan?returnTo=${encodeURIComponent(`/add-product${existingProduct ? `?editId=${existingProduct.product_id}` : ''}`)}`)}
                 className="px-4 py-2 glass-panel text-[var(--color-accent-blue)] rounded-xl font-bold flex items-center justify-center hover:bg-white/10 transition-colors"
                 title="掃描條碼"
               >
@@ -149,7 +173,7 @@ export default function AddProduct() {
             className="w-full flex items-center justify-center py-4 px-4 border border-transparent rounded-2xl shadow-sm text-base font-bold text-[#0f172a] bg-[var(--color-accent-blue)] hover:opacity-90 active:scale-95 transition-all outline-none"
           >
             <Save className="w-5 h-5 mr-2" />
-            建立商品
+            {existingProduct ? '儲存變更' : '建立商品'}
           </button>
         </div>
       </form>

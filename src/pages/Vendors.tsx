@@ -1,32 +1,64 @@
 import { useState } from 'react';
 import { useStore } from '../store/useStore';
-import { Users, Plus, Phone, User, Building2, HardDriveDownload } from 'lucide-react';
-import { v4 as uuidv4 } from 'uuid';
+import { Users, Plus, Phone, User, Building2, Pencil, Trash2, X } from 'lucide-react';
+import { Vendor } from '../lib/db';
 
 export default function Vendors() {
-  const { vendors, addVendor } = useStore();
+  const { vendors, addVendor, editVendor, deleteVendor } = useStore();
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   
   // Form State
   const [vendorName, setVendorName] = useState('');
   const [contact, setContact] = useState('');
   const [phone, setPhone] = useState('');
 
+  const openForm = (vendor?: Vendor) => {
+    if (vendor) {
+      setEditingId(vendor.vendor_id);
+      setVendorName(vendor.vendor_name);
+      setContact(vendor.contact || '');
+      setPhone(vendor.phone || '');
+    } else {
+      setEditingId(null);
+      setVendorName('');
+      setContact('');
+      setPhone('');
+    }
+    setShowForm(true);
+  };
+
+  const closeForm = () => {
+    setShowForm(false);
+    setEditingId(null);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!vendorName) return;
 
-    await addVendor({
-      vendor_id: `V${Date.now().toString().slice(-6)}`,
-      vendor_name: vendorName,
-      contact,
-      phone
-    });
+    if (editingId) {
+      await editVendor({
+        vendor_id: editingId,
+        vendor_name: vendorName,
+        contact,
+        phone
+      });
+    } else {
+      await addVendor({
+        vendor_id: `V${Date.now().toString().slice(-6)}`,
+        vendor_name: vendorName,
+        contact,
+        phone
+      });
+    }
+    closeForm();
+  };
 
-    setVendorName('');
-    setContact('');
-    setPhone('');
-    setShowForm(false);
+  const handleDelete = async (vendorId: string) => {
+    if (confirm('確定要刪除這位供應商嗎？此操作將在同步後生效。')) {
+      await deleteVendor(vendorId);
+    }
   };
 
   return (
@@ -36,20 +68,27 @@ export default function Vendors() {
           <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text-main)]">供應商管理</h1>
           <p className="text-sm text-[var(--color-text-dim)]">Vendors Directory</p>
         </div>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="px-4 py-2 flex items-center glass-panel text-[var(--color-accent-blue)] rounded-xl text-sm font-bold shadow-sm hover:bg-white/10 transition-colors"
-        >
-          {showForm ? '取消' : <><Plus className="w-4 h-4 mr-1" /> 新增</>}
-        </button>
+        {!showForm && (
+          <button
+            onClick={() => openForm()}
+            className="px-4 py-2 flex items-center glass-panel text-[var(--color-accent-blue)] rounded-xl text-sm font-bold shadow-sm hover:bg-white/10 transition-colors"
+          >
+            <Plus className="w-4 h-4 mr-1" /> 新增
+          </button>
+        )}
       </header>
 
       {showForm && (
         <form onSubmit={handleSubmit} className="glass-panel p-4 rounded-2xl space-y-4 shadow-lg border-[var(--color-accent-blue)]/30 animate-in fade-in slide-in-from-top-4">
-          <h2 className="text-base font-bold text-[var(--color-text-main)] mb-2 flex items-center">
-            <Building2 className="w-5 h-5 mr-2 text-[var(--color-accent-blue)]" />
-            新增供應商資料
-          </h2>
+          <div className="flex justify-between items-center mb-2">
+             <h2 className="text-base font-bold text-[var(--color-text-main)] flex items-center">
+               <Building2 className="w-5 h-5 mr-2 text-[var(--color-accent-blue)]" />
+               {editingId ? '編輯供應商' : '新增供應商資料'}
+             </h2>
+             <button type="button" onClick={closeForm} className="p-1 rounded-full hover:bg-white/10 text-[var(--color-text-dim)]">
+                <X className="w-5 h-5" />
+             </button>
+          </div>
           <div>
             <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">供應商名稱 *</label>
             <input
@@ -84,9 +123,9 @@ export default function Vendors() {
           </div>
           <button
             type="submit"
-            className="w-full mt-2 py-3 px-4 rounded-xl text-sm font-bold text-[#0f172a] bg-[var(--color-accent-blue)] hover:opacity-90 active:scale-95 transition-all"
+            className="w-full flex justify-center items-center mt-2 py-3 px-4 rounded-xl text-sm font-bold text-[#0f172a] bg-[var(--color-accent-blue)] hover:opacity-90 active:scale-95 transition-all"
           >
-            確認新增
+            {editingId ? '儲存修改' : '確認新增'}
           </button>
         </form>
       )}
@@ -99,7 +138,7 @@ export default function Vendors() {
           </div>
         ) : (
           vendors.map(v => (
-            <div key={v.vendor_id} className="glass-panel p-4 rounded-2xl flex items-center justify-between">
+            <div key={v.vendor_id} className="glass-panel p-4 rounded-2xl flex items-center justify-between group">
               <div>
                 <h3 className="text-base font-bold text-[var(--color-text-main)]">{v.vendor_name}</h3>
                 <div className="flex items-center space-x-3 mt-2 text-[var(--color-text-dim)] text-xs">
@@ -117,8 +156,13 @@ export default function Vendors() {
                   )}
                 </div>
               </div>
-              <div className="px-3 py-1 bg-white/5 border border-white/10 rounded-lg">
-                <span className="text-xs font-mono text-[var(--color-accent-blue)]">{v.vendor_id}</span>
+              <div className="flex items-center gap-2">
+                <button onClick={() => openForm(v)} className="p-2 glass-panel rounded-xl text-[var(--color-accent-blue)] hover:bg-white/10 transition-colors">
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button onClick={() => handleDelete(v.vendor_id)} className="p-2 glass-panel rounded-xl text-red-400 hover:bg-red-500/20 hover:border-red-500/30 transition-colors">
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
             </div>
           ))

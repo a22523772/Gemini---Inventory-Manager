@@ -55,7 +55,7 @@ export type Transaction = {
 // Queue item type
 export type SyncItem = {
   id: string; // local uuid
-  action: 'stockIn' | 'stockOut' | 'adjustStock' | 'addProduct' | 'addVendor';
+  action: 'stockIn' | 'stockOut' | 'adjustStock' | 'addProduct' | 'addVendor' | 'editProduct' | 'deleteProduct' | 'editVendor' | 'deleteVendor';
   payload: any;
   timestamp: string;
 };

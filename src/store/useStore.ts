@@ -18,7 +18,11 @@ interface AppState {
   syncData: () => Promise<void>;
   fetchRemoteData: () => Promise<void>;
   addProduct: (product: Omit<Product, 'created_at'>) => Promise<void>;
+  editProduct: (product: Product) => Promise<void>;
+  deleteProduct: (productId: string) => Promise<void>;
   addVendor: (vendor: Vendor) => Promise<void>;
+  editVendor: (vendor: Vendor) => Promise<void>;
+  deleteVendor: (vendorId: string) => Promise<void>;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -207,6 +211,18 @@ export const useStore = create<AppState>((set, get) => ({
     await get().enqueueAction('addProduct', newProduct);
   },
 
+  editProduct: async (product) => {
+    await dbProducts.setItem(product.product_id, product);
+    set(state => ({ products: state.products.map(p => p.product_id === product.product_id ? product : p) }));
+    await get().enqueueAction('editProduct', product);
+  },
+
+  deleteProduct: async (productId) => {
+    await dbProducts.removeItem(productId);
+    set(state => ({ products: state.products.filter(p => p.product_id !== productId) }));
+    await get().enqueueAction('deleteProduct', { product_id: productId });
+  },
+
   addVendor: async (vendor) => {
     // Save to local cache optimistic update
     await dbVendors.setItem(vendor.vendor_id, vendor);
@@ -214,5 +230,17 @@ export const useStore = create<AppState>((set, get) => ({
     
     // Queue the sync to Google Sheets
     await get().enqueueAction('addVendor', vendor);
+  },
+
+  editVendor: async (vendor) => {
+    await dbVendors.setItem(vendor.vendor_id, vendor);
+    set(state => ({ vendors: state.vendors.map(v => v.vendor_id === vendor.vendor_id ? vendor : v) }));
+    await get().enqueueAction('editVendor', vendor);
+  },
+
+  deleteVendor: async (vendorId) => {
+    await dbVendors.removeItem(vendorId);
+    set(state => ({ vendors: state.vendors.filter(v => v.vendor_id !== vendorId) }));
+    await get().enqueueAction('deleteVendor', { vendor_id: vendorId });
   }
 }));

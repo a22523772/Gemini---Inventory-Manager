@@ -35,9 +35,8 @@ export default function ScannerPage() {
             scannerRef.current.clear().catch(e => console.error(e));
         }
         
-        const returnUrl = new URL(returnTo, window.location.origin);
-        returnUrl.searchParams.set('pid', pid);
-        navigate(returnUrl.pathname + returnUrl.search);
+        const separator = returnTo.includes('?') ? '&' : '?';
+        navigate(`${returnTo}${separator}pid=${encodeURIComponent(pid)}`, { replace: true });
       },
       (error) => {
         // usually ignore

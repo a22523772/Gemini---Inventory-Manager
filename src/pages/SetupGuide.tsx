@@ -139,6 +139,34 @@ export default function SetupGuide() {
     prodSheet.appendRow([data.product_id, data.barcode, data.name, data.category, data.unit, data.cost_price, data.vendor_id, data.has_expiry, data.created_at]);
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
+
+  if (action === 'editProduct') {
+    var prodSheet = ss.getSheetByName('products');
+    if (prodSheet && prodSheet.getLastRow() > 1) {
+      var values = prodSheet.getDataRange().getValues();
+      for (var i = 1; i < values.length; i++) {
+        if (values[i][0] == data.product_id) {
+          prodSheet.getRange(i+1, 2, 1, 8).setValues([[data.barcode, data.name, data.category, data.unit, data.cost_price, data.vendor_id, data.has_expiry, data.created_at || new Date().toISOString()]]);
+          break;
+        }
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'deleteProduct') {
+    var prodSheet = ss.getSheetByName('products');
+    if (prodSheet && prodSheet.getLastRow() > 1) {
+      var values = prodSheet.getDataRange().getValues();
+      for (var i = 1; i < values.length; i++) {
+        if (values[i][0] == data.product_id) {
+          prodSheet.deleteRow(i+1);
+          break;
+        }
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
+  }
   
   if (action === 'addVendor') {
     var vendorSheet = ss.getSheetByName('vendors');
@@ -147,6 +175,34 @@ export default function SetupGuide() {
       vendorSheet.appendRow(['vendor_id', 'vendor_name', 'contact', 'phone']);
     }
     vendorSheet.appendRow([data.vendor_id, data.vendor_name, data.contact || '', data.phone || '']);
+    return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'editVendor') {
+    var vendorSheet = ss.getSheetByName('vendors');
+    if (vendorSheet && vendorSheet.getLastRow() > 1) {
+      var values = vendorSheet.getDataRange().getValues();
+      for (var i = 1; i < values.length; i++) {
+        if (values[i][0] == data.vendor_id) {
+          vendorSheet.getRange(i+1, 2, 1, 3).setValues([[data.vendor_name, data.contact || '', data.phone || '']]);
+          break;
+        }
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'deleteVendor') {
+    var vendorSheet = ss.getSheetByName('vendors');
+    if (vendorSheet && vendorSheet.getLastRow() > 1) {
+      var values = vendorSheet.getDataRange().getValues();
+      for (var i = 1; i < values.length; i++) {
+        if (values[i][0] == data.vendor_id) {
+          vendorSheet.deleteRow(i+1);
+          break;
+        }
+      }
+    }
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
   

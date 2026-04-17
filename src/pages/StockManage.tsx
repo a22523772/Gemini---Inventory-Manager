@@ -95,7 +95,7 @@ export default function StockManage() {
             />
             <button 
               type="button" 
-              onClick={() => navigate(`/scan?returnTo=/manage?type=${type}`)}
+              onClick={() => navigate(`/scan?returnTo=${encodeURIComponent('/manage?type=' + type)}`)}
               className="px-4 py-2 glass-panel text-[var(--color-accent-blue)] rounded-xl font-bold text-sm hover:bg-white/10"
             >
               掃描

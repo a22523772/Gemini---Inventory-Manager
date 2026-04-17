@@ -1,11 +1,13 @@
 import { useState, useMemo } from 'react';
 import { useStore } from '../store/useStore';
-import { Search, ScanBarcode, PackageOpen } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 
 export default function Products() {
-  const { products, stock } = useStore();
+  const { products, stock, deleteProduct } = useStore();
   const [searchTerm, setSearchTerm] = useState('');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   // 模糊搜尋，本地快取中查找 (支援 < 100ms 要求)
   const filteredProducts = useMemo(() => {
@@ -21,6 +23,12 @@ export default function Products() {
   // 取的某商品的總庫存
   const getProductStock = (pid: string) => {
     return stock.filter(s => s.product_id === pid).reduce((a, b) => a + b.quantity, 0);
+  };
+
+  const handleDelete = async (pid: string) => {
+    if (confirm('確定要刪除這個商品嗎？此操作將在同步後生效。')) {
+      await deleteProduct(pid);
+    }
   };
 
   return (
@@ -61,16 +69,36 @@ export default function Products() {
           </div>
         ) : (
           filteredProducts.map(p => (
-            <div key={p.product_id} className="glass-panel border border-[var(--color-glass-border)] rounded-xl p-4">
+            <div key={p.product_id} className="glass-panel border border-[var(--color-glass-border)] rounded-xl p-4 transition-all">
               <div className="flex justify-between items-start mb-2">
-                <div>
+                <div className="flex-1 pr-2">
                   <h3 className="font-bold text-[var(--color-text-main)] text-base">{p.name}</h3>
                   <p className="text-xs text-[var(--color-text-dim)] font-mono mt-0.5">{p.product_id} {p.barcode ? `| ${p.barcode}` : ''}</p>
                 </div>
-                <div className="bg-[var(--color-glass-bg)] text-[var(--color-accent-blue)] px-2.5 py-1 rounded-lg text-sm font-bold border border-[var(--color-glass-border)]">
-                  {getProductStock(p.product_id)} {p.unit}
+                <div className="flex flex-col items-end gap-2">
+                  <div className="bg-[var(--color-glass-bg)] text-[var(--color-accent-blue)] px-2.5 py-1 rounded-lg text-sm font-bold border border-[var(--color-glass-border)]">
+                    {getProductStock(p.product_id)} {p.unit}
+                  </div>
+                  <button 
+                    onClick={() => setExpandedId(expandedId === p.product_id ? null : p.product_id)}
+                    className="p-1 -mr-1 text-[var(--color-text-dim)] hover:text-white"
+                  >
+                    <MoreHorizontal className="w-5 h-5" />
+                  </button>
                 </div>
               </div>
+              
+              {expandedId === p.product_id && (
+                <div className="mb-3 pt-2 border-t border-white/5 flex gap-2 animate-in fade-in slide-in-from-top-2">
+                  <button onClick={() => navigate(`/add-product?editId=${p.product_id}`)} className="flex-1 py-1.5 glass-panel hover:bg-white/10 text-[var(--color-accent-blue)] text-xs font-bold rounded-lg flex items-center justify-center transition-colors">
+                    <Pencil className="w-3.5 h-3.5 mr-1.5" /> 編輯
+                  </button>
+                  <button onClick={() => handleDelete(p.product_id)} className="flex-1 py-1.5 glass-panel hover:bg-red-500/20 text-red-400 text-xs font-bold rounded-lg flex items-center justify-center transition-colors">
+                    <Trash2 className="w-3.5 h-3.5 mr-1.5" /> 刪除
+                  </button>
+                </div>
+              )}
+
               <div className="mt-3 flex gap-2">
                 <Link to={`/manage?type=stock_in&pid=${p.product_id}`} className="flex-1 py-2 glass-panel hover:bg-white/10 text-[var(--color-text-main)] text-xs font-semibold rounded-lg text-center transition-colors">
                   進貨
