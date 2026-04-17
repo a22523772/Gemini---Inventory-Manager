@@ -1,0 +1,6 @@
+{
+  "name": "Inventory Manager",
+  "description": "Stock management app with offline support, barcode scanning, and GAS backend.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": []
+}
