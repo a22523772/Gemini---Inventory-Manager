@@ -1,10 +1,11 @@
 import { create } from 'zustand';
-import { dbProducts, dbStock, dbSyncQueue, dbSettings, Product, Stock, SyncItem } from '../lib/db';
+import { dbProducts, dbStock, dbVendors, dbSyncQueue, dbSettings, Product, Stock, Vendor, SyncItem } from '../lib/db';
 import { v4 as uuidv4 } from 'uuid';
 
 interface AppState {
   products: Product[];
   stock: Stock[];
+  vendors: Vendor[];
   syncQueue: SyncItem[];
   gasApiUrl: string;
   operator: string;
@@ -17,11 +18,13 @@ interface AppState {
   syncData: () => Promise<void>;
   fetchRemoteData: () => Promise<void>;
   addProduct: (product: Omit<Product, 'created_at'>) => Promise<void>;
+  addVendor: (vendor: Vendor) => Promise<void>;
 }
 
 export const useStore = create<AppState>((set, get) => ({
   products: [],
   stock: [],
+  vendors: [],
   syncQueue: [],
   gasApiUrl: '',
   operator: 'staff',
@@ -58,7 +61,14 @@ export const useStore = create<AppState>((set, get) => ({
         if (item) sList.push(item);
       }
 
-      set({ products: pList, stock: sList });
+      const vKeys = await dbVendors.keys();
+      const vList: Vendor[] = [];
+      for (const k of vKeys) {
+        const item = await dbVendors.getItem<Vendor>(k);
+        if (item) vList.push(item);
+      }
+
+      set({ products: pList, stock: sList, vendors: vList });
     } catch (e: any) {
       set({ error: e.message });
     } finally {
@@ -165,6 +175,19 @@ export const useStore = create<AppState>((set, get) => ({
          throw new Error(`庫存資料獲取失敗狀態碼: ${rS.status}`);
       }
 
+      // Vendors
+      const rV = await fetch(`${gasApiUrl}?action=getVendors`);
+      if (rV.ok) {
+        const dV = await rV.json();
+        await dbVendors.clear();
+        for (const v of dV) {
+          if (v.vendor_id) await dbVendors.setItem(v.vendor_id, v);
+        }
+        set({ vendors: dV });
+      } else {
+         throw new Error(`供應商資料獲取失敗狀態碼: ${rV.status}`);
+      }
+
     } catch (e: any) {
       console.error("fetchRemoteData error:", e);
       set({ error: `獲取遠端資料失敗 (${e.message})。目前為離線模式。`});
@@ -182,5 +205,14 @@ export const useStore = create<AppState>((set, get) => ({
     
     // Queue the sync to Google Sheets
     await get().enqueueAction('addProduct', newProduct);
+  },
+
+  addVendor: async (vendor) => {
+    // Save to local cache optimistic update
+    await dbVendors.setItem(vendor.vendor_id, vendor);
+    set(state => ({ vendors: [...state.vendors, vendor] }));
+    
+    // Queue the sync to Google Sheets
+    await get().enqueueAction('addVendor', vendor);
   }
 }));

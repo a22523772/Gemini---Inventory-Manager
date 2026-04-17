@@ -140,6 +140,16 @@ export default function SetupGuide() {
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
   
+  if (action === 'addVendor') {
+    var vendorSheet = ss.getSheetByName('vendors');
+    if (!vendorSheet) vendorSheet = ss.insertSheet('vendors');
+    if (vendorSheet.getLastRow() === 0) {
+      vendorSheet.appendRow(['vendor_id', 'vendor_name', 'contact', 'phone']);
+    }
+    vendorSheet.appendRow([data.vendor_id, data.vendor_name, data.contact || '', data.phone || '']);
+    return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
+  }
+  
   if (action === 'stockIn') {
     var stockSheet = ss.getSheetByName('stock');
     if (!stockSheet) stockSheet = ss.insertSheet('stock');
@@ -225,8 +235,26 @@ function doGet(e) {
   
   if (action === 'getProducts') {
     var sheet = ss.getSheetByName('products');
-    if(!sheet || sheet.getLastRow() === 0) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
-    var data = sheet.getDataRange().getValues();
+    if(!sheet || sheet.getLastRow() <= 1) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
+    var dataRange = sheet.getDataRange();
+    var data = dataRange.getValues();
+    if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
+    var keys = data[0];
+    var result = [];
+    for(var i=1; i<data.length; i++){
+      var obj = {};
+      for(var j=0; j<keys.length; j++){ obj[keys[j]] = data[i][j]; }
+      result.push(obj);
+    }
+    return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  if (action === 'getVendors') {
+    var sheet = ss.getSheetByName('vendors');
+    if(!sheet || sheet.getLastRow() <= 1) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
+    var dataRange = sheet.getDataRange();
+    var data = dataRange.getValues();
+    if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var keys = data[0];
     var result = [];
     for(var i=1; i<data.length; i++){
@@ -239,8 +267,10 @@ function doGet(e) {
   
   if (action === 'getStock') {
     var sheet = ss.getSheetByName('stock');
-    if(!sheet || sheet.getLastRow() === 0) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
-    var data = sheet.getDataRange().getValues();
+    if(!sheet || sheet.getLastRow() <= 1) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
+    var dataRange = sheet.getDataRange();
+    var data = dataRange.getValues();
+    if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var keys = data[0];
     var result = [];
     for(var i=1; i<data.length; i++){

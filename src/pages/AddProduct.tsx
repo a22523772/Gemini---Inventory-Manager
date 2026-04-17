@@ -6,7 +6,7 @@ import { ArrowLeft, Save, ScanBarcode, PackagePlus } from 'lucide-react';
 export default function AddProduct() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const addProduct = useStore((state) => state.addProduct);
+    const { addProduct, vendors } = useStore();
 
   // Form state
   const [productId, setProductId] = useState(`P${Date.now().toString().slice(-6)}`);
@@ -113,8 +113,19 @@ export default function AddProduct() {
               <input type="number" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
             </div>
             <div>
-              <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">供應商 ID</label>
-              <input type="text" value={vendorId} onChange={(e) => setVendorId(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
+              <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">供應商</label>
+              <select
+                value={vendorId}
+                onChange={(e) => setVendorId(e.target.value)}
+                className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all appearance-none"
+              >
+                <option value="" className="bg-[#0f172a]">-- 尚未選擇 --</option>
+                {vendors.map(v => (
+                  <option key={v.vendor_id} value={v.vendor_id} className="bg-[#0f172a]">
+                    {v.vendor_name} ({v.vendor_id})
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 

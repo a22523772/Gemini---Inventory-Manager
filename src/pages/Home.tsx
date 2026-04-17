@@ -77,6 +77,12 @@ export default function Home() {
             </div>
             <span className="text-xs font-semibold text-[var(--color-text-main)]">盤點</span>
           </Link>
+          <Link to="/vendors" className="flex flex-col items-center justify-center glass-panel p-4 rounded-2xl active:scale-95 transition-all hover:bg-white/10 hover:border-white/20">
+            <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center mb-2">
+              <Package className="w-5 h-5 text-[var(--color-accent-blue)]" />
+            </div>
+            <span className="text-xs font-semibold text-[var(--color-text-main)]">供應商</span>
+          </Link>
         </div>
       </div>
       

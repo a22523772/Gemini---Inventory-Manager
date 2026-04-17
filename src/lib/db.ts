@@ -2,6 +2,7 @@ import localforage from 'localforage';
 
 export const dbProducts = localforage.createInstance({ name: 'StockApp', storeName: 'products' });
 export const dbStock = localforage.createInstance({ name: 'StockApp', storeName: 'stock' });
+export const dbVendors = localforage.createInstance({ name: 'StockApp', storeName: 'vendors' });
 export const dbSyncQueue = localforage.createInstance({ name: 'StockApp', storeName: 'syncQueue' });
 export const dbSettings = localforage.createInstance({ name: 'StockApp', storeName: 'settings' });
 
@@ -28,6 +29,13 @@ export type Stock = {
   last_update: string;
 };
 
+export type Vendor = {
+  vendor_id: string;
+  vendor_name: string;
+  contact?: string;
+  phone?: string;
+};
+
 export type Transaction = {
   id: string;
   transaction_id: string; // for GAS
@@ -47,7 +55,7 @@ export type Transaction = {
 // Queue item type
 export type SyncItem = {
   id: string; // local uuid
-  action: 'stockIn' | 'stockOut' | 'adjustStock' | 'addProduct';
+  action: 'stockIn' | 'stockOut' | 'adjustStock' | 'addProduct' | 'addVendor';
   payload: any;
   timestamp: string;
 };
