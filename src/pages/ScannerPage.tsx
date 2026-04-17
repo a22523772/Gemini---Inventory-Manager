@@ -30,7 +30,7 @@ export default function ScannerPage() {
         let pid = decodedText;
         
         // Try to match barcode to product_id
-        const product = products.find(p => p.barcode === decodedText || p.product_id === decodedText);
+        const product = products.find(p => String(p.barcode) === decodedText || String(p.product_id) === decodedText);
         if (product) pid = product.product_id;
 
         // Determine destination path if no specific returnTo is provided

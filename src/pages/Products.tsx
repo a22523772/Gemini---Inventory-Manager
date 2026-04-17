@@ -24,7 +24,7 @@ export default function Products() {
     const q = searchTerm.toLowerCase();
     return products.filter(
       p => p.name.toLowerCase().includes(q) || 
-           (p.barcode && p.barcode.includes(q)) || 
+           (p.barcode && String(p.barcode).includes(q)) || 
            p.product_id.toLowerCase().includes(q)
     ).slice(0, 100);
   }, [searchTerm, products]);
