@@ -1,11 +1,12 @@
 import { create } from 'zustand';
-import { dbProducts, dbStock, dbVendors, dbSyncQueue, dbSettings, Product, Stock, Vendor, SyncItem } from '../lib/db';
+import { dbProducts, dbStock, dbVendors, dbSyncQueue, dbSettings, dbTransactions, Product, Stock, Vendor, SyncItem, Transaction } from '../lib/db';
 import { v4 as uuidv4 } from 'uuid';
 
 interface AppState {
   products: Product[];
   stock: Stock[];
   vendors: Vendor[];
+  transactions: Transaction[];
   syncQueue: SyncItem[];
   gasApiUrl: string;
   operator: string;
@@ -31,6 +32,7 @@ export const useStore = create<AppState>((set, get) => ({
   products: [],
   stock: [],
   vendors: [],
+  transactions: [],
   syncQueue: [],
   gasApiUrl: '',
   operator: 'staff',
@@ -82,7 +84,14 @@ export const useStore = create<AppState>((set, get) => ({
         if (item) vList.push(item);
       }
 
-      set({ products: pList, stock: sList, vendors: vList });
+      const tKeys = await dbTransactions.keys();
+      const tList: Transaction[] = [];
+      for (const k of tKeys) {
+        const item = await dbTransactions.getItem<Transaction>(k);
+        if (item) tList.push(item);
+      }
+
+      set({ products: pList, stock: sList, vendors: vList, transactions: tList.sort((a,b) => b.date.localeCompare(a.date)) });
     } catch (e: any) {
       set({ error: e.message });
     } finally {
@@ -200,6 +209,17 @@ export const useStore = create<AppState>((set, get) => ({
         set({ vendors: dV });
       } else {
          throw new Error(`供應商資料獲取失敗狀態碼: ${rV.status}`);
+      }
+
+      // Transactions
+      const rT = await fetch(`${gasApiUrl}?action=getTransactions`);
+      if (rT.ok) {
+        const dT = await rT.json();
+        await dbTransactions.clear();
+        for (const t of dT) {
+          if (t.transaction_id) await dbTransactions.setItem(t.transaction_id, t);
+        }
+        set({ transactions: dT.sort((a: any, b: any) => b.date.localeCompare(a.date)) });
       }
 
     } catch (e: any) {

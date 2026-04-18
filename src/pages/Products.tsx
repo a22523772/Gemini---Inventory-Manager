@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal } from 'lucide-react';
+import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 export default function Products() {
@@ -9,6 +9,9 @@ export default function Products() {
   const [searchTerm, setSearchTerm] = useState(searchParams.get('pid') || '');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterBrand, setFilterBrand] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -18,16 +21,34 @@ export default function Products() {
     }
   }, [searchParams]);
 
+  // Extract unique brands and categories for dropdowns
+  const brands = useMemo(() => Array.from(new Set(products.map(p => p.brand).filter(Boolean))), [products]);
+  const categories = useMemo(() => Array.from(new Set(products.map(p => p.category).filter(Boolean))), [products]);
+
   // 模糊搜尋，本地快取中查找 (支援 < 100ms 要求)
   const filteredProducts = useMemo(() => {
-    if (!searchTerm) return products.slice(0, 50); // limit empty view
-    const q = searchTerm.toLowerCase();
-    return products.filter(
-      p => p.name.toLowerCase().includes(q) || 
-           (p.barcode && String(p.barcode).includes(q)) || 
-           p.product_id.toLowerCase().includes(q)
-    ).slice(0, 100);
-  }, [searchTerm, products]);
+    let result = products;
+
+    if (filterBrand) {
+      result = result.filter(p => p.brand === filterBrand);
+    }
+    if (filterCategory) {
+      result = result.filter(p => p.category === filterCategory);
+    }
+
+    if (!searchTerm && !filterBrand && !filterCategory) return result.slice(0, 50);
+
+    if (searchTerm) {
+      const q = searchTerm.toLowerCase();
+      result = result.filter(
+        p => p.name.toLowerCase().includes(q) || 
+             (p.barcode && String(p.barcode).includes(q)) || 
+             p.product_id.toLowerCase().includes(q)
+      );
+    }
+    
+    return result.slice(0, 100);
+  }, [searchTerm, filterBrand, filterCategory, products]);
 
   // 取的某商品的總庫存
   const getProductStock = (pid: string) => {
@@ -50,28 +71,59 @@ export default function Products() {
       <div className="glass-panel border-x-0 border-t-0 px-4 pt-6 pb-4 sticky top-0 z-10">
         <div className="flex justify-between items-center mb-4">
           <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text-main)]">商品列表</h1>
-          <Link to="/add-product" className="p-2 bg-[var(--color-accent-blue)] text-[#0f172a] rounded-full hover:opacity-90 transition-opacity active:scale-95 shadow-lg shadow-sky-400/20">
-            <PackageOpen className="w-5 h-5 relative hidden" />
-            <span className="flex items-center text-sm font-bold px-2">
-              + 新增
-            </span>
-          </Link>
+          <div className="flex gap-2">
+            <button 
+              onClick={() => setShowFilters(!showFilters)} 
+              className={`p-2 rounded-full transition-colors ${showFilters ? 'bg-white/20 text-white' : 'glass-panel text-[var(--color-text-dim)] hover:text-white'}`}
+            >
+              <Filter className="w-5 h-5" />
+            </button>
+            <Link to="/add-product" className="p-2 bg-[var(--color-accent-blue)] text-[#0f172a] rounded-full hover:opacity-90 transition-opacity active:scale-95 shadow-lg shadow-sky-400/20">
+              <span className="flex items-center text-sm font-bold px-2">
+                + 新增
+              </span>
+            </Link>
+          </div>
         </div>
         
-        <div className="relative">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Search className="h-5 w-5 text-[var(--color-text-dim)]" />
+        <div className="flex flex-col gap-3">
+          <div className="relative">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <Search className="h-5 w-5 text-[var(--color-text-dim)]" />
+            </div>
+            <input
+              type="text"
+              className="block w-full pl-10 pr-12 py-3 border border-white/10 rounded-xl leading-5 bg-white/5 placeholder-[var(--color-text-dim)] text-[var(--color-text-main)] focus:outline-none focus:bg-white/10 focus:ring-1 focus:ring-[var(--color-accent-blue)] focus:border-[var(--color-accent-blue)] sm:text-sm transition-colors"
+              placeholder="搜尋商品名稱、ID 或條碼..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            <Link to="/scan?returnTo=/products" className="absolute inset-y-0 right-0 pr-3 flex items-center">
+              <ScanBarcode className="h-5 w-5 text-[var(--color-accent-blue)]" />
+            </Link>
           </div>
-          <input
-            type="text"
-            className="block w-full pl-10 pr-12 py-3 border border-white/10 rounded-xl leading-5 bg-white/5 placeholder-[var(--color-text-dim)] text-[var(--color-text-main)] focus:outline-none focus:bg-white/10 focus:ring-1 focus:ring-[var(--color-accent-blue)] focus:border-[var(--color-accent-blue)] sm:text-sm transition-colors"
-            placeholder="搜尋商品名稱、ID 或條碼..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-          <Link to="/scan?returnTo=/products" className="absolute inset-y-0 right-0 pr-3 flex items-center">
-            <ScanBarcode className="h-5 w-5 text-[var(--color-accent-blue)]" />
-          </Link>
+
+          {showFilters && (
+            <div className="flex gap-2 animate-in fade-in slide-in-from-top-2">
+              <select 
+                value={filterCategory} 
+                onChange={e => setFilterCategory(e.target.value)}
+                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
+              >
+                <option value="" className="bg-[#0f172a]">所有分類</option>
+                {categories.map(c => <option key={c} value={c} className="bg-[#0f172a]">{c}</option>)}
+              </select>
+              
+              <select 
+                value={filterBrand} 
+                onChange={e => setFilterBrand(e.target.value)}
+                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
+              >
+                <option value="" className="bg-[#0f172a]">所有品牌</option>
+                {brands.map(b => <option key={b} value={b} className="bg-[#0f172a]">{b}</option>)}
+              </select>
+            </div>
+          )}
         </div>
       </div>
 
@@ -86,8 +138,13 @@ export default function Products() {
             <div key={p.product_id} className="glass-panel border border-[var(--color-glass-border)] rounded-xl p-4 transition-all">
               <div className="flex justify-between items-start mb-2">
                 <div className="flex-1 pr-2">
-                  <h3 className="font-bold text-[var(--color-text-main)] text-base">{p.name}</h3>
-                  <p className="text-xs text-[var(--color-text-dim)] font-mono mt-0.5">{p.product_id} {p.barcode ? `| ${p.barcode}` : ''}</p>
+                  <h3 className="font-bold text-[var(--color-text-main)] text-base">
+                    {p.name} {p.brand && <span className="text-[10px] font-normal px-1.5 py-0.5 ml-1 bg-white/10 rounded-md text-[var(--color-text-dim)]">{p.brand}</span>}
+                  </h3>
+                  <p className="text-xs text-[var(--color-text-dim)] font-mono mt-1">
+                    {p.product_id} {p.barcode ? `| ${p.barcode}` : ''}
+                  </p>
+                  {p.cost_price > 0 && <p className="text-xs text-[var(--color-text-dim)] mt-0.5 font-medium">平均進價: ${p.cost_price}</p>}
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   <div className="bg-[var(--color-glass-bg)] text-[var(--color-accent-blue)] px-2.5 py-1 rounded-lg text-sm font-bold border border-[var(--color-glass-border)]">

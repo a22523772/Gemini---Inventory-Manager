@@ -5,16 +5,19 @@ export const dbStock = localforage.createInstance({ name: 'StockApp', storeName:
 export const dbVendors = localforage.createInstance({ name: 'StockApp', storeName: 'vendors' });
 export const dbSyncQueue = localforage.createInstance({ name: 'StockApp', storeName: 'syncQueue' });
 export const dbSettings = localforage.createInstance({ name: 'StockApp', storeName: 'settings' });
+export const dbTransactions = localforage.createInstance({ name: 'StockApp', storeName: 'transactions' });
 
 export type Product = {
   product_id: string;
   barcode: string;
   name: string;
   category: string;
+  brand?: string;
   unit: string;
   cost_price: number;
   vendor_id: string;
   has_expiry: boolean;
+  expiry_date?: string;
   created_at: string;
 };
 

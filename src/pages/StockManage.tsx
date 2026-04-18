@@ -108,7 +108,19 @@ export default function StockManage() {
             </button>
           </div>
           {product && (
-            <p className="mt-1 text-xs text-[var(--color-accent-green)] font-medium">已找到: {product.name}</p>
+            <div className="mt-2 text-xs flex flex-col gap-1">
+               <p className="text-[var(--color-accent-green)] font-medium">已找到: {product.name} {product.brand ? `(${product.brand})` : ''}</p>
+               {type === 'stock_out' && product.has_expiry && product.expiry_date && (
+                 <p className="text-orange-400 font-bold bg-orange-400/10 inline-block px-2 py-1 rounded w-fit">
+                   ⚠ 注意有效期限: {product.expiry_date}
+                 </p>
+               )}
+               {type === 'stock_out' && product.cost_price > 0 && (
+                 <p className="text-[var(--color-text-dim)] font-medium">
+                   預設進價/成本: ${product.cost_price}
+                 </p>
+               )}
+            </div>
           )}
         </div>
 

@@ -8,6 +8,7 @@ import ScannerPage from './pages/ScannerPage';
 import SetupGuide from './pages/SetupGuide';
 import AddProduct from './pages/AddProduct';
 import Vendors from './pages/Vendors';
+import Transactions from './pages/Transactions';
 import { useStore } from './store/useStore';
 
 export default function App() {
@@ -47,6 +48,7 @@ export default function App() {
           <Route path="setup" element={<SetupGuide />} />
           <Route path="add-product" element={<AddProduct />} />
           <Route path="vendors" element={<Vendors />} />
+          <Route path="transactions" element={<Transactions />} />
         </Route>
         <Route path="/scan" element={<ScannerPage />} />
       </Routes>

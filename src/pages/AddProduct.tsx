@@ -16,10 +16,12 @@ export default function AddProduct() {
   const [barcode, setBarcode] = useState(searchParams.get('pid') || '');
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
+  const [brand, setBrand] = useState('');
   const [unit, setUnit] = useState('個');
   const [costPrice, setCostPrice] = useState('');
   const [vendorId, setVendorId] = useState('');
   const [hasExpiry, setHasExpiry] = useState(false);
+  const [expiryDate, setExpiryDate] = useState('');
 
   useEffect(() => {
     if (existingProduct) {
@@ -27,10 +29,12 @@ export default function AddProduct() {
       setBarcode(existingProduct.barcode || '');
       setName(existingProduct.name);
       setCategory(existingProduct.category || '');
+      setBrand(existingProduct.brand || '');
       setUnit(existingProduct.unit || '個');
       setCostPrice(existingProduct.cost_price?.toString() || '');
       setVendorId(existingProduct.vendor_id || '');
       setHasExpiry(existingProduct.has_expiry || false);
+      setExpiryDate(existingProduct.expiry_date || '');
     }
   }, [existingProduct]);
 
@@ -42,10 +46,12 @@ export default function AddProduct() {
       barcode,
       name,
       category,
+      brand,
       unit,
       cost_price: Number(costPrice) || 0,
       vendor_id: vendorId,
-      has_expiry: hasExpiry
+      has_expiry: hasExpiry,
+      expiry_date: expiryDate
     };
 
     if (existingProduct) {
@@ -128,31 +134,35 @@ export default function AddProduct() {
               <input type="text" value={category} onChange={(e) => setCategory(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
             </div>
             <div>
-              <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">單位 *</label>
-              <input type="text" required value={unit} onChange={(e) => setUnit(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
+              <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">品牌</label>
+              <input type="text" value={brand} onChange={(e) => setBrand(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">預設進價</label>
-              <input type="number" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
+              <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">單位 *</label>
+              <input type="text" required value={unit} onChange={(e) => setUnit(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
             </div>
             <div>
-              <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">供應商</label>
-              <select
-                value={vendorId}
-                onChange={(e) => setVendorId(e.target.value)}
-                className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all appearance-none"
-              >
-                <option value="" className="bg-[#0f172a]">-- 尚未選擇 --</option>
-                {vendors.map(v => (
-                  <option key={v.vendor_id} value={v.vendor_id} className="bg-[#0f172a]">
-                    {v.vendor_name} ({v.vendor_id})
-                  </option>
-                ))}
-              </select>
+              <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">平均進價 / 成本</label>
+              <input type="number" step="0.01" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
             </div>
+          </div>
+          <div>
+            <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">供應商</label>
+            <select
+              value={vendorId}
+              onChange={(e) => setVendorId(e.target.value)}
+              className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all appearance-none"
+            >
+              <option value="" className="bg-[#0f172a]">-- 尚未選擇 --</option>
+              {vendors.map(v => (
+                <option key={v.vendor_id} value={v.vendor_id} className="bg-[#0f172a]">
+                  {v.vendor_name} ({v.vendor_id})
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="flex items-center space-x-3 pt-2">
@@ -167,6 +177,18 @@ export default function AddProduct() {
               此商品包含有效期限 (例如：生鮮食品)
             </label>
           </div>
+          
+          {hasExpiry && (
+            <div className="animate-in fade-in slide-in-from-top-2">
+              <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">有效日期 (可選預設)</label>
+              <input 
+                type="date" 
+                value={expiryDate} 
+                onChange={(e) => setExpiryDate(e.target.value)} 
+                className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" 
+              />
+            </div>
+          )}
         </div>
 
         <div className="pt-2">

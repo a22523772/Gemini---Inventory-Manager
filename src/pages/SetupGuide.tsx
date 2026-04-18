@@ -165,6 +165,18 @@ export default function SetupGuide() {
         }
       }
     }
+    
+    // Also delete stock entries for this product
+    var stockSheet = ss.getSheetByName('stock');
+    if(stockSheet && stockSheet.getLastRow() > 1) {
+      var sValues = stockSheet.getDataRange().getValues();
+      for(var j = sValues.length - 1; j >= 1; j--) {
+        if(sValues[j][1] == data.product_id) {
+          stockSheet.deleteRow(j+1);
+        }
+      }
+    }
+    
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
   
@@ -333,6 +345,23 @@ function doGet(e) {
       var obj = {};
       for(var j=0; j<keys.length; j++){ obj[keys[j]] = data[i][j]; }
       result.push(obj);
+    }
+    return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'getTransactions') {
+    var sheet = ss.getSheetByName('transactions');
+    if(!sheet || sheet.getLastRow() <= 1) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
+    var dataRange = sheet.getDataRange();
+    var data = dataRange.getValues();
+    if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
+    var keys = data[0];
+    var result = [];
+    for(var i=data.length-1; i>=1; i--){ // reverse order for latest first, limited
+      var obj = {};
+      for(var j=0; j<keys.length; j++){ obj[keys[j]] = data[i][j]; }
+      result.push(obj);
+      if(result.length > 300) break; // Limit records to 300
     }
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
   }
