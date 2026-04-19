@@ -11,6 +11,7 @@ interface AppState {
   gasApiUrl: string;
   operator: string;
   isLoading: boolean;
+  isSyncing: boolean;
   error: string | null;
   loadInitialData: () => Promise<void>;
   setGasApiUrl: (url: string) => Promise<void>;
@@ -18,7 +19,7 @@ interface AppState {
   enqueueAction: (action: SyncItem['action'], payload: any) => Promise<void>;
   syncData: () => Promise<void>;
   fetchRemoteData: () => Promise<void>;
-  addProduct: (product: Omit<Product, 'created_at'>) => Promise<void>;
+  addProduct: (product: Omit<Product, 'created_at'>, isManual?: boolean) => Promise<void>;
   editProduct: (product: Product) => Promise<void>;
   deleteProduct: (productId: string) => Promise<void>;
   addVendor: (vendor: Vendor) => Promise<void>;
@@ -37,6 +38,7 @@ export const useStore = create<AppState>((set, get) => ({
   gasApiUrl: '',
   operator: 'staff',
   isLoading: false,
+  isSyncing: false,
   error: null,
   toastMessage: null,
 
@@ -128,42 +130,42 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   syncData: async () => {
-    const { syncQueue, gasApiUrl } = get();
-    if (!gasApiUrl) return;
+    const { gasApiUrl, isSyncing } = get();
+    if (!gasApiUrl || isSyncing) return;
 
-    set({ isLoading: true, error: null });
+    set({ isSyncing: true, isLoading: true, error: null });
     
-    if (syncQueue.length > 0) {
-      let currentQueue = [...syncQueue];
-      
-      for (const item of currentQueue) {
-        try {
-          const res = await fetch(`${gasApiUrl}?action=${item.action}`, {
-            method: 'POST',
-            // Use text/plain to bypass Google Apps Script CORS preflight (OPTIONS) requirement
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(item.payload)
-          });
-          
-          if (res.ok) {
-            // Remove from queue
-            await dbSyncQueue.removeItem(item.id);
-            set((state) => ({ syncQueue: state.syncQueue.filter(q => q.id !== item.id) }));
-          } else {
-            set({ error: `同步失敗： ${item.action}` });
-            break; // Stop if one fails, to preserve order
-          }
-        } catch (e: any) {
-          console.error("Sync error:", e);
-          set({ error: '同步遇到網路異常，將於稍後重試。' });
-          break; // Offline, stop trying
+    let hasError = false;
+
+    // Loop until queue is empty or an error occurs
+    while (get().syncQueue.length > 0 && !hasError) {
+      const item = get().syncQueue[0]; // Process one by one
+
+      try {
+        const res = await fetch(`${gasApiUrl}?action=${item.action}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(item.payload)
+        });
+        
+        if (res.ok) {
+          await dbSyncQueue.removeItem(item.id);
+          set((state) => ({ syncQueue: state.syncQueue.filter(q => q.id !== item.id) }));
+        } else {
+          set({ error: `同步失敗： ${item.action}` });
+          hasError = true;
         }
+      } catch (e: any) {
+        console.error("Sync error:", e);
+        set({ error: '同步遇到網路異常，將於稍後重試。' });
+        hasError = true;
       }
     }
     
-    // Refresh data if queues cleared partially or fully, or if queue was empty to pull updates
-    await get().fetchRemoteData();
-    set({ isLoading: false });
+    if (!hasError) {
+      await get().fetchRemoteData();
+    }
+    set({ isLoading: false, isSyncing: false });
   },
 
   fetchRemoteData: async () => {
@@ -176,6 +178,7 @@ export const useStore = create<AppState>((set, get) => ({
       const rP = await fetch(`${gasApiUrl}?action=getProducts`);
       if (rP.ok) {
         const dP = await rP.json();
+        
         await dbProducts.clear();
         for (const p of dP) {
           if (p.product_id) await dbProducts.setItem(p.product_id, p);
@@ -231,7 +234,12 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   addProduct: async (product) => {
-    const newProduct: Product = { ...product, created_at: new Date().toISOString() };
+    // Format date specifically as requested
+    const d = new Date();
+    const pad = (n: number) => n < 10 ? '0' + n : n;
+    const formattedDate = `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+    const newProduct: Product = { ...product, created_at: formattedDate };
     
     // Save to local cache optimistic update
     await dbProducts.setItem(newProduct.product_id, newProduct);

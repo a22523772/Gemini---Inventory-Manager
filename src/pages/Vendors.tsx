@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { Users, Plus, Phone, User, Building2, Pencil, Trash2, X } from 'lucide-react';
 import { Vendor } from '../lib/db';
+import { useSearchParams } from 'react-router-dom';
 
 export default function Vendors() {
   const { vendors, addVendor, editVendor, deleteVendor, showToast } = useStore();
+  const [searchParams] = useSearchParams();
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -13,6 +15,14 @@ export default function Vendors() {
   const [vendorName, setVendorName] = useState('');
   const [contact, setContact] = useState('');
   const [phone, setPhone] = useState('');
+
+  useEffect(() => {
+    const newName = searchParams.get('newVendorName');
+    if (newName) {
+      setVendorName(newName);
+      setShowForm(true);
+    }
+  }, [searchParams]);
 
   const openForm = (vendor?: Vendor) => {
     if (vendor) {

@@ -19,6 +19,7 @@ export type Product = {
   has_expiry: boolean;
   expiry_date?: string;
   created_at: string;
+  is_synced?: boolean;
 };
 
 export type Stock = {

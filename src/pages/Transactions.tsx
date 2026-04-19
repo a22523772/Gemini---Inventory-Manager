@@ -74,7 +74,9 @@ export default function Transactions() {
                   <div className="flex justify-between items-start">
                     <h3 className="font-bold text-[var(--color-text-main)] text-base">{getProductName(t.product_id)}</h3>
                     <div className="text-right">
-                      <span className="text-xs text-[var(--color-text-dim)] font-mono">{new Date(t.date).toLocaleString()}</span>
+                      <span className="text-xs text-[var(--color-text-dim)] font-mono">
+                        {t.date.includes('T') ? new Date(t.date).toLocaleString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(/\//g, '-') : t.date}
+                      </span>
                       <p className="text-xs font-bold text-[var(--color-text-main)]">{getTypeLabel(t.type)}</p>
                     </div>
                   </div>

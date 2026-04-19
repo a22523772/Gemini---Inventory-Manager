@@ -114,7 +114,7 @@ export default function SetupGuide() {
                 <h3 className="text-base font-bold text-[var(--color-text-main)]">1. Google Sheets 結構設定</h3>
                 <p className="text-[var(--color-text-dim)] mt-1">請建立一個新的 Google Sheet，並確保下方有這四個工作表 (區分大小寫)：</p>
                 <ul className="list-disc pl-5 mt-2 space-y-1 text-white/80 font-mono text-xs">
-                  <li><strong>products</strong> (商品表): product_id, barcode, name, category, unit, cost_price, vendor_id, has_expiry, created_at</li>
+                  <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, expiry_date, created_at</li>
                   <li><strong>vendors</strong> (供應商): vendor_id, vendor_name, contact, phone</li>
                   <li><strong>stock</strong> (庫存表): stock_id, product_id, location, floor, area, quantity, expiry_date, last_update</li>
                   <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, type, quantity, location, floor, area, cost_price, vendor_id, date, note, operator</li>
@@ -133,20 +133,44 @@ export default function SetupGuide() {
   if (action === 'addProduct') {
     var prodSheet = ss.getSheetByName('products');
     if (!prodSheet) prodSheet = ss.insertSheet('products');
+    
+    var headers = [];
     if (prodSheet.getLastRow() === 0) {
-      prodSheet.appendRow(['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at']);
+      headers = ['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at', 'brand', 'expiry_date'];
+      prodSheet.appendRow(headers);
+    } else {
+      headers = prodSheet.getRange(1, 1, 1, prodSheet.getLastColumn()).getValues()[0];
+      if (headers.indexOf('brand') === -1) { headers.push('brand'); prodSheet.getRange(1, headers.length).setValue('brand'); }
+      if (headers.indexOf('expiry_date') === -1) { headers.push('expiry_date'); prodSheet.getRange(1, headers.length).setValue('expiry_date'); }
     }
-    prodSheet.appendRow([data.product_id, data.barcode, data.name, data.category, data.unit, data.cost_price, data.vendor_id, data.has_expiry, data.created_at]);
+    
+    var rowData = [];
+    for (var j = 0; j < headers.length; j++) {
+      var val = data[headers[j]];
+      rowData.push(val !== undefined ? val : '');
+    }
+    prodSheet.appendRow(rowData);
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
 
   if (action === 'editProduct') {
     var prodSheet = ss.getSheetByName('products');
     if (prodSheet && prodSheet.getLastRow() > 1) {
+      var headers = prodSheet.getRange(1, 1, 1, prodSheet.getLastColumn()).getValues()[0];
+      if (headers.indexOf('brand') === -1) { headers.push('brand'); prodSheet.getRange(1, headers.length).setValue('brand'); }
+      if (headers.indexOf('expiry_date') === -1) { headers.push('expiry_date'); prodSheet.getRange(1, headers.length).setValue('expiry_date'); }
+
       var values = prodSheet.getDataRange().getValues();
+      var idIndex = headers.indexOf('product_id');
+
       for (var i = 1; i < values.length; i++) {
-        if (values[i][0] == data.product_id) {
-          prodSheet.getRange(i+1, 2, 1, 8).setValues([[data.barcode, data.name, data.category, data.unit, data.cost_price, data.vendor_id, data.has_expiry, data.created_at || new Date().toISOString()]]);
+        if (values[i][idIndex] == data.product_id) {
+          var rowData = [];
+          for (var j = 0; j < headers.length; j++) {
+            var val = data[headers[j]];
+            rowData.push(val !== undefined ? val : values[i][j]);
+          }
+          prodSheet.getRange(i+1, 1, 1, headers.length).setValues([rowData]);
           break;
         }
       }
@@ -224,6 +248,8 @@ export default function SetupGuide() {
     var transSheet = ss.getSheetByName('transactions');
     if (!transSheet) transSheet = ss.insertSheet('transactions');
     
+    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
+
     var stockId = data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area;
     
     // Find or create in stock
@@ -235,7 +261,7 @@ export default function SetupGuide() {
       for (var i = 1; i < values.length; i++) {
          if (values[i][0] == stockId) {
             stockSheet.getRange(i+1, 6).setValue(Number(values[i][5]) + Number(data.quantity));
-            stockSheet.getRange(i+1, 8).setValue(new Date().toISOString());
+            stockSheet.getRange(i+1, 8).setValue(now);
             found = true;
             break;
          }
@@ -246,13 +272,29 @@ export default function SetupGuide() {
     }
     
     if (!found) {
-       stockSheet.appendRow([stockId, data.product_id, data.location, data.floor, data.area, data.quantity, '', new Date().toISOString()]);
+       stockSheet.appendRow([stockId, data.product_id, data.location, data.floor, data.area, data.quantity, data.expiry_date || '', now]);
     }
     
-    if(transSheet.getLastRow() === 0) transSheet.appendRow(['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'cost_price', 'vendor_id', 'date', 'note', 'operator']);
+    var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
+    if(transSheet.getLastRow() === 0) {
+      transSheet.appendRow(transHeaders);
+    } else {
+      transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+      if (transHeaders.indexOf('cost_price') === -1) { transHeaders.push('cost_price'); transSheet.getRange(1, transHeaders.length).setValue('cost_price'); }
+      if (transHeaders.indexOf('vendor_id') === -1) { transHeaders.push('vendor_id'); transSheet.getRange(1, transHeaders.length).setValue('vendor_id'); }
+    }
     
-    // Append transaction
-    transSheet.appendRow([Utilities.getUuid(), data.product_id, 'stock_in', data.quantity, data.location, data.floor, data.area, data.cost_price, data.vendor_id, new Date().toISOString(), '', data.operator]);
+    var trData = {
+      transaction_id: Utilities.getUuid(), product_id: data.product_id, type: 'stock_in',
+      quantity: data.quantity, location: data.location, floor: data.floor, area: data.area,
+      cost_price: data.cost_price, vendor_id: data.vendor_id, date: now, note: '', operator: data.operator
+    };
+    
+    var trRow = [];
+    for (var k = 0; k < transHeaders.length; k++) {
+      trRow.push(trData[transHeaders[k]] !== undefined ? trData[transHeaders[k]] : '');
+    }
+    transSheet.appendRow(trRow);
     
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
@@ -261,19 +303,41 @@ export default function SetupGuide() {
     var stockSheet = ss.getSheetByName('stock');
     var transSheet = ss.getSheetByName('transactions');
     var stockId = data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area;
-    
+    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
+
     if(stockSheet && stockSheet.getLastRow() > 0) {
       var values = stockSheet.getDataRange().getValues();
       for (var i = 1; i < values.length; i++) {
          if (values[i][0] == stockId) {
             var newQ = Number(values[i][5]) - Number(data.quantity);
             stockSheet.getRange(i+1, 6).setValue(newQ < 0 ? 0 : newQ);
-            stockSheet.getRange(i+1, 8).setValue(new Date().toISOString());
+            stockSheet.getRange(i+1, 8).setValue(now);
             break;
          }
       }
     }
-    transSheet.appendRow([Utilities.getUuid(), data.product_id, 'stock_out', data.quantity, data.location, data.floor, data.area, '', '', new Date().toISOString(), '', data.operator]);
+    
+    var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
+    if(transSheet.getLastRow() === 0) {
+      transSheet.appendRow(transHeaders);
+    } else {
+      transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+      if (transHeaders.indexOf('cost_price') === -1) { transHeaders.push('cost_price'); transSheet.getRange(1, transHeaders.length).setValue('cost_price'); }
+      if (transHeaders.indexOf('vendor_id') === -1) { transHeaders.push('vendor_id'); transSheet.getRange(1, transHeaders.length).setValue('vendor_id'); }
+    }
+    
+    var trData = {
+      transaction_id: Utilities.getUuid(), product_id: data.product_id, type: 'stock_out',
+      quantity: data.quantity, location: data.location, floor: data.floor, area: data.area,
+      cost_price: '', vendor_id: '', date: now, note: '', operator: data.operator
+    };
+    
+    var trRow = [];
+    for (var k = 0; k < transHeaders.length; k++) {
+      trRow.push(trData[transHeaders[k]] !== undefined ? trData[transHeaders[k]] : '');
+    }
+    transSheet.appendRow(trRow);
+    
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
 
@@ -281,18 +345,40 @@ export default function SetupGuide() {
       var stockSheet = ss.getSheetByName('stock');
       var transSheet = ss.getSheetByName('transactions');
       var stockId = data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area;
+      var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
       
       if(stockSheet && stockSheet.getLastRow() > 0) {
         var values = stockSheet.getDataRange().getValues();
         for (var i = 1; i < values.length; i++) {
            if (values[i][0] == stockId) {
               stockSheet.getRange(i+1, 6).setValue(Number(data.quantity));
-              stockSheet.getRange(i+1, 8).setValue(new Date().toISOString());
+              stockSheet.getRange(i+1, 8).setValue(now);
               break;
            }
         }
       }
-      transSheet.appendRow([Utilities.getUuid(), data.product_id, 'adjust', data.quantity, data.location, data.floor, data.area, '', '', new Date().toISOString(), data.note, data.operator]);
+      
+      var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
+      if(transSheet.getLastRow() === 0) {
+        transSheet.appendRow(transHeaders);
+      } else {
+        transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+        if (transHeaders.indexOf('cost_price') === -1) { transHeaders.push('cost_price'); transSheet.getRange(1, transHeaders.length).setValue('cost_price'); }
+        if (transHeaders.indexOf('vendor_id') === -1) { transHeaders.push('vendor_id'); transSheet.getRange(1, transHeaders.length).setValue('vendor_id'); }
+      }
+      
+      var trData = {
+        transaction_id: Utilities.getUuid(), product_id: data.product_id, type: 'adjust',
+        quantity: data.quantity, location: data.location, floor: data.floor, area: data.area,
+        cost_price: '', vendor_id: '', date: now, note: data.note, operator: data.operator
+      };
+      
+      var trRow = [];
+      for (var k = 0; k < transHeaders.length; k++) {
+        trRow.push(trData[transHeaders[k]] !== undefined ? trData[transHeaders[k]] : '');
+      }
+      transSheet.appendRow(trRow);
+
       return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
 }
@@ -305,7 +391,7 @@ function doGet(e) {
     var sheet = ss.getSheetByName('products');
     if(!sheet || sheet.getLastRow() <= 1) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var dataRange = sheet.getDataRange();
-    var data = dataRange.getValues();
+    var data = dataRange.getDisplayValues(); // Fix: use getDisplayValues to avoid .000Z dates
     if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var keys = data[0];
     var result = [];
@@ -321,7 +407,7 @@ function doGet(e) {
     var sheet = ss.getSheetByName('vendors');
     if(!sheet || sheet.getLastRow() <= 1) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var dataRange = sheet.getDataRange();
-    var data = dataRange.getValues();
+    var data = dataRange.getDisplayValues(); // Option: display values
     if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var keys = data[0];
     var result = [];
@@ -337,13 +423,17 @@ function doGet(e) {
     var sheet = ss.getSheetByName('stock');
     if(!sheet || sheet.getLastRow() <= 1) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var dataRange = sheet.getDataRange();
-    var data = dataRange.getValues();
+    var data = dataRange.getDisplayValues(); // Fix: use getDisplayValues
     if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var keys = data[0];
     var result = [];
     for(var i=1; i<data.length; i++){
       var obj = {};
-      for(var j=0; j<keys.length; j++){ obj[keys[j]] = data[i][j]; }
+      for(var j=0; j<keys.length; j++){ 
+        var val = data[i][j];
+        if (keys[j] === 'quantity') val = Number(val) || 0;
+        obj[keys[j]] = val; 
+      }
       result.push(obj);
     }
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
@@ -353,13 +443,18 @@ function doGet(e) {
     var sheet = ss.getSheetByName('transactions');
     if(!sheet || sheet.getLastRow() <= 1) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var dataRange = sheet.getDataRange();
-    var data = dataRange.getValues();
+    var data = dataRange.getDisplayValues(); // Fix: use getDisplayValues
     if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var keys = data[0];
     var result = [];
     for(var i=data.length-1; i>=1; i--){ // reverse order for latest first, limited
       var obj = {};
-      for(var j=0; j<keys.length; j++){ obj[keys[j]] = data[i][j]; }
+      for(var j=0; j<keys.length; j++){ 
+        var val = data[i][j];
+        if (keys[j] === 'quantity') val = Number(val) || 0;
+        if (keys[j] === 'cost_price') val = Number(val) || 0;
+        obj[keys[j]] = val; 
+      }
       result.push(obj);
       if(result.length > 300) break; // Limit records to 300
     }
