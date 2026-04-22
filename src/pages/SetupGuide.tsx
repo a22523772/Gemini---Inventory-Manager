@@ -58,6 +58,22 @@ export default function SetupGuide() {
             </div>
 
             <div className="glass-panel p-4 rounded-2xl">
+              <h2 className="text-base font-bold text-[var(--color-text-main)] mb-4">功能開關</h2>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-[var(--color-text-main)]">補貨警示功能</h3>
+                  <p className="text-xs text-[var(--color-text-dim)] mt-1">開啟後，庫存低於設定值時會顯示警示標章 (預設 5 個)。</p>
+                </div>
+                <button
+                  onClick={() => useStore.getState().setLowStockAlertEnabled(!useStore.getState().lowStockAlertEnabled)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${useStore.getState().lowStockAlertEnabled ? 'bg-[var(--color-accent-blue)]' : 'bg-gray-600'}`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${useStore.getState().lowStockAlertEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+            </div>
+
+            <div className="glass-panel p-4 rounded-2xl">
               <h2 className="text-base font-bold text-[var(--color-text-main)] mb-4">Google Apps Script 網址</h2>
               <input
                 type="url"
@@ -114,7 +130,7 @@ export default function SetupGuide() {
                 <h3 className="text-base font-bold text-[var(--color-text-main)]">1. Google Sheets 結構設定</h3>
                 <p className="text-[var(--color-text-dim)] mt-1">請建立一個新的 Google Sheet，並確保下方有這四個工作表 (區分大小寫)：</p>
                 <ul className="list-disc pl-5 mt-2 space-y-1 text-white/80 font-mono text-xs">
-                  <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, specification, created_at</li>
+                  <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, specification, min_stock, created_at</li>
                   <li><strong>vendors</strong> (供應商): vendor_id, vendor_name, contact, phone</li>
                   <li><strong>stock</strong> (庫存表): stock_id, product_id, location, floor, area, quantity, expiry_date, specification, last_update</li>
                   <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, type, quantity, location, floor, area, specification, cost_price, vendor_id, date, note, operator</li>
@@ -136,12 +152,13 @@ export default function SetupGuide() {
     
     var headers = [];
     if (prodSheet.getLastRow() === 0) {
-      headers = ['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at', 'brand', 'specification'];
+      headers = ['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at', 'brand', 'specification', 'min_stock'];
       prodSheet.appendRow(headers);
     } else {
       headers = prodSheet.getRange(1, 1, 1, prodSheet.getLastColumn()).getValues()[0];
       if (headers.indexOf('brand') === -1) { headers.push('brand'); prodSheet.getRange(1, headers.length).setValue('brand'); }
       if (headers.indexOf('specification') === -1) { headers.push('specification'); prodSheet.getRange(1, headers.length).setValue('specification'); }
+      if (headers.indexOf('min_stock') === -1) { headers.push('min_stock'); prodSheet.getRange(1, headers.length).setValue('min_stock'); }
     }
     
     var rowData = [];
@@ -159,6 +176,7 @@ export default function SetupGuide() {
       var headers = prodSheet.getRange(1, 1, 1, prodSheet.getLastColumn()).getValues()[0];
       if (headers.indexOf('brand') === -1) { headers.push('brand'); prodSheet.getRange(1, headers.length).setValue('brand'); }
       if (headers.indexOf('specification') === -1) { headers.push('specification'); prodSheet.getRange(1, headers.length).setValue('specification'); }
+      if (headers.indexOf('min_stock') === -1) { headers.push('min_stock'); prodSheet.getRange(1, headers.length).setValue('min_stock'); }
 
       var values = prodSheet.getDataRange().getValues();
       var idIndex = headers.indexOf('product_id');

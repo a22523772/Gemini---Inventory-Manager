@@ -17,6 +17,7 @@ export type Product = {
   cost_price: number;
   vendor_id: string;
   has_expiry: boolean;
+  min_stock?: number;
   specification?: string;
   expiry_date?: string;
   created_at: string;

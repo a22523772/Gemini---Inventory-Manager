@@ -27,6 +27,8 @@ interface AppState {
   deleteVendor: (vendorId: string) => Promise<void>;
   toastMessage: string | null;
   showToast: (msg: string) => void;
+  lowStockAlertEnabled: boolean;
+  setLowStockAlertEnabled: (enabled: boolean) => Promise<void>;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -41,6 +43,12 @@ export const useStore = create<AppState>((set, get) => ({
   isSyncing: false,
   error: null,
   toastMessage: null,
+  lowStockAlertEnabled: true,
+
+  setLowStockAlertEnabled: async (enabled: boolean) => {
+    await dbSettings.setItem('lowStockAlertEnabled', enabled);
+    set({ lowStockAlertEnabled: enabled });
+  },
 
   showToast: (msg: string) => {
     set({ toastMessage: msg });
@@ -54,6 +62,7 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const url = await dbSettings.getItem<string>('gasApiUrl') || '';
       const op = await dbSettings.getItem<string>('operator') || 'staff';
+      const lowStockAlert = await dbSettings.getItem<boolean>('lowStockAlertEnabled');
       
       const qKeys = await dbSyncQueue.keys();
       const q: SyncItem[] = [];
@@ -62,7 +71,12 @@ export const useStore = create<AppState>((set, get) => ({
         if (item) q.push(item);
       }
 
-      set({ gasApiUrl: url, operator: op, syncQueue: q.sort((a,b) => a.timestamp.localeCompare(b.timestamp)) });
+      set({ 
+        gasApiUrl: url, 
+        operator: op, 
+        syncQueue: q.sort((a,b) => a.timestamp.localeCompare(b.timestamp)),
+        lowStockAlertEnabled: lowStockAlert === null ? true : lowStockAlert 
+      });
 
       // Load products and stock from cache
       const pKeys = await dbProducts.keys();

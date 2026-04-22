@@ -4,7 +4,7 @@ import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filte
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 export default function Products() {
-  const { products, stock, deleteProduct, showToast, vendors } = useStore();
+  const { products, stock, deleteProduct, showToast, vendors, lowStockAlertEnabled } = useStore();
   const [searchParams] = useSearchParams();
   const [searchTerm, setSearchTerm] = useState(searchParams.get('pid') || '');
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -181,26 +181,30 @@ export default function Products() {
             const groupId = p.barcode || p.product_id;
             const isGroupExpanded = expandedId === groupId;
 
+            const alertThreshold = p.min_stock !== undefined ? p.min_stock : 5;
+            const isLowStock = lowStockAlertEnabled && group.totalStock <= alertThreshold;
+
             return (
-              <div key={groupId} className="glass-panel border border-[var(--color-glass-border)] rounded-xl p-4 transition-all">
+              <div key={groupId} className={`glass-panel border ${isLowStock ? 'border-orange-500/50 shadow-[0_0_15px_rgba(249,115,22,0.15)] bg-orange-500/5' : 'border-[var(--color-glass-border)]'} rounded-xl p-4 transition-all`}>
                 <div className="flex justify-between items-start mb-2">
                   <div className="flex-1 pr-2">
-                    <h3 className="font-bold text-[var(--color-text-main)] text-base">
+                    <h3 className="font-bold text-[var(--color-text-main)] text-base flex flex-wrap gap-1 items-center">
                       {p.name} 
                       {p.brand && <span className="text-[10px] font-normal px-1.5 py-0.5 ml-1 bg-white/10 rounded-md text-[var(--color-text-dim)]">{p.brand}</span>}
                       {p.specification && <span className="text-[10px] font-normal px-1.5 py-0.5 ml-1 bg-white/10 rounded-md text-[var(--color-accent-blue)]">{p.specification}</span>}
+                      {isLowStock && <span className="text-[10px] font-bold px-1.5 py-0.5 ml-1 bg-orange-500/20 text-orange-400 rounded-md ml-auto sm:ml-1 animate-pulse">補貨警示</span>}
                     </h3>
                     <p className="text-xs text-[var(--color-text-dim)] font-mono mt-1">
                       {p.barcode ? `條碼: ${p.barcode}` : p.product_id}
                     </p>
                   </div>
                   <div className="flex flex-col items-end gap-2">
-                    <div className="bg-[var(--color-glass-bg)] text-[var(--color-accent-blue)] px-2.5 py-1 rounded-lg text-sm font-bold border border-[var(--color-glass-border)] flex items-center">
+                    <div className={`${isLowStock ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' : 'bg-[var(--color-glass-bg)] text-[var(--color-accent-blue)] border-[var(--color-glass-border)]'} px-2.5 py-1 rounded-lg text-sm font-bold border flex items-center`}>
                       總庫存: {group.totalStock} {p.unit}
                     </div>
                     {group.totalStock > 0 && group.totalCostValue > 0 && (
                       <div className="text-[10px] text-[var(--color-accent-green)] font-medium">
-                        庫存價值: ${group.totalCostValue.toFixed(0)}
+                        平均進價: ${(group.totalCostValue / group.totalStock).toFixed(1)} / {p.unit || '個'}
                       </div>
                     )}
                     <button 

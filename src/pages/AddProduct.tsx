@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import { ArrowLeft, Save, ScanBarcode, PackagePlus, Pencil } from 'lucide-react';
@@ -11,6 +11,17 @@ export default function AddProduct() {
   const editId = searchParams.get('editId');
   const existingProduct = editId ? products.find(p => p.product_id === editId) : null;
 
+  // Extract unique categories and brands for datalists
+  const { uniqueCategories, uniqueBrands } = useMemo(() => {
+    const cats = new Set<string>();
+    const brds = new Set<string>();
+    products.forEach(p => {
+      if (p.category) cats.add(p.category);
+      if (p.brand) brds.add(p.brand);
+    });
+    return { uniqueCategories: Array.from(cats), uniqueBrands: Array.from(brds) };
+  }, [products]);
+
   // Form state
   const [productId, setProductId] = useState(`P${Date.now().toString().slice(-6)}`);
   const [barcode, setBarcode] = useState(searchParams.get('pid') || '');
@@ -22,6 +33,7 @@ export default function AddProduct() {
   const [costPrice, setCostPrice] = useState('');
   const [vendorId, setVendorId] = useState('');
   const [hasExpiry, setHasExpiry] = useState(false);
+  const [minStock, setMinStock] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
 
   useEffect(() => {
@@ -36,6 +48,7 @@ export default function AddProduct() {
       setCostPrice(existingProduct.cost_price?.toString() || '');
       setVendorId(existingProduct.vendor_id || '');
       setHasExpiry(existingProduct.has_expiry || false);
+      setMinStock(existingProduct.min_stock?.toString() || '');
     }
   }, [existingProduct]);
 
@@ -62,7 +75,8 @@ export default function AddProduct() {
       unit,
       cost_price: Number(costPrice) || 0,
       vendor_id: actualVendorId,
-      has_expiry: hasExpiry
+      has_expiry: hasExpiry,
+      min_stock: minStock !== '' ? Number(minStock) : undefined
     };
 
     if (existingProduct) {
@@ -148,11 +162,17 @@ export default function AddProduct() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">分類</label>
-              <input type="text" value={category} onChange={(e) => setCategory(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
+              <input list="categories-list" type="text" value={category} onChange={(e) => setCategory(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
+              <datalist id="categories-list">
+                {uniqueCategories.map(c => <option key={c} value={c} />)}
+              </datalist>
             </div>
             <div>
               <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">品牌</label>
-              <input type="text" value={brand} onChange={(e) => setBrand(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
+              <input list="brands-list" type="text" value={brand} onChange={(e) => setBrand(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
+              <datalist id="brands-list">
+                {uniqueBrands.map(b => <option key={b} value={b} />)}
+              </datalist>
             </div>
           </div>
 
@@ -170,6 +190,11 @@ export default function AddProduct() {
           <div>
             <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">平均進價 / 成本</label>
             <input type="number" step="0.01" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
+          </div>
+
+          <div>
+            <label className="block text-sm font-bold text-orange-400 uppercase tracking-wider text-[10px] mb-1">補貨警示數量 (留空則使用系統設 5)</label>
+            <input type="number" step="1" min="0" value={minStock} onChange={(e) => setMinStock(e.target.value)} placeholder="例如：10" className="block w-full rounded-xl border border-orange-500/30 bg-orange-500/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all placeholder-white/30" />
           </div>
 
           <div>
