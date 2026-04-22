@@ -114,10 +114,10 @@ export default function SetupGuide() {
                 <h3 className="text-base font-bold text-[var(--color-text-main)]">1. Google Sheets 結構設定</h3>
                 <p className="text-[var(--color-text-dim)] mt-1">請建立一個新的 Google Sheet，並確保下方有這四個工作表 (區分大小寫)：</p>
                 <ul className="list-disc pl-5 mt-2 space-y-1 text-white/80 font-mono text-xs">
-                  <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, expiry_date, created_at</li>
+                  <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, specification, created_at</li>
                   <li><strong>vendors</strong> (供應商): vendor_id, vendor_name, contact, phone</li>
-                  <li><strong>stock</strong> (庫存表): stock_id, product_id, location, floor, area, quantity, expiry_date, last_update</li>
-                  <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, type, quantity, location, floor, area, cost_price, vendor_id, date, note, operator</li>
+                  <li><strong>stock</strong> (庫存表): stock_id, product_id, location, floor, area, quantity, expiry_date, specification, last_update</li>
+                  <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, type, quantity, location, floor, area, specification, cost_price, vendor_id, date, note, operator</li>
                 </ul>
              </section>
 
@@ -136,12 +136,12 @@ export default function SetupGuide() {
     
     var headers = [];
     if (prodSheet.getLastRow() === 0) {
-      headers = ['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at', 'brand', 'expiry_date'];
+      headers = ['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at', 'brand', 'specification'];
       prodSheet.appendRow(headers);
     } else {
       headers = prodSheet.getRange(1, 1, 1, prodSheet.getLastColumn()).getValues()[0];
       if (headers.indexOf('brand') === -1) { headers.push('brand'); prodSheet.getRange(1, headers.length).setValue('brand'); }
-      if (headers.indexOf('expiry_date') === -1) { headers.push('expiry_date'); prodSheet.getRange(1, headers.length).setValue('expiry_date'); }
+      if (headers.indexOf('specification') === -1) { headers.push('specification'); prodSheet.getRange(1, headers.length).setValue('specification'); }
     }
     
     var rowData = [];
@@ -158,7 +158,7 @@ export default function SetupGuide() {
     if (prodSheet && prodSheet.getLastRow() > 1) {
       var headers = prodSheet.getRange(1, 1, 1, prodSheet.getLastColumn()).getValues()[0];
       if (headers.indexOf('brand') === -1) { headers.push('brand'); prodSheet.getRange(1, headers.length).setValue('brand'); }
-      if (headers.indexOf('expiry_date') === -1) { headers.push('expiry_date'); prodSheet.getRange(1, headers.length).setValue('expiry_date'); }
+      if (headers.indexOf('specification') === -1) { headers.push('specification'); prodSheet.getRange(1, headers.length).setValue('specification'); }
 
       var values = prodSheet.getDataRange().getValues();
       var idIndex = headers.indexOf('product_id');
@@ -250,7 +250,7 @@ export default function SetupGuide() {
     
     var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
 
-    var stockId = data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area;
+    var stockId = data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area + '_' + (data.expiry_date || '') + '_' + (data.specification || '');
     
     // Find or create in stock
     var lastRow = stockSheet.getLastRow();
@@ -258,28 +258,51 @@ export default function SetupGuide() {
     
     if (lastRow > 0) {
       var values = stockSheet.getDataRange().getValues();
+      var headers = values[0];
+      if (headers.indexOf('specification') === -1) { 
+        headers.push('specification'); 
+        stockSheet.getRange(1, headers.length).setValue('specification');
+        // Refresh values after header update
+        values = stockSheet.getDataRange().getValues();
+      }
+
       for (var i = 1; i < values.length; i++) {
          if (values[i][0] == stockId) {
             stockSheet.getRange(i+1, 6).setValue(Number(values[i][5]) + Number(data.quantity));
-            stockSheet.getRange(i+1, 8).setValue(now);
+            stockSheet.getRange(i+1, 9).setValue(now); // Updated last_update column index? No, let's stick to headers.
+            
+            // safer way: find index
+            var updateIdx = headers.indexOf('last_update');
+            if (updateIdx !== -1) stockSheet.getRange(i+1, updateIdx + 1).setValue(now);
+
             found = true;
             break;
          }
       }
     } else {
       // Initialize headers if empty
-      stockSheet.appendRow(['stock_id', 'product_id', 'location', 'floor', 'area', 'quantity', 'expiry_date', 'last_update']);
+      stockSheet.appendRow(['stock_id', 'product_id', 'location', 'floor', 'area', 'quantity', 'expiry_date', 'specification', 'last_update']);
     }
     
     if (!found) {
-       stockSheet.appendRow([stockId, data.product_id, data.location, data.floor, data.area, data.quantity, data.expiry_date || '', now]);
+       var sHeaders = stockSheet.getRange(1, 1, 1, stockSheet.getLastColumn()).getValues()[0];
+       var sRow = [];
+       for(var m=0; m<sHeaders.length; m++) {
+         var key = sHeaders[m];
+         var val = data[key];
+         if (key === 'stock_id') val = stockId;
+         if (key === 'last_update') val = now;
+         sRow.push(val !== undefined ? val : '');
+       }
+       stockSheet.appendRow(sRow);
     }
     
-    var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
+    var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
     if(transSheet.getLastRow() === 0) {
       transSheet.appendRow(transHeaders);
     } else {
       transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+      if (transHeaders.indexOf('specification') === -1) { transHeaders.push('specification'); transSheet.getRange(1, transHeaders.length).setValue('specification'); }
       if (transHeaders.indexOf('cost_price') === -1) { transHeaders.push('cost_price'); transSheet.getRange(1, transHeaders.length).setValue('cost_price'); }
       if (transHeaders.indexOf('vendor_id') === -1) { transHeaders.push('vendor_id'); transSheet.getRange(1, transHeaders.length).setValue('vendor_id'); }
     }
@@ -287,7 +310,8 @@ export default function SetupGuide() {
     var trData = {
       transaction_id: Utilities.getUuid(), product_id: data.product_id, type: 'stock_in',
       quantity: data.quantity, location: data.location, floor: data.floor, area: data.area,
-      cost_price: data.cost_price, vendor_id: data.vendor_id, date: now, note: '', operator: data.operator
+      specification: data.specification, cost_price: data.cost_price, vendor_id: data.vendor_id, 
+      date: now, note: '', operator: data.operator
     };
     
     var trRow = [];
@@ -302,26 +326,31 @@ export default function SetupGuide() {
   if(action === 'stockOut') {
     var stockSheet = ss.getSheetByName('stock');
     var transSheet = ss.getSheetByName('transactions');
-    var stockId = data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area;
+    var stockId = data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area + '_' + (data.expiry_date || '') + '_' + (data.specification || '');
     var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
 
     if(stockSheet && stockSheet.getLastRow() > 0) {
       var values = stockSheet.getDataRange().getValues();
+      var headers = values[0];
+      var qtyIdx = headers.indexOf('quantity');
+      var updateIdx = headers.indexOf('last_update');
+
       for (var i = 1; i < values.length; i++) {
          if (values[i][0] == stockId) {
-            var newQ = Number(values[i][5]) - Number(data.quantity);
-            stockSheet.getRange(i+1, 6).setValue(newQ < 0 ? 0 : newQ);
-            stockSheet.getRange(i+1, 8).setValue(now);
+            var newQ = Number(values[i][qtyIdx]) - Number(data.quantity);
+            stockSheet.getRange(i+1, qtyIdx + 1).setValue(newQ < 0 ? 0 : newQ);
+            if (updateIdx !== -1) stockSheet.getRange(i+1, updateIdx + 1).setValue(now);
             break;
          }
       }
     }
     
-    var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
+    var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
     if(transSheet.getLastRow() === 0) {
       transSheet.appendRow(transHeaders);
     } else {
       transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+      if (transHeaders.indexOf('specification') === -1) { transHeaders.push('specification'); transSheet.getRange(1, transHeaders.length).setValue('specification'); }
       if (transHeaders.indexOf('cost_price') === -1) { transHeaders.push('cost_price'); transSheet.getRange(1, transHeaders.length).setValue('cost_price'); }
       if (transHeaders.indexOf('vendor_id') === -1) { transHeaders.push('vendor_id'); transSheet.getRange(1, transHeaders.length).setValue('vendor_id'); }
     }
@@ -329,7 +358,7 @@ export default function SetupGuide() {
     var trData = {
       transaction_id: Utilities.getUuid(), product_id: data.product_id, type: 'stock_out',
       quantity: data.quantity, location: data.location, floor: data.floor, area: data.area,
-      cost_price: '', vendor_id: '', date: now, note: '', operator: data.operator
+      specification: data.specification, cost_price: '', vendor_id: '', date: now, note: '', operator: data.operator
     };
     
     var trRow = [];
@@ -344,25 +373,30 @@ export default function SetupGuide() {
   if(action === 'adjustStock') {
       var stockSheet = ss.getSheetByName('stock');
       var transSheet = ss.getSheetByName('transactions');
-      var stockId = data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area;
+      var stockId = data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area + '_' + (data.expiry_date || '') + '_' + (data.specification || '');
       var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
       
       if(stockSheet && stockSheet.getLastRow() > 0) {
         var values = stockSheet.getDataRange().getValues();
+        var headers = values[0];
+        var qtyIdx = headers.indexOf('quantity');
+        var updateIdx = headers.indexOf('last_update');
+
         for (var i = 1; i < values.length; i++) {
            if (values[i][0] == stockId) {
-              stockSheet.getRange(i+1, 6).setValue(Number(data.quantity));
-              stockSheet.getRange(i+1, 8).setValue(now);
+              stockSheet.getRange(i+1, qtyIdx + 1).setValue(Number(data.quantity));
+              if (updateIdx !== -1) stockSheet.getRange(i+1, updateIdx + 1).setValue(now);
               break;
            }
         }
       }
       
-      var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
+      var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
       if(transSheet.getLastRow() === 0) {
         transSheet.appendRow(transHeaders);
       } else {
         transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+        if (transHeaders.indexOf('specification') === -1) { transHeaders.push('specification'); transSheet.getRange(1, transHeaders.length).setValue('specification'); }
         if (transHeaders.indexOf('cost_price') === -1) { transHeaders.push('cost_price'); transSheet.getRange(1, transHeaders.length).setValue('cost_price'); }
         if (transHeaders.indexOf('vendor_id') === -1) { transHeaders.push('vendor_id'); transSheet.getRange(1, transHeaders.length).setValue('vendor_id'); }
       }
@@ -370,7 +404,8 @@ export default function SetupGuide() {
       var trData = {
         transaction_id: Utilities.getUuid(), product_id: data.product_id, type: 'adjust',
         quantity: data.quantity, location: data.location, floor: data.floor, area: data.area,
-        cost_price: '', vendor_id: '', date: now, note: data.note, operator: data.operator
+        specification: data.specification, cost_price: '', vendor_id: '', date: now, note: data.note, 
+        operator: data.operator
       };
       
       var trRow = [];

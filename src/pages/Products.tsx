@@ -33,63 +33,60 @@ export default function Products() {
      return v ? v.vendor_name : vid;
   };
 
-  // 模糊搜尋，本地快取中查找 (支援 < 100ms 要求)
-  const filteredProducts = useMemo(() => {
-    let result = products;
-
-    if (filterBrand) {
-      result = result.filter(p => p.brand === filterBrand);
-    }
-    if (filterCategory) {
-      result = result.filter(p => p.category === filterCategory);
-    }
-    if (filterVendor) {
-      result = result.filter(p => p.vendor_id === filterVendor);
-    }
-
-    if (!searchTerm && !filterBrand && !filterCategory && !filterVendor) return result.slice(0, 50);
-
-    if (searchTerm) {
-      const q = searchTerm.toLowerCase();
-      result = result.filter(
-        p => p.name.toLowerCase().includes(q) || 
-             (p.barcode && String(p.barcode).includes(q)) || 
-             p.product_id.toLowerCase().includes(q)
-      );
-    }
-    
-    return result.slice(0, 100);
-  }, [searchTerm, filterBrand, filterCategory, filterVendor, products]);
-
-  // 取的某商品的總庫存
-  const getProductStock = (pid: string) => {
-    return stock.filter(s => s.product_id === pid).reduce((a, b) => a + b.quantity, 0);
-  };
-
-  // Grouping the filtered products by barcode (or name if no barcode)
+  // Grouping the products by barcode (or product_id if no barcode)
   const groupedProducts = useMemo(() => {
-     const groups: Record<string, { main: any, clones: any[], totalStock: number, totalCostValue: number }> = {};
-     filteredProducts.forEach(p => {
-        const key = p.barcode || p.name;
+     const groups: Record<string, { product: any, stockEntries: any[], totalStock: number, totalCostValue: number }> = {};
+     
+     // 1. Identify primary products
+     products.forEach(p => {
+        const key = p.barcode || p.product_id;
         if (!groups[key]) {
-            groups[key] = { main: p, clones: [], totalStock: 0, totalCostValue: 0 };
+            groups[key] = { product: p, stockEntries: [], totalStock: 0, totalCostValue: 0 };
         } else {
-            // Check if this one is an "older" main definition
-             if (p.product_id < groups[key].main.product_id) {
-                groups[key].clones.push(groups[key].main);
-                groups[key].main = p;
-             } else {
-                groups[key].clones.push(p);
-             }
-        }
-        const stk = getProductStock(p.product_id);
-        groups[key].totalStock += stk;
-        if (p.cost_price && stk > 0) {
-            groups[key].totalCostValue += p.cost_price * stk;
+            // Keep the one with simpler/original looking ID if duplicates exist (legacy compatibility)
+            if (p.product_id.length < groups[key].product.product_id.length) {
+                groups[key].product = p;
+            }
         }
      });
-     return Object.values(groups);
-  }, [filteredProducts, stock]);
+
+     // 2. Map stock entries to these groups
+     stock.forEach(s => {
+        const p = products.find(prod => prod.product_id === s.product_id);
+        if (p) {
+            const key = p.barcode || p.product_id;
+            if (groups[key]) {
+               groups[key].stockEntries.push(s);
+               groups[key].totalStock += s.quantity;
+               if (p.cost_price && s.quantity > 0) {
+                   groups[key].totalCostValue += p.cost_price * s.quantity;
+               }
+            }
+        }
+     });
+
+     // Filter groups by search/filters
+     const result = Object.values(groups).filter(g => {
+        const p = g.product;
+        // Search
+        if (searchTerm) {
+            const q = searchTerm.toLowerCase();
+            const matchesSearch = p.name.toLowerCase().includes(q) || 
+                                 (p.barcode && String(p.barcode).includes(q)) || 
+                                 (p.specification && p.specification.toLowerCase().includes(q)) ||
+                                 p.product_id.toLowerCase().includes(q);
+            if (!matchesSearch) return false;
+        }
+        // Filters
+        if (filterBrand && p.brand !== filterBrand) return false;
+        if (filterCategory && p.category !== filterCategory) return false;
+        if (filterVendor && p.vendor_id !== filterVendor) return false;
+        
+        return true;
+     });
+
+     return result.slice(0, 50);
+  }, [products, stock, searchTerm, filterBrand, filterCategory, filterVendor]);
 
   const executeDelete = async (pid: string) => {
     try {
@@ -180,17 +177,18 @@ export default function Products() {
           </div>
         ) : (
           groupedProducts.map(group => {
-            const p = group.main;
-            const hasClones = group.clones.length > 0;
-            const isGroupExpanded = expandedId === p.barcode || expandedId === p.product_id;
+            const p = group.product;
             const groupId = p.barcode || p.product_id;
+            const isGroupExpanded = expandedId === groupId;
 
             return (
               <div key={groupId} className="glass-panel border border-[var(--color-glass-border)] rounded-xl p-4 transition-all">
                 <div className="flex justify-between items-start mb-2">
                   <div className="flex-1 pr-2">
                     <h3 className="font-bold text-[var(--color-text-main)] text-base">
-                      {p.name} {p.brand && <span className="text-[10px] font-normal px-1.5 py-0.5 ml-1 bg-white/10 rounded-md text-[var(--color-text-dim)]">{p.brand}</span>}
+                      {p.name} 
+                      {p.brand && <span className="text-[10px] font-normal px-1.5 py-0.5 ml-1 bg-white/10 rounded-md text-[var(--color-text-dim)]">{p.brand}</span>}
+                      {p.specification && <span className="text-[10px] font-normal px-1.5 py-0.5 ml-1 bg-white/10 rounded-md text-[var(--color-accent-blue)]">{p.specification}</span>}
                     </h3>
                     <p className="text-xs text-[var(--color-text-dim)] font-mono mt-1">
                       {p.barcode ? `條碼: ${p.barcode}` : p.product_id}
@@ -198,71 +196,93 @@ export default function Products() {
                   </div>
                   <div className="flex flex-col items-end gap-2">
                     <div className="bg-[var(--color-glass-bg)] text-[var(--color-accent-blue)] px-2.5 py-1 rounded-lg text-sm font-bold border border-[var(--color-glass-border)] flex items-center">
-                      總計: {group.totalStock} {p.unit}
+                      總庫存: {group.totalStock} {p.unit}
                     </div>
                     {group.totalStock > 0 && group.totalCostValue > 0 && (
                       <div className="text-[10px] text-[var(--color-accent-green)] font-medium">
-                        平均進價: ${(group.totalCostValue / group.totalStock).toFixed(2)}
+                        庫存價值: ${group.totalCostValue.toFixed(0)}
                       </div>
                     )}
-                    {(hasClones || p.expiry_date || p.vendor_id || group.totalStock > 0) && (
-                      <button 
-                        onClick={() => setExpandedId(isGroupExpanded ? null : groupId)}
-                        className="p-1 -mr-1 text-[var(--color-text-dim)] hover:text-white flex items-center gap-1 text-xs"
-                      >
-                        {isGroupExpanded ? '收起批次' : '展開批次管理'} <MoreHorizontal className="w-4 h-4" />
-                      </button>
-                    )}
+                    <button 
+                      onClick={() => setExpandedId(isGroupExpanded ? null : groupId)}
+                      className="p-1 -mr-1 text-[var(--color-text-dim)] hover:text-white flex items-center gap-1 text-xs"
+                    >
+                      {isGroupExpanded ? '收起詳情' : '管理詳情'} <MoreHorizontal className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
 
                 {isGroupExpanded && (
                   <div className="mt-3 pt-3 border-t border-white/5 space-y-3 animate-in fade-in slide-in-from-top-2">
-                    {[p, ...group.clones].map(clone => (
-                      <div key={clone.product_id} className="bg-black/20 rounded-lg p-3 border border-white/5">
-                        <div className="flex justify-between items-start mb-2">
-                          <div>
-                            <p className="text-xs text-[var(--color-text-main)] font-medium">ID: {clone.product_id}</p>
-                            <div className="flex flex-wrap gap-2 mt-1">
-                              {clone.vendor_id && <span className="text-[10px] text-[var(--color-accent-blue)] bg-[var(--color-accent-blue)]/10 px-1.5 py-0.5 rounded">供應商: {getVendorName(clone.vendor_id)}</span>}
-                              {clone.expiry_date && <span className="text-[10px] text-orange-300 bg-orange-400/10 px-1.5 py-0.5 rounded">效期: {clone.expiry_date}</span>}
-                              {clone.cost_price > 0 && <span className="text-[10px] text-[var(--color-accent-green)] bg-[var(--color-accent-green)]/10 px-1.5 py-0.5 rounded">進價: ${clone.cost_price}</span>}
-                            </div>
-                          </div>
-                          <div className="text-right">
-                             <div className="text-sm font-bold text-[var(--color-text-main)] mb-1">
-                               庫存: {getProductStock(clone.product_id)} {clone.unit}
-                             </div>
-                          </div>
+                    {/* Basic Info & Actions */}
+                    <div className="flex items-center justify-between p-2 bg-white/5 rounded-lg border border-white/5">
+                        <div className="text-xs">
+                           <span className="text-[var(--color-text-dim)]">分類:</span> <span className="text-white ml-1">{p.category || '未分類'}</span>
                         </div>
+                        <div className="flex gap-2">
+                           <button onClick={() => navigate(`/add-product?editId=${p.product_id}`)} className="p-2 glass-panel text-[var(--color-accent-blue)] rounded-lg">
+                             <Pencil className="w-4 h-4" />
+                           </button>
+                           <button onClick={() => setConfirmDeleteId(p.product_id)} className="p-2 glass-panel text-red-400 rounded-lg">
+                             <Trash2 className="w-4 h-4" />
+                           </button>
+                        </div>
+                    </div>
 
-                        {/* Clone Actions */}
-                        <div className="flex gap-2 mt-2 pt-2 border-t border-white/5">
-                          {confirmDeleteId === clone.product_id ? (
-                            <div className="flex-1 flex gap-2 w-full animate-in slide-in-from-right-2">
-                               <div className="flex-1 py-1 flex items-center justify-center text-xs font-bold text-red-400">確定刪除？</div>
-                               <button onClick={() => executeDelete(clone.product_id)} className="flex-1 py-1 glass-panel hover:bg-red-500/20 text-red-400 text-xs font-bold rounded flex items-center justify-center">確認</button>
-                               <button onClick={() => setConfirmDeleteId(null)} className="flex-1 py-1 glass-panel hover:bg-white/10 text-white text-xs font-bold rounded flex items-center justify-center">取消</button>
+                    {confirmDeleteId === p.product_id && (
+                       <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center justify-between animate-in slide-in-from-top-2">
+                          <p className="text-xs font-bold text-red-400">確認刪除此商品定義？</p>
+                          <div className="flex gap-2">
+                            <button onClick={() => executeDelete(p.product_id)} className="px-3 py-1 bg-red-500 text-white text-xs font-bold rounded-lg transition-colors">確認</button>
+                            <button onClick={() => setConfirmDeleteId(null)} className="px-3 py-1 glass-panel text-white text-xs font-bold rounded-lg transition-colors">取消</button>
+                          </div>
+                       </div>
+                    )}
+
+                    {/* Stock Batches */}
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase tracking-widest pl-1">庫存批次詳情</p>
+                      {group.stockEntries.length === 0 ? (
+                        <p className="text-[10px] text-[var(--color-text-dim)] italic pl-1">目前無庫存紀錄</p>
+                      ) : (
+                        group.stockEntries.map(entry => (
+                          <div key={entry.stock_id} className="bg-black/20 rounded-lg p-3 border border-white/5">
+                            <div className="flex justify-between items-start">
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-[10px] font-bold px-1.5 py-0.5 bg-[var(--color-accent-blue)]/20 text-[var(--color-accent-blue)] rounded">
+                                    {entry.location} - {entry.floor} - {entry.area}
+                                  </span>
+                                  {entry.specification && (
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 bg-sky-400/20 text-sky-400 rounded">
+                                      規格: {entry.specification}
+                                    </span>
+                                  )}
+                                  {entry.expiry_date && (
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 bg-orange-400/20 text-orange-400 rounded">
+                                      效期: {entry.expiry_date}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[10px] text-[var(--color-text-dim)]">最後異動: {entry.last_update}</p>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-sm font-bold text-white">{entry.quantity} {p.unit}</span>
+                              </div>
                             </div>
-                          ) : (
-                            <>
-                              <Link to={`/manage?type=stock_in&pid=${clone.product_id}`} className="flex-1 py-1.5 bg-white/5 hover:bg-white/10 text-[var(--color-text-main)] text-xs font-semibold rounded text-center transition-colors">
-                                此批進貨
-                              </Link>
-                              <Link to={`/manage?type=stock_out&pid=${clone.product_id}`} className="flex-1 py-1.5 bg-white/5 hover:bg-white/10 text-[var(--color-text-main)] text-xs font-semibold rounded text-center transition-colors">
-                                此批出貨
-                              </Link>
-                              <button onClick={() => navigate(`/add-product?editId=${clone.product_id}`)} className="p-1.5 bg-white/5 hover:bg-white/10 text-[var(--color-accent-blue)] rounded transition-colors">
-                                <Pencil className="w-3.5 h-3.5" />
-                              </button>
-                              <button onClick={() => setConfirmDeleteId(clone.product_id)} className="p-1.5 bg-white/5 hover:bg-red-500/20 text-red-400 rounded transition-colors">
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ))}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    
+                    <div className="flex gap-2 pt-2">
+                      <Link to={`/manage?type=stock_in&pid=${p.product_id}`} className="flex-1 py-2.5 bg-[var(--color-accent-blue)] text-[#0f172a] text-xs font-bold rounded-xl text-center shadow-lg shadow-sky-400/10">
+                        進貨在此
+                      </Link>
+                      <Link to={`/manage?type=stock_out&pid=${p.product_id}`} className="flex-1 py-2.5 glass-panel text-white text-xs font-bold rounded-xl text-center">
+                        出貨在此
+                      </Link>
+                    </div>
                   </div>
                 )}
 

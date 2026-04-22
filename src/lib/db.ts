@@ -17,6 +17,7 @@ export type Product = {
   cost_price: number;
   vendor_id: string;
   has_expiry: boolean;
+  specification?: string;
   expiry_date?: string;
   created_at: string;
   is_synced?: boolean;
@@ -30,6 +31,7 @@ export type Stock = {
   area: string;
   quantity: number;
   expiry_date?: string;
+  specification?: string;
   last_update: string;
 };
 
@@ -49,6 +51,7 @@ export type Transaction = {
   location: string;
   floor: string;
   area: string;
+  specification?: string;
   cost_price?: number;
   vendor_id?: string;
   date: string;

@@ -6,7 +6,7 @@ import { ArrowLeft, Save } from 'lucide-react';
 export default function StockManage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { enqueueAction, addProduct, products, showToast, operator, stock } = useStore();
+  const { enqueueAction, addProduct, products, showToast, operator, stock, vendors } = useStore();
   
   const initialType = (searchParams.get('type') as 'stock_in' | 'stock_out' | 'adjust') || 'stock_in';
   
@@ -20,8 +20,9 @@ export default function StockManage() {
   const [vendorId, setVendorId] = useState('');
   const [note, setNote] = useState('');
   const [currentExpiry, setCurrentExpiry] = useState('');
+  const [currentSpecification, setCurrentSpecification] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [selectedBatchId, setSelectedBatchId] = useState<string>('');
+  const [selectedStockId, setSelectedStockId] = useState<string>('');
 
   // Extract unique locations, floors, areas for datalists
   const uniqueLocations = Array.from(new Set(stock.map(s => s.location).filter(Boolean)));
@@ -35,106 +36,92 @@ export default function StockManage() {
     }
   }, [searchParams]);
 
-  const matchedProducts = useMemo(() => {
-    if (!pid) return [];
+  const product = useMemo(() => {
+    if (!pid) return null;
     const term = pid.trim().toLowerCase();
-    return products.filter(p => p.product_id.toLowerCase() === term || p.barcode?.toLowerCase() === term);
+    return products.find(p => p.product_id.toLowerCase() === term || p.barcode?.toLowerCase() === term) || null;
   }, [pid, products]);
 
+  const availableStockEntries = useMemo(() => {
+    if (!product) return [];
+    return stock.filter(s => s.product_id === product.product_id);
+  }, [product, stock]);
+
   useEffect(() => {
-    if (matchedProducts.length === 1) {
-      setSelectedBatchId(matchedProducts[0].product_id);
-    } else if (matchedProducts.length > 1) {
-      if (!matchedProducts.find(p => p.product_id === selectedBatchId)) {
-         setSelectedBatchId(matchedProducts[0].product_id); // Default to first match
+    if (availableStockEntries.length > 0) {
+      if (!availableStockEntries.find(s => s.stock_id === selectedStockId)) {
+        setSelectedStockId(availableStockEntries[0].stock_id);
       }
     } else {
-      setSelectedBatchId('');
+      setSelectedStockId('');
     }
-  }, [matchedProducts, selectedBatchId]);
+  }, [availableStockEntries, selectedStockId]);
 
-  const product = matchedProducts.find(p => p.product_id === selectedBatchId) || (matchedProducts.length === 1 ? matchedProducts[0] : undefined);
+  const selectedStock = availableStockEntries.find(s => s.stock_id === selectedStockId);
+
+  const getSpecOptions = useMemo(() => {
+    if (!product?.specification) return [];
+    // Split by comma, slash, or full-width comma
+    return product.specification.split(/[,\/，\s]+/).map(s => s.trim()).filter(Boolean);
+  }, [product?.specification]);
 
   useEffect(() => {
     if (product) {
-      setCurrentExpiry(product.expiry_date || '');
       if (type === 'stock_in') {
+        setCurrentExpiry('');
+        const specs = product.specification?.split(/[,\/，\s]+/).map(s => s.trim()).filter(Boolean) || [];
+        setCurrentSpecification(specs[0] || '');
         setCostPrice(product.cost_price?.toString() || '');
         setVendorId(product.vendor_id || '');
+      } else if (selectedStock) {
+        setCurrentExpiry(selectedStock.expiry_date || '');
+        setCurrentSpecification(selectedStock.specification || '');
+        setLocation(selectedStock.location);
+        setFloor(selectedStock.floor);
+        setArea(selectedStock.area);
       }
     }
-  }, [product?.product_id, type]);
+  }, [product?.product_id, selectedStock?.stock_id, type]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pid || !quantity || isSubmitting) return;
+    if (!pid || !quantity || isSubmitting || !product) return;
     setIsSubmitting(true);
 
-    let targetPid = product ? product.product_id : pid;
+    const targetPid = product.product_id;
 
     // Helper: Check if expired
-    const isExpired = () => {
-        if (!product || !product.has_expiry || !product.expiry_date) return false;
+    const isExpired = (dateStr?: string) => {
+        if (!dateStr) return false;
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        const exp = new Date(product.expiry_date);
+        const exp = new Date(dateStr);
         exp.setHours(0, 0, 0, 0);
         return exp < today;
     };
 
-    if (type === 'stock_out' && isExpired()) {
+    if (type === 'stock_out' && isExpired(currentExpiry)) {
         showToast('❌ 此商品已過期，禁止出貨！');
         setIsSubmitting(false);
         return;
     }
 
-    let isNewVendorEntered = false;
+    let isNewVendorEntered = vendorId.trim() && !vendors.find(v => v.vendor_id === vendorId || v.vendor_name === vendorId);
     let actualVendorId = vendorId;
 
-    if (type === 'stock_in') {
-       // Validate vendor
-       const existingVendor = useStore.getState().vendors.find(v => v.vendor_id === vendorId || v.vendor_name === vendorId);
-       if (existingVendor) {
-           actualVendorId = existingVendor.vendor_id;
-       } else if (vendorId.trim()) {
-           isNewVendorEntered = true;
-           actualVendorId = `V${Date.now().toString().slice(-6)}`;
-       }
+    const existingVendor = useStore.getState().vendors.find(v => v.vendor_id === vendorId || v.vendor_name === vendorId);
+    if (existingVendor) {
+        actualVendorId = existingVendor.vendor_id;
+    } else if (vendorId.trim()) {
+        isNewVendorEntered = true;
+        actualVendorId = `V${Date.now().toString().slice(-6)}`;
     }
 
-    // Requirement: Must input expiry date on stock in. Clones to new product if date differs.
-    if (type === 'stock_in' && product) {
+    if (product && type === 'stock_in') {
        if (!currentExpiry && product.has_expiry) {
-           showToast('❌ 請輸入有效日期！');
+           showToast('❌ 此商品需要填寫有效日期！');
            setIsSubmitting(false);
            return;
-       }
-
-       if (currentExpiry && currentExpiry !== (product.expiry_date || '')) {
-           // Search if existing cloned product has same barcode and expiry
-           const match = products.find(p => p.barcode === product.barcode && p.expiry_date === currentExpiry && p.product_id !== product.product_id);
-           if (match) {
-               targetPid = match.product_id;
-           } else {
-               // Prevent empty clones! If original product has 0 stock AND no expiry date set yet, it means this is a newly created master product getting its first stock. Use it directly!
-               const stockCount = useStore.getState().stock.filter(s => s.product_id === product.product_id).reduce((a, b) => a + b.quantity, 0);
-               if (stockCount === 0 && !product.expiry_date) {
-                   // Just use the master product ID!
-                   // Update will happen in the subsequent block!
-               } else {
-                   targetPid = `P${Date.now().toString().slice(-6)}`;
-                   const clonedProduct = {
-                       ...product,
-                       product_id: targetPid,
-                       expiry_date: currentExpiry,
-                       has_expiry: true,
-                       vendor_id: actualVendorId,
-                       cost_price: Number(costPrice) || 0
-                   };
-                   await addProduct(clonedProduct);
-                   showToast(`ℹ️ 偵測到不同效期，已自動新增商品批次 (${targetPid})`);
-               }
-           }
        }
     }
 
@@ -144,7 +131,9 @@ export default function StockManage() {
       location,
       floor,
       area,
-      expiry_date: currentExpiry || ''
+      expiry_date: currentExpiry || '',
+      specification: currentSpecification,
+      operator
     };
 
     let actionName: any;
@@ -158,13 +147,9 @@ export default function StockManage() {
           let updatedProduct = { ...product };
           let needsUpdate = false;
           
-          if (product.cost_price !== Number(costPrice) || product.vendor_id !== actualVendorId || product.expiry_date !== currentExpiry) {
+          if (product.cost_price !== Number(costPrice) || product.vendor_id !== actualVendorId) {
               updatedProduct.cost_price = Number(costPrice) || 0;
               updatedProduct.vendor_id = actualVendorId;
-              if (currentExpiry) {
-                  updatedProduct.expiry_date = currentExpiry;
-                  updatedProduct.has_expiry = true;
-              }
               needsUpdate = true;
           }
 
@@ -247,9 +232,9 @@ export default function StockManage() {
           {product && (
             <div className="mt-2 text-xs flex flex-col gap-1">
                <p className="text-[var(--color-accent-green)] font-medium">已找到: {product.name} {product.brand ? `(${product.brand})` : ''}</p>
-               {type === 'stock_out' && product.has_expiry && product.expiry_date && (
+               {product?.has_expiry && (
                  <p className="text-orange-400 font-bold bg-orange-400/10 inline-block px-2 py-1 rounded w-fit">
-                   商品預設效期: {product.expiry_date}
+                   商品需要記錄有效日期
                  </p>
                )}
                {type === 'stock_out' && product.cost_price > 0 && (
@@ -261,26 +246,43 @@ export default function StockManage() {
           )}
         </div>
 
-        {matchedProducts.length > 1 && (
+        {(type === 'stock_out' || type === 'adjust') && availableStockEntries.length > 1 && (
           <div className="animate-in fade-in slide-in-from-top-2 p-3 border border-[var(--color-accent-blue)]/30 bg-[var(--color-accent-blue)]/10 rounded-xl">
              <label className="block text-sm font-bold text-[var(--color-accent-blue)] uppercase tracking-wider text-[10px] mb-1">
-               選擇商品批次 (偵測到多組效期)
+               選擇庫存批次 (多個儲位或效期)
              </label>
              <select
-               value={selectedBatchId}
-               onChange={(e) => setSelectedBatchId(e.target.value)}
+               value={selectedStockId}
+               onChange={(e) => setSelectedStockId(e.target.value)}
                className="block w-full rounded-xl border border-white/10 bg-black/20 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]"
              >
-               {matchedProducts.map(p => (
-                 <option key={p.product_id} value={p.product_id}>
-                   {p.expiry_date ? `效期: ${p.expiry_date}` : '未設定效期'} (庫存: {stock.filter(s => s.product_id === p.product_id).reduce((sum, s) => sum + s.quantity, 0)})
+               {availableStockEntries.map(s => (
+                 <option key={s.stock_id} value={s.stock_id}>
+                   {s.location}-{s.floor}-{s.area} {s.specification ? `[${s.specification}]` : ''} {s.expiry_date ? `(效: ${s.expiry_date})` : ''} [量: {s.quantity}]
                  </option>
                ))}
              </select>
           </div>
         )}
 
-        {type === 'stock_in' && (
+        {type === 'stock_in' && getSpecOptions.length > 0 && (
+          <div className="animate-in fade-in slide-in-from-top-2 p-3 border border-[var(--color-accent-blue)]/30 bg-[var(--color-accent-blue)]/5 rounded-xl">
+            <label className="block text-sm font-bold text-[var(--color-accent-blue)] uppercase tracking-wider text-[10px] mb-1">
+              商品規格 (請選擇)
+            </label>
+            <select
+              value={currentSpecification}
+              onChange={(e) => setCurrentSpecification(e.target.value)}
+              className="block w-full rounded-xl border border-white/10 bg-black/20 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all"
+            >
+              {getSpecOptions.map(opt => (
+                <option key={opt} value={opt}>{opt}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {type === 'stock_in' && product?.has_expiry && (
           <div className="animate-in fade-in slide-in-from-top-2 p-3 border border-[var(--color-accent-orange)]/30 bg-[var(--color-accent-orange)]/10 rounded-xl">
             <label className="block text-sm font-bold text-orange-200 uppercase tracking-wider text-[10px] mb-1">
               操作有效日期 (必填)

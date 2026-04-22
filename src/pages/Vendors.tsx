@@ -18,6 +18,7 @@ export default function Vendors() {
 
   useEffect(() => {
     const newName = searchParams.get('newVendorName');
+    const tempId = searchParams.get('tempId');
     if (newName) {
       setVendorName(newName);
       setShowForm(true);
@@ -57,8 +58,9 @@ export default function Vendors() {
       });
       showToast('✅ 供應商已更新！');
     } else {
+      const tempId = searchParams.get('tempId');
       await addVendor({
-        vendor_id: `V${Date.now().toString().slice(-6)}`,
+        vendor_id: tempId || `V${Date.now().toString().slice(-6)}`,
         vendor_name: vendorName,
         contact,
         phone

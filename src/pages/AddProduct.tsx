@@ -17,6 +17,7 @@ export default function AddProduct() {
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
   const [brand, setBrand] = useState('');
+  const [specification, setSpecification] = useState('');
   const [unit, setUnit] = useState('個');
   const [costPrice, setCostPrice] = useState('');
   const [vendorId, setVendorId] = useState('');
@@ -30,28 +31,38 @@ export default function AddProduct() {
       setName(existingProduct.name);
       setCategory(existingProduct.category || '');
       setBrand(existingProduct.brand || '');
+      setSpecification(existingProduct.specification || '');
       setUnit(existingProduct.unit || '個');
       setCostPrice(existingProduct.cost_price?.toString() || '');
       setVendorId(existingProduct.vendor_id || '');
       setHasExpiry(existingProduct.has_expiry || false);
-      setExpiryDate(existingProduct.expiry_date || '');
     }
   }, [existingProduct]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    let actualVendorId = vendorId;
+    const isNewVendor = vendorId.trim() && !vendors.find(v => v.vendor_id === vendorId || v.vendor_name === vendorId);
+    
+    if (isNewVendor) {
+       actualVendorId = `V${Date.now().toString().slice(-6)}`;
+    } else {
+       const existingVendor = vendors.find(v => v.vendor_id === vendorId || v.vendor_name === vendorId);
+       if (existingVendor) actualVendorId = existingVendor.vendor_id;
+    }
+
     const productData = {
       product_id: productId,
       barcode,
       name,
       category,
       brand,
+      specification,
       unit,
       cost_price: Number(costPrice) || 0,
-      vendor_id: vendorId,
-      has_expiry: hasExpiry,
-      expiry_date: expiryDate
+      vendor_id: actualVendorId,
+      has_expiry: hasExpiry
     };
 
     if (existingProduct) {
@@ -62,8 +73,14 @@ export default function AddProduct() {
       showToast('✅ 新商品已建立！');
     }
     
-    // Navigate back to products listing
-    navigate('/products', { replace: true });
+    if (isNewVendor) {
+       showToast('⚠️ 偵測到新供應商，請完成資料建立');
+       // Pass both name and the temporary ID we just chose
+       navigate(`/vendors?newVendorName=${encodeURIComponent(vendorId.trim())}&tempId=${actualVendorId}`);
+    } else {
+       // Navigate back to products listing
+       navigate('/products', { replace: true });
+    }
   };
 
   return (
@@ -145,24 +162,32 @@ export default function AddProduct() {
               <input type="text" required value={unit} onChange={(e) => setUnit(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
             </div>
             <div>
-              <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">平均進價 / 成本</label>
-              <input type="number" step="0.01" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
+              <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">規格</label>
+              <input type="text" value={specification} onChange={(e) => setSpecification(e.target.value)} placeholder="例如：大號 / 紅色" className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
             </div>
           </div>
+
           <div>
-            <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">供應商</label>
-            <select
+            <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">平均進價 / 成本</label>
+            <input type="number" step="0.01" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
+          </div>
+
+          <div>
+            <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">供應商 (代號或名稱)</label>
+            <input
+              list="vendor-list"
               value={vendorId}
               onChange={(e) => setVendorId(e.target.value)}
-              className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all appearance-none"
-            >
-              <option value="" className="bg-[#0f172a]">-- 尚未選擇 --</option>
+              placeholder="輸入或選擇供應商"
+              className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all"
+            />
+            <datalist id="vendor-list">
               {vendors.map(v => (
-                <option key={v.vendor_id} value={v.vendor_id} className="bg-[#0f172a]">
-                  {v.vendor_name} ({v.vendor_id})
+                <option key={v.vendor_id} value={v.vendor_id}>
+                  {v.vendor_name}
                 </option>
               ))}
-            </select>
+            </datalist>
           </div>
 
           <div className="flex items-center space-x-3 pt-2">
@@ -177,18 +202,6 @@ export default function AddProduct() {
               此商品包含有效期限 (例如：生鮮食品)
             </label>
           </div>
-          
-          {hasExpiry && (
-            <div className="animate-in fade-in slide-in-from-top-2">
-              <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">有效日期 (可選預設)</label>
-              <input 
-                type="date" 
-                value={expiryDate} 
-                onChange={(e) => setExpiryDate(e.target.value)} 
-                className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" 
-              />
-            </div>
-          )}
         </div>
 
         <div className="pt-2">
