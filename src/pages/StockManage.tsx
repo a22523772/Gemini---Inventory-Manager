@@ -246,7 +246,7 @@ export default function StockManage() {
           )}
         </div>
 
-        {(type === 'stock_out' || type === 'adjust') && availableStockEntries.length > 1 && (
+        {(type === 'stock_out' || type === 'adjust') && availableStockEntries.length > 0 && (
           <div className="animate-in fade-in slide-in-from-top-2 p-3 border border-[var(--color-accent-blue)]/30 bg-[var(--color-accent-blue)]/10 rounded-xl">
              <label className="block text-sm font-bold text-[var(--color-accent-blue)] uppercase tracking-wider text-[10px] mb-1">
                選擇庫存批次 (多個儲位或效期)
