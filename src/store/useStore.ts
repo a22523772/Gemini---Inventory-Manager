@@ -133,11 +133,74 @@ export const useStore = create<AppState>((set, get) => ({
       timestamp: new Date().toISOString()
     };
     await dbSyncQueue.setItem(item.id, item);
-    // Locally optimistically update stock if possible
-    // (A real app handles optimistic updates in detail. We'll simplify here 
-    // and rely on a sync to fix state.)
     
-    set((state) => ({ syncQueue: [...state.syncQueue, item] }));
+    // Locally optimistically update stock
+    const { stock } = get();
+    const now = new Date().toISOString().replace('T', ' ').split('.')[0];
+    const stockId = payload.stock_id || `${payload.product_id}_${payload.location}_${payload.floor}_${payload.area}_${payload.expiry_date || ''}_${payload.specification || ''}`;
+    
+    let newStock = [...stock];
+    const existingIndex = newStock.findIndex(s => s.stock_id === stockId);
+    
+    if (action === 'stockIn') {
+        if (existingIndex > -1) {
+            newStock[existingIndex] = { ...newStock[existingIndex], quantity: newStock[existingIndex].quantity + payload.quantity, last_update: now };
+        } else {
+            newStock.push({
+                stock_id: stockId,
+                product_id: payload.product_id,
+                location: payload.location,
+                floor: payload.floor,
+                area: payload.area,
+                quantity: payload.quantity,
+                expiry_date: payload.expiry_date,
+                specification: payload.specification,
+                last_update: now
+            });
+        }
+    } else if (action === 'stockOut') {
+        if (existingIndex > -1) {
+            const updatedQty = Math.max(0, newStock[existingIndex].quantity - payload.quantity);
+            if (updatedQty <= 0) {
+                const idToRemove = newStock[existingIndex].stock_id;
+                newStock.splice(existingIndex, 1);
+                await dbStock.removeItem(idToRemove);
+            } else {
+                newStock[existingIndex] = { ...newStock[existingIndex], quantity: updatedQty, last_update: now };
+            }
+        }
+    } else if (action === 'adjustStock') {
+        if (payload.quantity <= 0) {
+            if (existingIndex > -1) {
+                const idToRemove = newStock[existingIndex].stock_id;
+                newStock.splice(existingIndex, 1);
+                await dbStock.removeItem(idToRemove);
+            }
+        } else {
+            if (existingIndex > -1) {
+                newStock[existingIndex] = { ...newStock[existingIndex], quantity: payload.quantity, last_update: now };
+            } else {
+                newStock.push({
+                    stock_id: stockId,
+                    product_id: payload.product_id,
+                    location: payload.location,
+                    floor: payload.floor,
+                    area: payload.area,
+                    quantity: payload.quantity,
+                    expiry_date: payload.expiry_date,
+                    specification: payload.specification,
+                    last_update: now
+                });
+            }
+        }
+    }
+
+    set((state) => ({ syncQueue: [...state.syncQueue, item], stock: newStock }));
+    
+    // Also save updated stock to localforage immediately for better PWA experience
+    for (const s of newStock) {
+        await dbStock.setItem(s.stock_id, s);
+    }
     
     // Try to sync immediately
     get().syncData();
@@ -193,11 +256,19 @@ export const useStore = create<AppState>((set, get) => ({
       if (rP.ok) {
         const dP = await rP.json();
         
+        // Normalize boolean strings from GAS DisplayValues
+        const normalizedProducts = dP.map((p: any) => ({
+          ...p,
+          has_expiry: String(p.has_expiry).toUpperCase() === 'TRUE',
+          cost_price: Number(p.cost_price) || 0,
+          min_stock: p.min_stock !== undefined ? Number(p.min_stock) : undefined
+        }));
+
         await dbProducts.clear();
-        for (const p of dP) {
+        for (const p of normalizedProducts) {
           if (p.product_id) await dbProducts.setItem(p.product_id, p);
         }
-        set({ products: dP });
+        set({ products: normalizedProducts });
       } else {
          throw new Error(`商品資料獲取失敗狀態碼: ${rP.status}`);
       }

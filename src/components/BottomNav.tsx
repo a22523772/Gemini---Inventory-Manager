@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Home, Package, ScanLine, ArrowRightLeft, Settings } from 'lucide-react';
+import { Home, Package, ScanLine, ArrowRightLeft, Settings, BarChart2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useStore } from '../store/useStore';
 

@@ -126,6 +126,7 @@ export default function StockManage() {
     }
 
     let payload: any = {
+      stock_id: type !== 'stock_in' ? selectedStockId : undefined,
       product_id: targetPid,
       quantity: Number(quantity),
       location,
@@ -135,6 +136,15 @@ export default function StockManage() {
       specification: currentSpecification,
       operator
     };
+
+    if (type === 'stock_out' && product) {
+       const available = selectedStock?.quantity || 0;
+       if (Number(quantity) > available) {
+           showToast(`❌ 出貨數量大於目前批次庫存量 (${available} ${product.unit})！`);
+           setIsSubmitting(false);
+           return;
+       }
+    }
 
     let actionName: any;
 

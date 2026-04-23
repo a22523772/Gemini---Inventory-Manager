@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { Package, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, AlertTriangle } from 'lucide-react';
+import { Package, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, AlertTriangle, BarChart2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 export default function Home() {
@@ -76,6 +76,18 @@ export default function Home() {
               <RefreshCcw className="w-5 h-5 text-[var(--color-accent-orange)]" />
             </div>
             <span className="text-xs font-semibold text-[var(--color-text-main)]">盤點</span>
+          </Link>
+          <Link to="/reports" className="col-span-3 flex items-center justify-between glass-panel p-4 rounded-2xl active:scale-95 transition-all hover:bg-white/10 hover:border-white/20">
+            <div className="flex items-center">
+              <div className="w-10 h-10 rounded-xl bg-sky-500/10 flex items-center justify-center mr-3">
+                <BarChart2 className="w-5 h-5 text-[#38bdf8]" />
+              </div>
+              <div className="text-left">
+                <span className="block text-sm font-bold text-[var(--color-text-main)]">洞察報表</span>
+                <span className="block text-xs text-[var(--color-text-dim)]">財務估算與庫存健康分析</span>
+              </div>
+            </div>
+            <div className="bg-white/10 px-3 py-1 rounded-full text-xs font-bold text-white">查看</div>
           </Link>
           <Link to="/vendors" className="flex flex-col items-center justify-center glass-panel p-4 rounded-2xl active:scale-95 transition-all hover:bg-white/10 hover:border-white/20">
             <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center mb-2">

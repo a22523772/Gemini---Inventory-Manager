@@ -67,6 +67,7 @@ export default function ScannerPage() {
       ]
     };
 
+    // Try using environment facing logic rather than explicitly selecting by ID which can cause Not Found error.
     html5QrCode.start(
       { facingMode: "environment" }, 
       config, 
@@ -75,7 +76,20 @@ export default function ScannerPage() {
     ).then(() => {
       setIsCameraReady(true);
     }).catch(err => {
-      console.error("Unable to start scanning", err);
+      console.error("Unable to start environment camera, falling back to user", err);
+      // Fallback: try user (front) camera if environment failed
+      html5QrCode.start(
+        { facingMode: "user" }, 
+        config, 
+        qrCodeSuccessCallback,
+        undefined
+      ).then(() => {
+        setIsCameraReady(true);
+      }).catch(fallbackErr => {
+         console.error("Fallback start failed", fallbackErr);
+         const msg = (fallbackErr instanceof Error) ? fallbackErr.message : String(fallbackErr);
+         alert("無法啟動相機：" + msg + "。請確認已授予相機權限。");
+      });
     });
 
     return () => {

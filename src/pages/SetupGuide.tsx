@@ -344,7 +344,7 @@ export default function SetupGuide() {
   if(action === 'stockOut') {
     var stockSheet = ss.getSheetByName('stock');
     var transSheet = ss.getSheetByName('transactions');
-    var stockId = data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area + '_' + (data.expiry_date || '') + '_' + (data.specification || '');
+    var stockId = data.stock_id || (data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area + '_' + (data.expiry_date || '') + '_' + (data.specification || ''));
     var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
 
     if(stockSheet && stockSheet.getLastRow() > 0) {
@@ -354,10 +354,14 @@ export default function SetupGuide() {
       var updateIdx = headers.indexOf('last_update');
 
       for (var i = 1; i < values.length; i++) {
-         if (values[i][0] == stockId) {
+         if (values[i][0] == stockId || values[i][0] == data.stock_id) {
             var newQ = Number(values[i][qtyIdx]) - Number(data.quantity);
-            stockSheet.getRange(i+1, qtyIdx + 1).setValue(newQ < 0 ? 0 : newQ);
-            if (updateIdx !== -1) stockSheet.getRange(i+1, updateIdx + 1).setValue(now);
+            if (newQ <= 0) {
+               stockSheet.deleteRow(i + 1);
+            } else {
+               stockSheet.getRange(i+1, qtyIdx + 1).setValue(newQ);
+               if (updateIdx !== -1) stockSheet.getRange(i+1, updateIdx + 1).setValue(now);
+            }
             break;
          }
       }
@@ -391,7 +395,7 @@ export default function SetupGuide() {
   if(action === 'adjustStock') {
       var stockSheet = ss.getSheetByName('stock');
       var transSheet = ss.getSheetByName('transactions');
-      var stockId = data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area + '_' + (data.expiry_date || '') + '_' + (data.specification || '');
+      var stockId = data.stock_id || (data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area + '_' + (data.expiry_date || '') + '_' + (data.specification || ''));
       var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
       
       if(stockSheet && stockSheet.getLastRow() > 0) {
@@ -401,9 +405,13 @@ export default function SetupGuide() {
         var updateIdx = headers.indexOf('last_update');
 
         for (var i = 1; i < values.length; i++) {
-           if (values[i][0] == stockId) {
-              stockSheet.getRange(i+1, qtyIdx + 1).setValue(Number(data.quantity));
-              if (updateIdx !== -1) stockSheet.getRange(i+1, updateIdx + 1).setValue(now);
+           if (values[i][0] == stockId || values[i][0] == data.stock_id) {
+              if (Number(data.quantity) <= 0) {
+                 stockSheet.deleteRow(i + 1);
+              } else {
+                 stockSheet.getRange(i+1, qtyIdx + 1).setValue(Number(data.quantity));
+                 if (updateIdx !== -1) stockSheet.getRange(i+1, updateIdx + 1).setValue(now);
+              }
               break;
            }
         }
@@ -450,7 +458,12 @@ function doGet(e) {
     var result = [];
     for(var i=1; i<data.length; i++){
       var obj = {};
-      for(var j=0; j<keys.length; j++){ obj[keys[j]] = data[i][j]; }
+      for(var j=0; j<keys.length; j++){ 
+        var val = data[i][j];
+        if (keys[j] === 'has_expiry') val = (String(val).toUpperCase() === 'TRUE');
+        if (keys[j] === 'cost_price' || keys[j] === 'min_stock') val = Number(val) || 0;
+        obj[keys[j]] = val; 
+      }
       result.push(obj);
     }
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
