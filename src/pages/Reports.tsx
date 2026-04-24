@@ -48,7 +48,7 @@ export default function Reports() {
       }
 
       // Low Stock Check
-      if (s.quantity > 0 && s.quantity <= (product.safe_stock || 5)) { // default safe stock 5 if not set
+      if (s.quantity > 0 && s.quantity <= (product.min_stock || 5)) { // default safe stock 5 if not set
         const vendorId = product.vendor_id || 'unknown';
         if (!lowStockByVendor[vendorId]) lowStockByVendor[vendorId] = [];
         lowStockByVendor[vendorId].push({ ...s, product });
@@ -263,7 +263,7 @@ export default function Reports() {
                          <span className="bg-red-500/20 text-red-400 text-xs px-2 py-0.5 rounded-full">剩 {item.quantity} {item.product?.unit}</span>
                       </div>
                       <div className="text-xs text-[var(--color-text-dim)] mt-1">
-                        安全庫存: {item.product?.safe_stock || 5} | 批次: {item.stock_id?.split('_').slice(1,4).filter(Boolean).join('-') || '無'}
+                        安全庫存: {item.product?.min_stock || 5} | 批次: {item.stock_id?.split('_').slice(1,4).filter(Boolean).join('-') || '無'}
                       </div>
                     </div>
                   ))}

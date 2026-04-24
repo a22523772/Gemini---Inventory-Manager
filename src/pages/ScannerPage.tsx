@@ -13,19 +13,29 @@ export default function ScannerPage() {
   const [scannedResult, setScannedResult] = useState<string | null>(null);
   const [torchOn, setTorchOn] = useState(false);
   const [isCameraReady, setIsCameraReady] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const isRoutingRef = useRef(false);
 
-  useEffect(() => {
-    const html5QrCode = new Html5Qrcode("qr-reader");
-    html5QrCodeRef.current = html5QrCode;
+  const isCameraReadyRef = useRef(false);
+  const startingRef = useRef(false);
+  const isMountedRef = useRef(true);
 
+  useEffect(() => {
+    isMountedRef.current = true;
+    
+    // Create scanner only if it doesn't exist
+    if (!html5QrCodeRef.current) {
+        html5QrCodeRef.current = new Html5Qrcode("qr-reader");
+    }
+    const html5QrCode = html5QrCodeRef.current;
+    
     const qrCodeSuccessCallback = (decodedText: string) => {
-      if (isRoutingRef.current) return;
+      if (isRoutingRef.current || !isMountedRef.current) return;
       isRoutingRef.current = true;
       setScannedResult(decodedText);
-      let pid = decodedText;
       
+      let pid = decodedText;
       const product = products.find(p => String(p.barcode) === decodedText || String(p.product_id) === decodedText);
       if (product) pid = product.product_id;
 
@@ -37,23 +47,30 @@ export default function ScannerPage() {
       const separator = targetPath.includes('?') ? '&' : '?';
       const finalUrl = `${targetPath}${separator}pid=${encodeURIComponent(pid)}`;
 
-      html5QrCode.stop().then(() => {
-        navigate(finalUrl, { replace: true });
-      }).catch(() => {
-        navigate(finalUrl, { replace: true });
-      });
+      const stopAndNavigate = async () => {
+        try {
+          if (html5QrCode.isScanning) {
+            await html5QrCode.stop();
+          }
+        } catch (e) {
+          console.warn("Stop failed during success", e);
+        }
+        if (isMountedRef.current) {
+          navigate(finalUrl, { replace: true });
+        }
+      };
+      
+      stopAndNavigate();
     };
 
     const config = { 
-      fps: 20, // Increased FPS for faster detection
+      fps: 15,
       qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
-        const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-        const qrboxSize = Math.floor(minEdge * 0.7);
-        return { width: qrboxSize, height: qrboxSize * 0.6 }; // Wider box for barcodes
+        const size = Math.min(viewfinderWidth, viewfinderHeight) * 0.7;
+        return { width: Math.max(size, 250), height: Math.max(size * 0.5, 150) };
       },
-      aspectRatio: 1.0,
       experimentalFeatures: {
-        useBarCodeDetectorIfSupported: true
+        useBarCodeDetectorIfSupported: false
       },
       formatsToSupport: [ 
         Html5QrcodeSupportedFormats.QR_CODE, 
@@ -64,37 +81,126 @@ export default function ScannerPage() {
         Html5QrcodeSupportedFormats.UPC_A,
         Html5QrcodeSupportedFormats.UPC_E,
         Html5QrcodeSupportedFormats.ITF
-      ]
+      ],
+      videoConstraints: {
+        facingMode: "environment",
+        // @ts-ignore
+        focusMode: "continuous"
+      }
     };
 
-    // Try using environment facing logic rather than explicitly selecting by ID which can cause Not Found error.
-    html5QrCode.start(
-      { facingMode: "environment" }, 
-      config, 
-      qrCodeSuccessCallback,
-      undefined
-    ).then(() => {
-      setIsCameraReady(true);
-    }).catch(err => {
-      console.error("Unable to start environment camera, falling back to user", err);
-      // Fallback: try user (front) camera if environment failed
-      html5QrCode.start(
-        { facingMode: "user" }, 
-        config, 
-        qrCodeSuccessCallback,
-        undefined
-      ).then(() => {
+    const initScanner = async () => {
+      // Ensure any previous scan is stopped before starting a new one
+      if (html5QrCode.isScanning) {
+        try {
+          await html5QrCode.stop();
+        } catch (e) {
+          console.warn("Pre-init stop failed", e);
+        }
+      }
+
+      if (startingRef.current || !isMountedRef.current) return;
+      startingRef.current = true;
+      setIsCameraReady(false);
+      isCameraReadyRef.current = false;
+      setErrorMsg(null);
+
+      try {
+        // Wait for DOM
+        let attempts = 0;
+        while (attempts < 10 && (!document.getElementById("qr-reader") || document.getElementById("qr-reader")?.clientWidth === 0)) {
+           await new Promise(r => setTimeout(r, 200));
+           attempts++;
+        }
+
+        if (!isMountedRef.current) {
+          startingRef.current = false;
+          return;
+        }
+
+        let started = false;
+        const shouldContinue = () => isMountedRef.current && !started;
+
+        // Try to trigger permission prompt explicitly
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+            stream.getTracks().forEach(track => track.stop());
+          } catch (e) {
+            console.warn("Manual getUserMedia trigger failed:", e);
+            if (e instanceof Error && (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError')) {
+              throw new Error("相機權限未開啟。");
+            }
+          }
+        }
+
+        // Strategy 1: facingMode environment
+        if (shouldContinue()) {
+          try {
+            await html5QrCode.start({ facingMode: "environment" }, config, qrCodeSuccessCallback, () => {});
+            started = true;
+          } catch (e) {
+            console.warn("Environment facingMode failed", e);
+          }
+        }
+
+        // Strategy 2: Enumeration
+        if (shouldContinue()) {
+          try {
+            const cameras = await Html5Qrcode.getCameras();
+            if (cameras && cameras.length > 0 && isMountedRef.current) {
+              const backCam = cameras.find(c => /back|rear|environment|外置|後置/i.test(c.label));
+              const camId = backCam ? backCam.id : cameras[cameras.length - 1].id;
+              
+              await html5QrCode.start(camId, config, qrCodeSuccessCallback, () => {});
+              started = true;
+            }
+          } catch (e) {
+            console.warn("getCameras failed", e);
+          }
+        }
+
+        // Strategy 3: user facingMode
+        if (shouldContinue()) {
+          try {
+            await html5QrCode.start({ facingMode: "user" }, config, qrCodeSuccessCallback, () => {});
+            started = true;
+          } catch (e) {
+            console.warn("User facingMode failed", e);
+          }
+        }
+
+        if (!started && isMountedRef.current) {
+          throw new Error("無法啟動相機。可能權限遭拒或設備已被占用。");
+        }
+
+        if (!isMountedRef.current) {
+          if (html5QrCode.isScanning) {
+            await html5QrCode.stop().catch(() => {});
+          }
+          startingRef.current = false;
+          return;
+        }
+
         setIsCameraReady(true);
-      }).catch(fallbackErr => {
-         console.error("Fallback start failed", fallbackErr);
-         const msg = (fallbackErr instanceof Error) ? fallbackErr.message : String(fallbackErr);
-         alert("無法啟動相機：" + msg + "。請確認已授予相機權限。");
-      });
-    });
+        isCameraReadyRef.current = true;
+      } catch (err) {
+        console.error("Final scanner error", err);
+        if (isMountedRef.current) {
+           setErrorMsg(err instanceof Error ? err.message : "相機啟動異常");
+        }
+      } finally {
+        startingRef.current = false;
+      }
+    };
+
+    initScanner();
 
     return () => {
-      if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
-        html5QrCodeRef.current.stop().catch(e => console.error(e));
+      isMountedRef.current = false;
+      if (html5QrCode.isScanning) {
+        // Stop it without blocking the effect cleanup if possible, but reliably
+        html5QrCode.stop().catch(() => {});
       }
     };
   }, [navigate, returnTo, products]);
@@ -115,46 +221,110 @@ export default function ScannerPage() {
   };
 
   return (
-    <div className="h-full flex flex-col bg-black">
-      <header className="flex items-center p-4 glass-panel border-x-0 border-t-0 z-10 bg-black/60 backdrop-blur-md">
-        <button onClick={() => navigate(-1)} className="p-2 -ml-2 text-white rounded-full hover:bg-white/10">
+    <div className="h-screen w-full flex flex-col bg-black overflow-hidden relative">
+      <header className="flex items-center p-4 bg-black/60 backdrop-blur-md border-b border-white/10 z-30">
+        <button onClick={() => navigate(-1)} className="p-2 -ml-2 text-white rounded-full active:bg-white/20">
           <ArrowLeft className="w-6 h-6" />
         </button>
-        <h1 className="ml-2 text-xl font-bold text-white">掃描條碼</h1>
+        <h1 className="ml-2 text-lg font-bold text-white">掃描條碼</h1>
         {isCameraReady && (
           <button 
             onClick={toggleTorch}
-            className="ml-auto p-2 text-white rounded-full hover:bg-white/10"
+            className="ml-auto p-3 text-white rounded-full active:bg-white/20"
           >
             {torchOn ? <Zap className="w-6 h-6 text-yellow-400" /> : <ZapOff className="w-6 h-6" />}
           </button>
         )}
       </header>
       
-      <div className="flex-1 relative flex flex-col items-center justify-center overflow-hidden">
-        <div id="qr-reader" className="w-full h-full"></div>
+      <div className="flex-1 relative bg-black flex flex-col items-center justify-center">
+        <div id="qr-reader" className="absolute inset-0 w-full h-full z-0"></div>
         
         {/* Overlay scanning guide */}
-        <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
-            <div className="w-[70vw] h-[42vw] border-2 border-[var(--color-accent-blue)] rounded-xl relative shadow-[0_0_0_100vmax_rgba(0,0,0,0.5)]">
-                <div className="absolute -top-1 -left-1 w-6 h-6 border-t-4 border-l-4 border-[var(--color-accent-blue)] rounded-tl-lg"></div>
-                <div className="absolute -top-1 -right-1 w-6 h-6 border-t-4 border-r-4 border-[var(--color-accent-blue)] rounded-tr-lg"></div>
-                <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-4 border-l-4 border-[var(--color-accent-blue)] rounded-bl-lg"></div>
-                <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-4 border-r-4 border-[var(--color-accent-blue)] rounded-br-lg"></div>
-                
-                {/* Scanning line animation */}
-                <div className="absolute left-0 right-0 h-0.5 bg-[var(--color-accent-blue)] opacity-50 shadow-[0_0_8px_var(--color-accent-blue)] animate-scan-line"></div>
-            </div>
-            <p className="mt-8 text-white/80 text-sm font-medium px-4 py-2 bg-black/40 rounded-full backdrop-blur-sm">
-                請將條碼對準藍色框內
-            </p>
-        </div>
-
-        {scannedResult && (
-          <div className="absolute bottom-10 left-1/2 -translate-x-1/2 bg-[var(--color-accent-green)] text-black font-bold px-6 py-3 rounded-full shadow-xl">
-             結果: {scannedResult}
+        {!scannedResult && (
+          <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center z-10">
+              <div className="w-[80vw] h-[40vw] border-2 border-[var(--color-accent-blue)] rounded-2xl relative shadow-[0_0_0_100vmax_rgba(0,0,0,0.7)]">
+                  <div className="absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 border-[var(--color-accent-blue)] rounded-tl-xl"></div>
+                  <div className="absolute -top-1 -right-1 w-8 h-8 border-t-4 border-r-4 border-[var(--color-accent-blue)] rounded-tr-xl"></div>
+                  <div className="absolute -bottom-1 -left-1 w-8 h-8 border-b-4 border-l-4 border-[var(--color-accent-blue)] rounded-bl-xl"></div>
+                  <div className="absolute -bottom-1 -right-1 w-8 h-8 border-b-4 border-r-4 border-[var(--color-accent-blue)] rounded-br-xl"></div>
+                  
+                  {/* Scanning line animation */}
+                  <div className="absolute left-1 right-1 h-0.5 bg-[var(--color-accent-blue)] opacity-60 shadow-[0_0_8px_var(--color-accent-blue)] animate-scan-line"></div>
+              </div>
+              <p className="mt-10 text-white/90 text-sm font-medium px-5 py-2 bg-black/40 rounded-full backdrop-blur-sm border border-white/10 uppercase tracking-widest">
+                  請將條碼置於框內
+              </p>
           </div>
         )}
+
+        {!isCameraReady && !scannedResult && !errorMsg && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-40">
+             <div className="animate-spin rounded-full h-14 w-14 border-4 border-white/10 border-t-[var(--color-accent-blue)] mb-6"></div>
+             <p className="text-white font-medium">相機初始化中...</p>
+             <p className="text-white/40 text-xs mt-2">首次開啟可能需要較長時間</p>
+             <button 
+               onClick={() => window.location.reload()} 
+               className="mt-10 px-5 py-2 bg-white/5 text-white/60 rounded-full text-xs border border-white/10"
+             >
+               重新整理
+             </button>
+          </div>
+        )}
+
+        {errorMsg && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/95 z-50 p-8 text-center">
+             <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-6">
+                <ArrowLeft className="w-8 h-8 text-red-500 rotate-180" />
+             </div>
+             <h3 className="text-white text-lg font-bold mb-2">相機無法使用</h3>
+             <p className="text-white/60 text-sm mb-10 leading-relaxed">
+               {errorMsg}<br/>
+               請確認已允許相機存取權限，並儘量使用手機原生瀏覽器開啟。
+             </p>
+             <div className="grid grid-cols-1 gap-4 w-full max-w-xs">
+               <button 
+                 onClick={() => window.location.reload()} 
+                 className="w-full py-4 bg-[var(--color-accent-blue)] text-white font-black rounded-xl shadow-lg shadow-blue-500/20 active:scale-95 transition-transform"
+               >
+                 重新整理
+               </button>
+               <button 
+                 onClick={() => navigate(-1)} 
+                 className="w-full py-4 bg-white/10 text-white font-bold rounded-xl active:scale-95 transition-transform"
+               >
+                 返回上一頁
+               </button>
+             </div>
+          </div>
+        )}
+
+        {scannedResult && (
+          <div className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-[var(--color-accent-green)] text-black font-black px-8 py-4 rounded-full shadow-2xl z-30 animate-in fade-in zoom-in slide-in-from-bottom-4">
+             成功掃描: {scannedResult}
+          </div>
+        )}
+        
+        {/* Manual Input Fallback */}
+        <div className="absolute bottom-10 left-0 right-0 flex justify-center z-20">
+           <button 
+             onClick={() => {
+               const code = prompt("請輸入條碼或產品ID:");
+               if (code) {
+                  // Simulate success
+                  setScannedResult(code);
+                  const product = products.find(p => String(p.barcode) === code || String(p.product_id) === code);
+                  const pid = product ? product.product_id : code;
+                  const targetPath = returnTo || (product ? '/products' : '/add-product');
+                  const separator = targetPath.includes('?') ? '&' : '?';
+                  navigate(`${targetPath}${separator}pid=${encodeURIComponent(pid)}`, { replace: true });
+               }
+             }}
+             className="px-6 py-2 bg-white/10 hover:bg-white/20 text-white/70 text-sm rounded-full backdrop-blur-md border border-white/5 active:scale-95 transition-all"
+           >
+             找不到條碼？點此手動輸入
+           </button>
+        </div>
       </div>
 
       <style>{`
@@ -169,6 +339,9 @@ export default function ScannerPage() {
           object-fit: cover !important;
           width: 100% !important;
           height: 100% !important;
+          position: absolute;
+          top: 0;
+          left: 0;
         }
       `}</style>
     </div>
