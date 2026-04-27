@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import { ArrowLeft, Save } from 'lucide-react';
+import OutboundCart from '../components/OutboundCart';
 
 export default function StockManage() {
   const [searchParams] = useSearchParams();
@@ -218,6 +219,9 @@ export default function StockManage() {
         ))}
       </div>
 
+      {type === 'stock_out' ? (
+        <OutboundCart />
+      ) : (
       <form onSubmit={handleSubmit} className="p-4 flex-1 overflow-y-auto space-y-4">
         
         <div>
@@ -394,6 +398,7 @@ export default function StockManage() {
         </div>
 
       </form>
+      )}
     </div>
   );
 }
