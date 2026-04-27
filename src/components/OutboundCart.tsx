@@ -195,7 +195,7 @@ export default function OutboundCart() {
   const totalCost = cart.reduce((sum, item) => sum + (item.product.cost_price * item.quantity), 0);
 
   return (
-    <div className="flex-1 flex flex-col h-[calc(100vh-150px)]">
+    <div className="flex-1 flex flex-col">
       {/* Top Actions */}
       <div className="p-4 flex gap-3">
         <button 
@@ -289,8 +289,8 @@ export default function OutboundCart() {
 
       {/* Add Item Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
-           <div className="w-full max-w-lg bg-[#0f172a] border border-white/10 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
+           <div className="w-full max-w-lg bg-[#0f172a] border border-white/10 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh] mb-20 sm:mb-0">
               <div className="flex justify-between items-center p-4 border-b border-white/5 bg-white/5">
                 <h2 className="text-lg font-bold text-white flex items-center gap-2">
                   <ShoppingCart className="w-5 h-5 text-[var(--color-accent-blue)]" /> 
