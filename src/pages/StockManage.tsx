@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useStore } from '../store/useStore';
-import { ArrowLeft, Save } from 'lucide-react';
+import { ArrowLeft, Save, Search, X, Filter, Plus, ScanBarcode } from 'lucide-react';
 import OutboundCart from '../components/OutboundCart';
 
 export default function StockManage() {
@@ -24,6 +24,43 @@ export default function StockManage() {
   const [currentSpecification, setCurrentSpecification] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedStockId, setSelectedStockId] = useState<string>('');
+
+  // Search Modal State
+  const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterCategory, setFilterCategory] = useState('');
+  const [filterBrand, setFilterBrand] = useState('');
+  const [filterVendor, setFilterVendor] = useState('');
+
+  // Extract unique brands and categories for dropdowns
+  const brands = useMemo(() => Array.from(new Set(products.map(p => p.brand).filter(Boolean))), [products]);
+  const categories = useMemo(() => Array.from(new Set(products.map(p => p.category).filter(Boolean))), [products]);
+  const uniqueVendors = useMemo(() => Array.from(new Set(products.map(p => p.vendor_id).filter(Boolean))), [products]);
+
+  const searchResults = useMemo(() => {
+    let result = products;
+    
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      result = result.filter(p => 
+        p.name.toLowerCase().includes(term) || 
+        p.product_id.toLowerCase().includes(term) || 
+        (p.barcode && p.barcode.toLowerCase().includes(term))
+      );
+    }
+    
+    if (filterCategory) result = result.filter(p => p.category === filterCategory);
+    if (filterBrand) result = result.filter(p => p.brand === filterBrand);
+    if (filterVendor) result = result.filter(p => p.vendor_id === filterVendor);
+
+    return result;
+  }, [searchTerm, products, filterCategory, filterBrand, filterVendor]);
+
+  const getVendorName = (vid: string) => {
+    const v = vendors.find(v => v.vendor_id === vid);
+    return v ? v.vendor_name : vid;
+  };
 
   // Extract unique locations, floors, areas for datalists
   const uniqueLocations = Array.from(new Set(stock.map(s => s.location).filter(Boolean)));
@@ -225,22 +262,25 @@ export default function StockManage() {
       <form onSubmit={handleSubmit} className="p-4 flex-1 overflow-y-auto space-y-4">
         
         <div>
-          <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">商品 ID 或 條碼</label>
+          <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">搜尋商品</label>
           <div className="flex gap-2">
-            <input
-              type="text"
-              required
-              value={pid}
-              onChange={(e) => setPid(e.target.value)}
-              className="flex-1 block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] placeholder-[var(--color-text-dim)] focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] outline-none"
-              placeholder="例如：P001"
-            />
+            <div 
+              onClick={() => setIsSearchModalOpen(true)}
+              className="flex-1 flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] cursor-pointer hover:bg-white/10 transition-colors"
+            >
+              <Search className="w-4 h-4 text-[var(--color-text-dim)]" />
+              {product ? (
+                <span className="text-white font-medium">{product.name} ({product.product_id})</span>
+              ) : (
+                <span className="text-[var(--color-text-dim)]">點擊搜尋商品、條碼、ID...</span>
+              )}
+            </div>
             <button 
               type="button" 
               onClick={() => navigate(`/scan?returnTo=${encodeURIComponent('/manage?type=' + type)}`)}
-              className="px-4 py-2 glass-panel text-[var(--color-accent-blue)] rounded-xl font-bold text-sm hover:bg-white/10"
+              className="w-12 flex items-center justify-center glass-panel text-[var(--color-accent-blue)] rounded-xl hover:bg-white/10"
             >
-              掃描
+              <ScanBarcode className="w-5 h-5" />
             </button>
           </div>
           {product && (
@@ -296,22 +336,24 @@ export default function StockManage() {
           </div>
         )}
 
-        {type === 'stock_in' && product?.has_expiry && (
-          <div className="animate-in fade-in slide-in-from-top-2 p-3 border border-[var(--color-accent-orange)]/30 bg-[var(--color-accent-orange)]/10 rounded-xl">
-            <label className="block text-sm font-bold text-orange-200 uppercase tracking-wider text-[10px] mb-1">
-              操作有效日期 (必填)
+        {(type === 'stock_in' || type === 'adjust') && (product?.has_expiry || type === 'adjust') && (
+          <div className={`animate-in fade-in slide-in-from-top-2 p-3 border rounded-xl ${type === 'adjust' ? 'border-[var(--color-accent-blue)]/30 bg-[var(--color-accent-blue)]/10' : 'border border-[var(--color-accent-orange)]/30 bg-[var(--color-accent-orange)]/10'}`}>
+            <label className={`block text-sm font-bold uppercase tracking-wider text-[10px] mb-1 ${type === 'adjust' ? 'text-[var(--color-accent-blue)]' : 'text-orange-200'}`}>
+              有效日期 {type === 'adjust' ? '(選填/修改)' : '(必填)'}
             </label>
             <input
               type="date"
-              required={product?.has_expiry}
+              required={type === 'stock_in' && product?.has_expiry}
               value={currentExpiry}
               onChange={(e) => setCurrentExpiry(e.target.value)}
-              className="block w-full rounded-xl border border-white/10 bg-black/20 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-orange)] focus:ring-1 focus:ring-[var(--color-accent-orange)]"
+              className={`block w-full rounded-xl border border-white/10 bg-black/20 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:ring-1 ${type === 'adjust' ? 'focus:border-[var(--color-accent-blue)] focus:ring-[var(--color-accent-blue)]' : 'focus:border-[var(--color-accent-orange)] focus:ring-[var(--color-accent-orange)]'}`}
             />
-            <p className="text-[10px] text-orange-300/70 mt-1.5 flex items-center gap-1">
-              <span className="bg-orange-500/20 px-1 py-0.5 rounded">提示</span> 
-              相同商品若輸入不同有效時間，系統會自動分流為新商品批次。
-            </p>
+            {type === 'stock_in' && (
+              <p className="text-[10px] text-orange-300/70 mt-1.5 flex items-center gap-1">
+                <span className="bg-orange-500/20 px-1 py-0.5 rounded">提示</span> 
+                相同商品若輸入不同有效時間，系統會自動分流為新商品批次。
+              </p>
+            )}
           </div>
         )}
 
@@ -378,8 +420,8 @@ export default function StockManage() {
 
         {type === 'adjust' && (
           <div>
-            <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">備註 / 原因</label>
-            <input type="text" required value={note} onChange={(e) => setNote(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]" />
+            <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">備註 / 原因 (選填)</label>
+            <input type="text" value={note} onChange={(e) => setNote(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]" />
           </div>
         )}
 
@@ -398,6 +440,102 @@ export default function StockManage() {
         </div>
 
       </form>
+      )}
+
+      {/* Product Search Modal */}
+      {isSearchModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
+           <div className="w-full max-w-lg bg-[#0f172a] border border-white/10 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh] mb-20 sm:mb-0">
+              <div className="flex justify-between items-center p-4 border-b border-white/5 bg-white/5">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Search className="w-5 h-5 text-[var(--color-accent-blue)]" /> 
+                  搜尋商品
+                </h2>
+                <button onClick={() => setIsSearchModalOpen(false)} className="p-2 text-white/50 hover:text-white rounded-full transition-colors bg-white/5 hover:bg-white/10">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-4 overflow-y-auto w-full">
+                <div className="space-y-4">
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Search className="w-5 h-5 absolute left-3 top-3 text-white/40" />
+                      <input 
+                        type="text"
+                        autoFocus
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        placeholder="搜尋商品名稱、條碼、ID..."
+                        className="w-full pl-10 pr-4 py-3 bg-black/40 border border-white/10 rounded-xl text-white outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]"
+                      />
+                    </div>
+                    <button 
+                      onClick={() => setShowFilters(!showFilters)}
+                      className={`px-3 py-3 rounded-xl border transition-colors flex items-center justify-center ${showFilters ? 'bg-[var(--color-accent-blue)] border-[var(--color-accent-blue)] text-[#0f172a]' : 'bg-black/40 border-white/10 text-white/60 hover:bg-white/5'}`}
+                    >
+                      <Filter className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  {showFilters && (
+                    <div className="flex flex-wrap gap-2 animate-in fade-in slide-in-from-top-2 p-3 bg-black/20 rounded-xl border border-white/5">
+                      <select 
+                        value={filterCategory} 
+                        onChange={e => setFilterCategory(e.target.value)}
+                        className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none min-w-[100px]"
+                      >
+                        <option value="" className="bg-[#0f172a]">所有分類</option>
+                        {categories.map(c => <option key={c as string} value={c as string} className="bg-[#0f172a]">{c as string}</option>)}
+                      </select>
+                      
+                      <select 
+                        value={filterBrand} 
+                        onChange={e => setFilterBrand(e.target.value)}
+                        className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none min-w-[100px]"
+                      >
+                        <option value="" className="bg-[#0f172a]">所有品牌</option>
+                        {brands.map(b => <option key={b as string} value={b as string} className="bg-[#0f172a]">{b as string}</option>)}
+                      </select>
+
+                      <select 
+                        value={filterVendor} 
+                        onChange={e => setFilterVendor(e.target.value)}
+                        className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none min-w-[120px]"
+                      >
+                        <option value="" className="bg-[#0f172a]">所有廠商</option>
+                        {uniqueVendors.map(v => <option key={v as string} value={v as string} className="bg-[#0f172a]">{getVendorName(v as string)}</option>)}
+                      </select>
+                    </div>
+                  )}
+                  
+                  <div className="space-y-2 mt-4 max-h-[40vh] overflow-y-auto w-full pr-2">
+                    {searchResults.length === 0 ? (
+                      <div className="text-center py-8 text-white/40 text-sm">找不到相關商品</div>
+                    ) : (
+                      searchResults.map(p => (
+                        <div 
+                          key={p.product_id}
+                          onClick={() => {
+                            setPid(p.product_id);
+                            setIsSearchModalOpen(false);
+                            setSearchTerm('');
+                          }}
+                          className="glass-panel p-3 rounded-xl border border-white/5 hover:border-[var(--color-accent-blue)]/50 cursor-pointer active:scale-[0.98] transition-all flex items-center justify-between w-full"
+                        >
+                           <div className="overflow-hidden pr-2">
+                             <div className="font-bold text-white text-sm truncate">{p.name}</div>
+                             <div className="text-xs text-white/40 tracking-wider truncate mt-1">{p.product_id}</div>
+                           </div>
+                           <Plus className="w-5 h-5 text-[var(--color-accent-blue)] shrink-0" />
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+           </div>
+        </div>
       )}
     </div>
   );

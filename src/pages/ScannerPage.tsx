@@ -8,7 +8,13 @@ export default function ScannerPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { products } = useStore();
+  const productsRef = useRef(products);
   const returnTo = searchParams.get('returnTo') || '';
+
+  // Keep products ref up to date to avoid effect re-runs
+  useEffect(() => {
+    productsRef.current = products;
+  }, [products]);
   
   const [scannedResult, setScannedResult] = useState<string | null>(null);
   const [torchOn, setTorchOn] = useState(false);
@@ -16,6 +22,7 @@ export default function ScannerPage() {
   const [maxZoom, setMaxZoom] = useState(1);
   const [supportsZoom, setSupportsZoom] = useState(false);
   const [isCameraReady, setIsCameraReady] = useState(false);
+  const [isProcessingFile, setIsProcessingFile] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -27,12 +34,6 @@ export default function ScannerPage() {
 
   useEffect(() => {
     isMountedRef.current = true;
-    
-    // Create scanner only if it doesn't exist
-    if (!html5QrCodeRef.current) {
-        html5QrCodeRef.current = new Html5Qrcode("qr-reader");
-    }
-    const html5QrCode = html5QrCodeRef.current;
     
     const qrCodeSuccessCallback = (decodedText: string) => {
       processText(decodedText);
@@ -65,15 +66,6 @@ export default function ScannerPage() {
     };
 
     const initScanner = async () => {
-      // Ensure any previous scan is stopped before starting a new one
-      if (html5QrCode.isScanning) {
-        try {
-          await html5QrCode.stop();
-        } catch (e) {
-          console.warn("Pre-init stop failed", e);
-        }
-      }
-
       if (startingRef.current || !isMountedRef.current) return;
       startingRef.current = true;
       setIsCameraReady(false);
@@ -83,7 +75,7 @@ export default function ScannerPage() {
       try {
         // Wait for DOM
         let attempts = 0;
-        while (attempts < 10 && (!document.getElementById("qr-reader") || document.getElementById("qr-reader")?.clientWidth === 0)) {
+        while (attempts < 15 && (!document.getElementById("qr-reader") || document.getElementById("qr-reader")?.clientWidth === 0)) {
            await new Promise(r => setTimeout(r, 200));
            attempts++;
         }
@@ -91,6 +83,23 @@ export default function ScannerPage() {
         if (!isMountedRef.current) {
           startingRef.current = false;
           return;
+        }
+
+        // Initialize AFTER DOM is ready
+        if (!html5QrCodeRef.current) {
+          html5QrCodeRef.current = new Html5Qrcode("qr-reader");
+        }
+        const html5QrCode = html5QrCodeRef.current;
+
+        // Ensure any previous scan is stopped
+        if (html5QrCode.isScanning) {
+          try {
+            await html5QrCode.stop();
+            // Small delay after stop to let hardware release
+            await new Promise(r => setTimeout(r, 400));
+          } catch (e) {
+            console.warn("Pre-init stop failed", e);
+          }
         }
 
         let started = false;
@@ -186,12 +195,12 @@ export default function ScannerPage() {
 
     return () => {
       isMountedRef.current = false;
-      if (html5QrCode.isScanning) {
-        // Stop it without blocking the effect cleanup if possible, but reliably
-        html5QrCode.stop().catch(() => {});
+      if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+        // Stop it reliably
+        html5QrCodeRef.current.stop().catch(() => {});
       }
     };
-  }, [navigate, returnTo, products]);
+  }, [navigate, returnTo]);
 
   const toggleTorch = async () => {
     if (html5QrCodeRef.current && isCameraReady) {
@@ -234,7 +243,7 @@ export default function ScannerPage() {
       }
       
       let pid = text;
-      const product = products.find(p => String(p.barcode) === text || String(p.product_id) === text);
+      const product = productsRef.current.find(p => String(p.barcode) === text || String(p.product_id) === text);
       if (product) pid = product.product_id;
 
       let targetPath = returnTo;
@@ -257,15 +266,88 @@ export default function ScannerPage() {
     const file = e.target.files?.[0];
     if (!file || !html5QrCodeRef.current) return;
 
-    setIsCameraReady(false); // Show loading
+    setIsProcessingFile(true);
+    
     try {
-      const decodedText = await html5QrCodeRef.current.scanFile(file, true);
+      // Strategy 1: Try Native BarcodeDetector (Best for photos)
+      // @ts-ignore
+      if ('BarcodeDetector' in window) {
+        try {
+          // @ts-ignore
+          const detector = new window.BarcodeDetector({
+            formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'qr_code']
+          });
+          const bitmap = await createImageBitmap(file);
+          const barcodes = await detector.detect(bitmap);
+          
+          if (barcodes.length > 0) {
+            processText(barcodes[0].rawValue);
+            setIsProcessingFile(false);
+            return;
+          }
+        } catch (detectorErr) {
+          console.warn("BarcodeDetector failed, falling back", detectorErr);
+        }
+      }
+
+      // Strategy 2: Optimize Image (Resize) for JS-based scanner
+      // High-res photos often fail in JS because the barcode lines are too thin relative to resolution.
+      const optimizedFile = await optimizeImageForScanning(file);
+      const decodedText = await html5QrCodeRef.current.scanFile(optimizedFile, false);
       processText(decodedText);
     } catch (err) {
       console.error("Native capture scan error", err);
-      alert("無法辨識照片中的條碼，請嘗試重新拍照或手動輸入。");
-      setIsCameraReady(true);
+      alert("無法辨識照片中的條碼。建議：\n1. 靠近一點拍攝\n2. 確保光線充足\n3. 條碼需清晰不反光");
+    } finally {
+      setIsProcessingFile(false);
     }
+  };
+
+  // Helper to resize image before scanning
+  const optimizeImageForScanning = (file: File): Promise<File> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = URL.createObjectURL(file);
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 1200;
+        const MAX_HEIGHT = 1200;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, width, height);
+          canvas.toBlob((blob) => {
+            if (blob) {
+              resolve(new File([blob], file.name, { type: 'image/jpeg' }));
+            } else {
+              resolve(file);
+            }
+          }, 'image/jpeg', 0.9);
+        } else {
+          resolve(file);
+        }
+        URL.revokeObjectURL(img.src);
+      };
+      img.onerror = () => resolve(file);
+    });
   };
 
   return (
@@ -333,7 +415,15 @@ export default function ScannerPage() {
           </div>
         )}
  
-        {!isCameraReady && !scannedResult && !errorMsg && (
+        {isProcessingFile && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-[60] backdrop-blur-sm">
+             <div className="animate-spin rounded-full h-14 w-14 border-4 border-white/10 border-t-[var(--color-accent-blue)] mb-6"></div>
+             <p className="text-white font-bold text-lg">辨識中...</p>
+             <p className="text-white/60 text-sm mt-2">請稍候</p>
+          </div>
+        )}
+
+        {!isCameraReady && !scannedResult && !errorMsg && !isProcessingFile && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-40">
              <div className="animate-spin rounded-full h-14 w-14 border-4 border-white/10 border-t-[var(--color-accent-blue)] mb-6"></div>
              <p className="text-white font-medium">相機初始化中...</p>
