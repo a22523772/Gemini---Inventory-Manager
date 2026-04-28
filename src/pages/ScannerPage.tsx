@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, ChangeEvent } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore } from '../store/useStore';
@@ -12,9 +12,13 @@ export default function ScannerPage() {
   
   const [scannedResult, setScannedResult] = useState<string | null>(null);
   const [torchOn, setTorchOn] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [maxZoom, setMaxZoom] = useState(1);
+  const [supportsZoom, setSupportsZoom] = useState(false);
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const isRoutingRef = useRef(false);
 
   const isCameraReadyRef = useRef(false);
@@ -31,36 +35,7 @@ export default function ScannerPage() {
     const html5QrCode = html5QrCodeRef.current;
     
     const qrCodeSuccessCallback = (decodedText: string) => {
-      if (isRoutingRef.current || !isMountedRef.current) return;
-      isRoutingRef.current = true;
-      setScannedResult(decodedText);
-      
-      let pid = decodedText;
-      const product = products.find(p => String(p.barcode) === decodedText || String(p.product_id) === decodedText);
-      if (product) pid = product.product_id;
-
-      let targetPath = returnTo;
-      if (!targetPath || targetPath === '/') {
-        targetPath = product ? '/products' : '/add-product';
-      }
-      
-      const separator = targetPath.includes('?') ? '&' : '?';
-      const finalUrl = `${targetPath}${separator}pid=${encodeURIComponent(pid)}`;
-
-      const stopAndNavigate = async () => {
-        try {
-          if (html5QrCode.isScanning) {
-            await html5QrCode.stop();
-          }
-        } catch (e) {
-          console.warn("Stop failed during success", e);
-        }
-        if (isMountedRef.current) {
-          navigate(finalUrl, { replace: true });
-        }
-      };
-      
-      stopAndNavigate();
+      processText(decodedText);
     };
 
     const config = { 
@@ -184,6 +159,19 @@ export default function ScannerPage() {
 
         setIsCameraReady(true);
         isCameraReadyRef.current = true;
+
+        // Check for zoom capabilities
+        try {
+          const track = html5QrCode.getRunningTrack();
+          const capabilities = track.getCapabilities() as any;
+          if (capabilities.zoom) {
+            setSupportsZoom(true);
+            setMaxZoom(capabilities.zoom.max || 1);
+            setZoom(capabilities.zoom.min || 1);
+          }
+        } catch (e) {
+          console.warn("Could not detect zoom capabilities", e);
+        }
       } catch (err) {
         console.error("Final scanner error", err);
         if (isMountedRef.current) {
@@ -210,7 +198,7 @@ export default function ScannerPage() {
       try {
         const newTorchState = !torchOn;
         await html5QrCodeRef.current.applyVideoConstraints({
-          // @ts-ignore - html5-qrcode types might not include torch yet
+          // @ts-ignore
           advanced: [{ torch: newTorchState }]
         });
         setTorchOn(newTorchState);
@@ -220,8 +208,76 @@ export default function ScannerPage() {
     }
   };
 
+  const handleZoomChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseFloat(e.target.value);
+    setZoom(value);
+    if (html5QrCodeRef.current && isCameraReady) {
+      try {
+        await html5QrCodeRef.current.applyVideoConstraints({
+          // @ts-ignore
+          advanced: [{ zoom: value }]
+        });
+      } catch (err) {
+        console.error("Error applying zoom", err);
+      }
+    }
+  };
+
+  const processText = (text: string) => {
+    if (isRoutingRef.current || !isMountedRef.current) return;
+    isRoutingRef.current = true;
+    setScannedResult(text);
+    
+    const stopAndNavigate = async () => {
+      if (html5QrCodeRef.current?.isScanning) {
+        await html5QrCodeRef.current.stop().catch(() => {});
+      }
+      
+      let pid = text;
+      const product = products.find(p => String(p.barcode) === text || String(p.product_id) === text);
+      if (product) pid = product.product_id;
+
+      let targetPath = returnTo;
+      if (!targetPath || targetPath === '/') {
+        targetPath = product ? '/products' : '/add-product';
+      }
+      
+      const separator = targetPath.includes('?') ? '&' : '?';
+      const finalUrl = `${targetPath}${separator}pid=${encodeURIComponent(pid)}`;
+      
+      if (isMountedRef.current) {
+        navigate(finalUrl, { replace: true });
+      }
+    };
+
+    stopAndNavigate();
+  };
+
+  const handleNativeCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !html5QrCodeRef.current) return;
+
+    setIsCameraReady(false); // Show loading
+    try {
+      const decodedText = await html5QrCodeRef.current.scanFile(file, true);
+      processText(decodedText);
+    } catch (err) {
+      console.error("Native capture scan error", err);
+      alert("無法辨識照片中的條碼，請嘗試重新拍照或手動輸入。");
+      setIsCameraReady(true);
+    }
+  };
+
   return (
     <div className="h-screen w-full flex flex-col bg-black overflow-hidden relative">
+      <input 
+        type="file" 
+        accept="image/*" 
+        capture="environment" 
+        onChange={handleNativeCapture}
+        className="hidden"
+        ref={fileInputRef}
+      />
       <header className="flex items-center p-4 bg-black/60 backdrop-blur-md border-b border-white/10 z-30">
         <button onClick={() => navigate(-1)} className="p-2 -ml-2 text-white rounded-full active:bg-white/20">
           <ArrowLeft className="w-6 h-6" />
@@ -258,6 +314,25 @@ export default function ScannerPage() {
           </div>
         )}
 
+        {/* Zoom Controls */}
+        {isCameraReady && supportsZoom && (
+          <div className="absolute bottom-40 left-0 right-0 px-10 z-20">
+            <div className="flex items-center gap-4 bg-black/40 backdrop-blur-md p-3 rounded-2xl border border-white/10">
+              <span className="text-white/60 text-xs font-bold">1x</span>
+              <input 
+                type="range"
+                min="1"
+                max={maxZoom}
+                step="0.1"
+                value={zoom}
+                onChange={handleZoomChange}
+                className="flex-1 accent-[var(--color-accent-blue)] h-1 rounded-lg"
+              />
+              <span className="text-white/60 text-xs font-bold">{Math.round(maxZoom)}x</span>
+            </div>
+          </div>
+        )}
+ 
         {!isCameraReady && !scannedResult && !errorMsg && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-40">
              <div className="animate-spin rounded-full h-14 w-14 border-4 border-white/10 border-t-[var(--color-accent-blue)] mb-6"></div>
@@ -306,7 +381,15 @@ export default function ScannerPage() {
         )}
         
         {/* Manual Input Fallback */}
-        <div className="absolute bottom-10 left-0 right-0 flex justify-center z-20">
+        <div className="absolute bottom-10 left-0 right-0 flex flex-col items-center gap-4 z-20 px-6">
+           <button 
+             onClick={() => fileInputRef.current?.click()}
+             className="w-full max-w-sm py-3 bg-[var(--color-accent-blue)] text-black font-black rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
+           >
+              <Zap className="w-5 h-5 fill-current" />
+              使用系統相機 (支援自動變焦)
+           </button>
+
            <button 
              onClick={() => {
                const code = prompt("請輸入條碼或產品ID:");
