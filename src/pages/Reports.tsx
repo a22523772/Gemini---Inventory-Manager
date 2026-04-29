@@ -13,7 +13,7 @@ import { format, differenceInDays, subDays } from 'date-fns';
 type TabType = 'dashboard' | 'list';
 
 export default function Reports() {
-  const { products, stock, transactions, vendors } = useStore();
+  const { products, stock, transactions, vendors, expiryThreshold } = useStore();
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
 
   const now = new Date();
@@ -42,7 +42,7 @@ export default function Reports() {
         if (diffDays < 0 && s.quantity > 0) {
           totalExpiredLoss += value;
           expiredList.push({ ...s, product, diffDays });
-        } else if (diffDays >= 0 && diffDays <= 30 && s.quantity > 0) {
+        } else if (diffDays >= 0 && diffDays <= expiryThreshold && s.quantity > 0) {
           soonToExpireList.push({ ...s, product, diffDays });
         }
       }

@@ -58,8 +58,9 @@ export default function SetupGuide() {
             </div>
 
             <div className="glass-panel p-4 rounded-2xl">
-              <h2 className="text-base font-bold text-[var(--color-text-main)] mb-4">功能開關</h2>
-              <div className="flex items-center justify-between">
+              <h2 className="text-base font-bold text-[var(--color-text-main)] mb-4">功能開關與警示控制</h2>
+              
+              <div className="flex items-center justify-between mb-6">
                 <div>
                   <h3 className="text-sm font-bold text-[var(--color-text-main)]">補貨警示功能</h3>
                   <p className="text-xs text-[var(--color-text-dim)] mt-1">開啟後，庫存低於設定值時會顯示警示標章 (預設 5 個)。</p>
@@ -70,6 +71,28 @@ export default function SetupGuide() {
                 >
                   <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${useStore.getState().lowStockAlertEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
                 </button>
+              </div>
+
+              <div className="pt-4 border-t border-white/10">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-bold text-[var(--color-text-main)]">即將到期提醒天數</h3>
+                  <span className="text-[var(--color-accent-blue)] font-bold text-lg">{useStore.getState().expiryThreshold} 天</span>
+                </div>
+                <p className="text-xs text-[var(--color-text-dim)] mb-3">設定商品在到期前幾天標記為「即將到期」。</p>
+                <input 
+                  type="range"
+                  min="3"
+                  max="180"
+                  step="1"
+                  value={useStore.getState().expiryThreshold}
+                  onChange={(e) => useStore.getState().setExpiryThreshold(parseInt(e.target.value))}
+                  className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[var(--color-accent-blue)]"
+                />
+                <div className="flex justify-between text-[10px] text-[var(--color-text-dim)] mt-1 uppercase font-bold tracking-widest">
+                  <span>3 天</span>
+                  <span>90 天</span>
+                  <span>180 天</span>
+                </div>
               </div>
             </div>
 

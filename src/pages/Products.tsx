@@ -1,10 +1,13 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter } from 'lucide-react';
+import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter, AlertCircle, Clock, ArrowUpDown } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { differenceInDays } from 'date-fns';
+
+type SortType = 'name_asc' | 'name_desc' | 'newest' | 'stock_low' | 'stock_high';
 
 export default function Products() {
-  const { products, stock, deleteProduct, showToast, vendors, lowStockAlertEnabled } = useStore();
+  const { products, stock, deleteProduct, showToast, vendors, lowStockAlertEnabled, expiryThreshold } = useStore();
   const [searchParams] = useSearchParams();
   const [searchTerm, setSearchTerm] = useState(searchParams.get('pid') || '');
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -13,7 +16,10 @@ export default function Products() {
   const [filterBrand, setFilterBrand] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterVendor, setFilterVendor] = useState('');
+  const [sortOrder, setSortOrder] = useState<SortType>('name_asc');
   const navigate = useNavigate();
+
+  const now = new Date();
 
   useEffect(() => {
     const pid = searchParams.get('pid');
@@ -35,18 +41,27 @@ export default function Products() {
 
   // Grouping the products by barcode (or product_id if no barcode)
   const groupedProducts = useMemo(() => {
-     const groups: Record<string, { product: any, stockEntries: any[], totalStock: number, totalCostValue: number }> = {};
+     const groups: Record<string, { 
+       product: any, 
+       stockEntries: any[], 
+       totalStock: number, 
+       totalCostValue: number,
+       isExpired: boolean,
+       isExpiringSoon: boolean 
+     }> = {};
      
      // 1. Identify primary products
      products.forEach(p => {
         const key = p.barcode || p.product_id;
         if (!groups[key]) {
-            groups[key] = { product: p, stockEntries: [], totalStock: 0, totalCostValue: 0 };
-        } else {
-            // Keep the one with simpler/original looking ID if duplicates exist (legacy compatibility)
-            if (p.product_id.length < groups[key].product.product_id.length) {
-                groups[key].product = p;
-            }
+            groups[key] = { 
+              product: p, 
+              stockEntries: [], 
+              totalStock: 0, 
+              totalCostValue: 0,
+              isExpired: false,
+              isExpiringSoon: false
+            };
         }
      });
 
@@ -61,12 +76,20 @@ export default function Products() {
                if (p.cost_price && s.quantity > 0) {
                    groups[key].totalCostValue += p.cost_price * s.quantity;
                }
+
+               // Check expiry per entry
+               if (s.expiry_date && s.quantity > 0) {
+                  const exp = new Date(s.expiry_date);
+                  const diff = differenceInDays(exp, now);
+                  if (diff < 0) groups[key].isExpired = true;
+                  else if (diff <= expiryThreshold) groups[key].isExpiringSoon = true;
+               }
             }
         }
      });
 
      // Filter groups by search/filters
-     const result = Object.values(groups).filter(g => {
+     const filtered = Object.values(groups).filter(g => {
         const p = g.product;
         // Search
         if (searchTerm) {
@@ -85,8 +108,26 @@ export default function Products() {
         return true;
      });
 
-     return result.slice(0, 50);
-  }, [products, stock, searchTerm, filterBrand, filterCategory, filterVendor]);
+     // Apply Sorting
+     const sorted = [...filtered].sort((a, b) => {
+        switch (sortOrder) {
+          case 'name_asc':
+            return a.product.name.localeCompare(b.product.name, 'zh-HK');
+          case 'name_desc':
+            return b.product.name.localeCompare(a.product.name, 'zh-HK');
+          case 'newest':
+            return new Date(b.product.created_at || 0).getTime() - new Date(a.product.created_at || 0).getTime();
+          case 'stock_low':
+            return a.totalStock - b.totalStock;
+          case 'stock_high':
+            return b.totalStock - a.totalStock;
+          default:
+            return 0;
+        }
+     });
+
+     return sorted.slice(0, 100);
+  }, [products, stock, searchTerm, filterBrand, filterCategory, filterVendor, sortOrder]);
 
   const executeDelete = async (pid: string) => {
     try {
@@ -105,6 +146,20 @@ export default function Products() {
         <div className="flex justify-between items-center mb-4">
           <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text-main)]">商品列表</h1>
           <div className="flex gap-2">
+            <div className="relative">
+              <select 
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value as SortType)}
+                className="appearance-none bg-white/5 border border-white/10 rounded-full pl-8 pr-4 py-2 text-xs font-bold text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] transition-all cursor-pointer hover:bg-white/10"
+              >
+                <option value="name_asc" className="bg-[#0f172a]">名稱 A-Z</option>
+                <option value="name_desc" className="bg-[#0f172a]">名稱 Z-A</option>
+                <option value="newest" className="bg-[#0f172a]">最新建立</option>
+                <option value="stock_low" className="bg-[#0f172a]">庫存: 低 → 高</option>
+                <option value="stock_high" className="bg-[#0f172a]">庫存: 高 → 低</option>
+              </select>
+              <ArrowUpDown className="w-3 h-3 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)] pointer-events-none" />
+            </div>
             <button 
               onClick={() => setShowFilters(!showFilters)} 
               className={`p-2 rounded-full transition-colors ${showFilters ? 'bg-white/20 text-white' : 'glass-panel text-[var(--color-text-dim)] hover:text-white'}`}
@@ -183,24 +238,42 @@ export default function Products() {
 
             const alertThreshold = p.min_stock !== undefined ? p.min_stock : 5;
             const isLowStock = lowStockAlertEnabled && group.totalStock <= alertThreshold;
+            const isExpired = group.isExpired;
+            const isExpiringSoon = group.isExpiringSoon;
 
             return (
-              <div key={groupId} className={`glass-panel border ${isLowStock ? 'border-orange-500/50 shadow-[0_0_15px_rgba(249,115,22,0.15)] bg-orange-500/5' : 'border-[var(--color-glass-border)]'} rounded-xl p-4 transition-all`}>
+              <div key={groupId} className={`glass-panel border ${isExpired ? 'border-red-500/50 bg-red-500/5' : isExpiringSoon ? 'border-orange-500/50 bg-orange-500/5' : isLowStock ? 'border-amber-500/50 bg-amber-500/5' : 'border-[var(--color-glass-border)]'} rounded-xl p-4 transition-all shadow-sm`}>
                 <div className="flex justify-between items-start mb-2">
                   <div className="flex-1 pr-2">
                     <h3 className="font-bold text-[var(--color-text-main)] text-base flex flex-wrap gap-1 items-center">
                       {p.name} 
                       {p.brand && <span className="text-[10px] font-normal px-1.5 py-0.5 ml-1 bg-white/10 rounded-md text-[var(--color-text-dim)]">{p.brand}</span>}
                       {p.specification && <span className="text-[10px] font-normal px-1.5 py-0.5 ml-1 bg-white/10 rounded-md text-[var(--color-accent-blue)]">{p.specification}</span>}
-                      {isLowStock && <span className="text-[10px] font-bold px-1.5 py-0.5 ml-1 bg-orange-500/20 text-orange-400 rounded-md ml-auto sm:ml-1 animate-pulse">補貨警示</span>}
                     </h3>
-                    <p className="text-xs text-[var(--color-text-dim)] font-mono mt-1">
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                       {isExpired && (
+                         <span className="text-[10px] font-bold px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded flex items-center gap-1 border border-red-500/30">
+                           <AlertCircle className="w-3 h-3" /> 已過期
+                         </span>
+                       )}
+                       {isExpiringSoon && !isExpired && (
+                         <span className="text-[10px] font-bold px-1.5 py-0.5 bg-orange-500/20 text-orange-400 rounded flex items-center gap-1 border border-orange-500/30">
+                           <Clock className="w-3 h-3" /> 即將到期
+                         </span>
+                       )}
+                       {isLowStock && (
+                         <span className="text-[10px] font-bold px-1.5 py-0.5 bg-amber-500/20 text-amber-500 rounded flex items-center gap-1 border border-amber-500/30">
+                           補貨警示
+                         </span>
+                       )}
+                    </div>
+                    <p className="text-xs text-[var(--color-text-dim)] font-mono mt-1.5">
                       {p.barcode ? `條碼: ${p.barcode}` : p.product_id}
                     </p>
                   </div>
                   <div className="flex flex-col items-end gap-2">
-                    <div className={`${isLowStock ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' : 'bg-[var(--color-glass-bg)] text-[var(--color-accent-blue)] border-[var(--color-glass-border)]'} px-2.5 py-1 rounded-lg text-sm font-bold border flex items-center`}>
-                      總庫存: {group.totalStock} {p.unit}
+                    <div className={`${isExpired ? 'bg-red-500/20 text-red-400 border-red-500/30' : isExpiringSoon ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' : isLowStock ? 'bg-amber-500/20 text-amber-500 border-amber-500/30' : 'bg-[var(--color-glass-bg)] text-[var(--color-accent-blue)] border-[var(--color-glass-border)]'} px-2.5 py-1 rounded-lg text-sm font-bold border flex items-center`}>
+                      庫存: {group.totalStock} {p.unit}
                     </div>
                     {group.totalStock > 0 && group.totalCostValue > 0 && (
                       <div className="text-[10px] text-[var(--color-accent-green)] font-medium">

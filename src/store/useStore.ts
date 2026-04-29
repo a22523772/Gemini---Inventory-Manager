@@ -29,6 +29,8 @@ interface AppState {
   showToast: (msg: string) => void;
   lowStockAlertEnabled: boolean;
   setLowStockAlertEnabled: (enabled: boolean) => Promise<void>;
+  expiryThreshold: number;
+  setExpiryThreshold: (days: number) => Promise<void>;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -44,10 +46,16 @@ export const useStore = create<AppState>((set, get) => ({
   error: null,
   toastMessage: null,
   lowStockAlertEnabled: true,
+  expiryThreshold: 30,
 
   setLowStockAlertEnabled: async (enabled: boolean) => {
     await dbSettings.setItem('lowStockAlertEnabled', enabled);
     set({ lowStockAlertEnabled: enabled });
+  },
+
+  setExpiryThreshold: async (days: number) => {
+    await dbSettings.setItem('expiryThreshold', days);
+    set({ expiryThreshold: days });
   },
 
   showToast: (msg: string) => {
@@ -63,6 +71,7 @@ export const useStore = create<AppState>((set, get) => ({
       const url = await dbSettings.getItem<string>('gasApiUrl') || '';
       const op = await dbSettings.getItem<string>('operator') || 'staff';
       const lowStockAlert = await dbSettings.getItem<boolean>('lowStockAlertEnabled');
+      const threshold = await dbSettings.getItem<number>('expiryThreshold') || 30;
       
       const qKeys = await dbSyncQueue.keys();
       const q: SyncItem[] = [];
@@ -75,7 +84,8 @@ export const useStore = create<AppState>((set, get) => ({
         gasApiUrl: url, 
         operator: op, 
         syncQueue: q.sort((a,b) => a.timestamp.localeCompare(b.timestamp)),
-        lowStockAlertEnabled: lowStockAlert === null ? true : lowStockAlert 
+        lowStockAlertEnabled: lowStockAlert === null ? true : lowStockAlert,
+        expiryThreshold: threshold
       });
 
       // Load products and stock from cache
@@ -134,15 +144,18 @@ export const useStore = create<AppState>((set, get) => ({
     };
     await dbSyncQueue.setItem(item.id, item);
     
-    // Locally optimistically update stock
-    const { stock } = get();
+    // Locally optimistically update stock and transactions
+    const { stock, transactions } = get();
     const now = new Date().toISOString().replace('T', ' ').split('.')[0];
     const stockId = payload.stock_id || `${payload.product_id}_${payload.location}_${payload.floor}_${payload.area}_${payload.expiry_date || ''}_${payload.specification || ''}`;
     
     let newStock = [...stock];
     const existingIndex = newStock.findIndex(s => s.stock_id === stockId);
     
+    let transactionType: 'stock_in' | 'stock_out' | 'adjust' = 'adjust';
+
     if (action === 'stockIn') {
+        transactionType = 'stock_in';
         if (existingIndex > -1) {
             newStock[existingIndex] = { ...newStock[existingIndex], quantity: newStock[existingIndex].quantity + payload.quantity, last_update: now };
         } else {
@@ -159,6 +172,7 @@ export const useStore = create<AppState>((set, get) => ({
             });
         }
     } else if (action === 'stockOut') {
+        transactionType = 'stock_out';
         if (existingIndex > -1) {
             const updatedQty = Math.max(0, newStock[existingIndex].quantity - payload.quantity);
             if (updatedQty <= 0) {
@@ -170,6 +184,7 @@ export const useStore = create<AppState>((set, get) => ({
             }
         }
     } else if (action === 'adjustStock') {
+        transactionType = 'adjust';
         if (payload.quantity <= 0) {
             if (existingIndex > -1) {
                 const idToRemove = newStock[existingIndex].stock_id;
@@ -195,9 +210,32 @@ export const useStore = create<AppState>((set, get) => ({
         }
     }
 
-    set((state) => ({ syncQueue: [...state.syncQueue, item], stock: newStock }));
+    // Add optimistic transaction
+    const newId = uuidv4();
+    const newTransaction: Transaction = {
+        id: newId,
+        transaction_id: `OPT_${newId}`,
+        product_id: payload.product_id,
+        type: transactionType,
+        quantity: payload.quantity,
+        date: now,
+        operator: get().operator,
+        location: payload.location,
+        floor: payload.floor,
+        area: payload.area,
+        cost_price: payload.cost_price,
+        vendor_id: payload.vendor_id,
+        note: payload.note
+    };
+
+    set((state) => ({ 
+        syncQueue: [...state.syncQueue, item], 
+        stock: newStock,
+        transactions: [newTransaction, ...state.transactions]
+    }));
     
-    // Also save updated stock to localforage immediately for better PWA experience
+    // Also save updated stock and transaction to localforage immediately
+    await dbTransactions.setItem(newTransaction.transaction_id!, newTransaction);
     for (const s of newStock) {
         await dbStock.setItem(s.stock_id, s);
     }
@@ -240,7 +278,10 @@ export const useStore = create<AppState>((set, get) => ({
     }
     
     if (!hasError) {
-      await get().fetchRemoteData();
+      // Small delay to allow GAS and Sheets to process the write before we fetch back
+      setTimeout(async () => {
+        await get().fetchRemoteData();
+      }, 1000);
     }
     set({ isLoading: false, isSyncing: false });
   },
