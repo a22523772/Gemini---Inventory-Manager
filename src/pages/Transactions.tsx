@@ -1,14 +1,68 @@
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { PackageOpen, ArrowDownToLine, ArrowUpFromLine, RefreshCcw } from 'lucide-react';
+import { PackageOpen, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Calendar, Search, Filter, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { format, subDays, isWithinInterval, startOfDay, endOfDay, parseISO } from 'date-fns';
 
 export default function Transactions() {
   const { transactions, products, vendors } = useStore();
   const [filterType, setFilterType] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [startDate, setStartDate] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
+  const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterLocation, setFilterLocation] = useState('');
+  const { fetchRemoteData, gasApiUrl, isLoading: storeIsLoading } = useStore();
+  
+  useEffect(() => {
+    if (transactions.length === 0 && gasApiUrl && !storeIsLoading) {
+       fetchRemoteData();
+    }
+  }, [gasApiUrl, storeIsLoading, transactions.length, fetchRemoteData]);
 
-  const filteredTransactions = transactions.filter(t => 
-    filterType ? t.type === filterType : true
-  );
+  const locations = useMemo(() => Array.from(new Set(transactions.map(t => t.location).filter(Boolean))), [transactions]);
+
+  const filteredTransactions = transactions.filter(t => {
+    // Type Filter
+    if (filterType && t.type !== filterType) return false;
+
+    // Date Range Filter
+    try {
+      if (!t.date) return false;
+      
+      // Normalize date string: replace "/" with "-" and ensure " " is replaced by "T" for ISO parsing
+      const normalizedDate = t.date.replace(/\//g, '-');
+      const dateStr = normalizedDate.includes(' ') && !normalizedDate.includes('T') 
+        ? normalizedDate.replace(' ', 'T') 
+        : normalizedDate;
+      
+      const tDate = new Date(dateStr);
+      if (isNaN(tDate.getTime())) return false;
+
+      const isWithin = isWithinInterval(tDate, {
+        start: startOfDay(parseISO(startDate)),
+        end: endOfDay(parseISO(endDate))
+      });
+      if (!isWithin) return false;
+    } catch (e) {
+      console.warn("Date parsing error for record:", t, e);
+      // In case of error, show it anyway to be safe, or hide it if it's clearly out of range
+      return true; 
+    }
+
+    // Search Filter (Product Name, ID, or Operator)
+    if (searchTerm) {
+      const s = searchTerm.toLowerCase();
+      const productName = products.find(p => p.product_id === t.product_id)?.name.toLowerCase() || '';
+      if (!productName.includes(s) && !t.product_id.toLowerCase().includes(s) && !t.operator.toLowerCase().includes(s)) {
+        return false;
+      }
+    }
+
+    // Location Filter
+    if (filterLocation && t.location !== filterLocation) return false;
+
+    return true;
+  });
 
   const getProductName = (pid: string) => {
     const p = products.find(prod => prod.product_id === pid);
@@ -41,27 +95,129 @@ export default function Transactions() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="glass-panel border-x-0 border-t-0 px-4 pt-6 pb-4 sticky top-0 z-10">
+      <div className="glass-panel border-x-0 border-t-0 px-4 pt-6 pb-4 sticky top-0 z-20">
         <div className="flex justify-between items-center mb-4">
           <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text-main)]">進出貨紀錄</h1>
+          <button 
+            onClick={() => setShowFilters(!showFilters)}
+            className={`p-2 rounded-xl transition-all ${showFilters ? 'bg-[var(--color-accent-blue)] text-[#0f172a]' : 'bg-white/5 text-[var(--color-text-dim)] hover:text-white'}`}
+          >
+            {showFilters ? <X className="w-5 h-5" /> : <Filter className="w-5 h-5" />}
+          </button>
         </div>
-        <select 
-          value={filterType} 
-          onChange={e => setFilterType(e.target.value)}
-          className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
-        >
-          <option value="" className="bg-[#0f172a]">所有操作記錄</option>
-          <option value="stock_in" className="bg-[#0f172a]">只看進貨</option>
-          <option value="stock_out" className="bg-[#0f172a]">只看出貨</option>
-          <option value="adjust" className="bg-[#0f172a]">只看盤點調整</option>
-        </select>
+
+        <div className="space-y-3">
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)]" />
+            <input 
+              type="text"
+              placeholder="搜尋商品、PID 或人員..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+            />
+          </div>
+
+          {showFilters && (
+            <div className="space-y-3 pt-3 border-t border-white/5 animate-in fade-in slide-in-from-top-2">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">開始日期</label>
+                  <div className="relative">
+                    <Calendar className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)] pointer-events-none" />
+                    <input 
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-xl pl-9 pr-3 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">結束日期</label>
+                  <div className="relative">
+                    <Calendar className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)] pointer-events-none" />
+                    <input 
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-xl pl-9 pr-3 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">類別</label>
+                  <select 
+                    value={filterType} 
+                    onChange={e => setFilterType(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
+                  >
+                    <option value="" className="bg-[#0f172a]">所有類型</option>
+                    <option value="stock_in" className="bg-[#0f172a]">進貨</option>
+                    <option value="stock_out" className="bg-[#0f172a]">出貨</option>
+                    <option value="adjust" className="bg-[#0f172a]">盤點調整</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">地點</label>
+                  <select 
+                    value={filterLocation} 
+                    onChange={e => setFilterLocation(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
+                  >
+                    <option value="" className="bg-[#0f172a]">所有地點</option>
+                    {locations.map(loc => (
+                      <option key={loc} value={loc} className="bg-[#0f172a]">{loc}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="flex justify-between items-center px-1 mb-1">
+          <p className="text-xs text-[var(--color-text-dim)] font-medium">
+            {transactions.length > 0 && filteredTransactions.length === 0 ? (
+              <span>找到 {transactions.length} 筆總紀錄，但目前的篩選條件下無結果</span>
+            ) : (
+              <>共 <span className="text-[var(--color-accent-blue)] font-bold">{filteredTransactions.length}</span> 筆紀錄</>
+            )}
+          </p>
+          {(filterType || searchTerm || filterLocation) && (
+            <button 
+              onClick={() => {
+                setFilterType('');
+                setSearchTerm('');
+                setFilterLocation('');
+                setStartDate(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
+                setEndDate(format(new Date(), 'yyyy-MM-dd'));
+              }}
+              className="text-[10px] text-[var(--color-accent-blue)] font-bold flex items-center gap-1 hover:underline"
+            >
+              清除所有篩選
+            </button>
+          )}
+        </div>
         {filteredTransactions.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-[var(--color-text-dim)] py-12">
             <RefreshCcw className="w-12 h-12 mb-3 opacity-50" />
-            <p className="text-sm font-medium">尚未有操作紀錄</p>
+            <p className="text-sm font-medium">
+              {transactions.length > 0 ? '目前的篩選條件下找不到紀錄' : '試算表中尚未有操作紀錄'}
+            </p>
+            {transactions.length === 0 && (
+              <button 
+                onClick={() => useStore.getState().fetchRemoteData()}
+                className="mt-4 text-xs bg-white/5 px-4 py-2 rounded-lg border border-white/10 text-[var(--color-accent-blue)] font-bold active:scale-95 transition-all"
+              >
+                立即從試算表讀取
+              </button>
+            )}
           </div>
         ) : (
           filteredTransactions.map(t => (
