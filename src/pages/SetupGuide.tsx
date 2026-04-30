@@ -574,7 +574,10 @@ function doGet(e) {
     if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var keys = data[0];
     var result = [];
+    var pidIdx = keys.indexOf('product_id');
     for(var i=1; i<data.length; i++){
+      if (!data[i].join('').trim()) continue; // Skip empty rows
+      if (pidIdx !== -1 && !data[i][pidIdx]) continue; // Skip if no product_id
       var obj = {};
       for(var j=0; j<keys.length; j++){ 
         var val = data[i][j];
@@ -595,7 +598,10 @@ function doGet(e) {
     if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var keys = data[0];
     var result = [];
+    var vidIdx = keys.indexOf('vendor_id');
     for(var i=1; i<data.length; i++){
+      if (!data[i].join('').trim()) continue; // Skip empty rows
+      if (vidIdx !== -1 && !data[i][vidIdx]) continue; // Skip if no vendor_id
       var obj = {};
       for(var j=0; j<keys.length; j++){ obj[keys[j]] = data[i][j]; }
       result.push(obj);
@@ -611,7 +617,10 @@ function doGet(e) {
     if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var keys = data[0];
     var result = [];
+    var sidIdx = keys.indexOf('stock_id');
     for(var i=1; i<data.length; i++){
+      if (!data[i].join('').trim()) continue; // Skip empty rows
+      if (sidIdx !== -1 && !data[i][sidIdx]) continue; // Skip if no stock_id
       var obj = {};
       for(var j=0; j<keys.length; j++){ 
         var val = data[i][j];
@@ -631,7 +640,10 @@ function doGet(e) {
     if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var keys = data[0];
     var result = [];
+    var tidIdx = keys.indexOf('transaction_id');
     for(var i=data.length-1; i>=1; i--){ // reverse order for latest first, limited
+      if (!data[i].join('').trim()) continue; // Skip empty rows
+      if (tidIdx !== -1 && !data[i][tidIdx]) continue; // Skip if no transaction_id
       var obj = {};
       for(var j=0; j<keys.length; j++){ 
         var val = data[i][j];
@@ -640,7 +652,7 @@ function doGet(e) {
         obj[keys[j]] = val; 
       }
       result.push(obj);
-      if(result.length > 300) break; // Limit records to 300
+      if(result.length > 500) break; // Limit records to 500
     }
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
   }

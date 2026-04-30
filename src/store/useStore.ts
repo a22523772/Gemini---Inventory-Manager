@@ -118,7 +118,7 @@ export const useStore = create<AppState>((set, get) => ({
         if (item) tList.push(item);
       }
 
-      set({ products: pList, stock: sList, vendors: vList, transactions: tList.sort((a,b) => b.date.localeCompare(a.date)) });
+      set({ products: pList, stock: sList, vendors: vList, transactions: tList.sort((a,b) => String(b.date || '').localeCompare(String(a.date || ''))) });
     } catch (e: any) {
       set({ error: e.message });
     } finally {
@@ -145,118 +145,16 @@ export const useStore = create<AppState>((set, get) => ({
     };
     await dbSyncQueue.setItem(item.id, item);
     
-    // Locally optimistically update stock and transactions
-    const { stock, transactions, products } = get();
+    // Fill in product name for GAS if missing
+    const { products } = get();
     const product = products.find(p => p.product_id === payload.product_id);
-    
-    // Ensure name is in payload for GAS
     if (product && !payload.name) {
         payload.name = product.name;
     }
-    
-    // For consistency with GAS script
-    const d = new Date();
-    const pad = (n: number) => n < 10 ? '0' + n : n;
-    const now = `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-    
-    // Consistent stockId generation
-    const cleanExpiry = (payload.expiry_date || '').toString().trim();
-    const cleanSpec = (payload.specification || '').toString().trim();
-    const idParts = [payload.product_id, payload.location, payload.floor, payload.area, cleanExpiry, cleanSpec];
-    const stockId = payload.stock_id || idParts.join('_').replace(/_+$/, '');
-    
-    let newStock = [...stock];
-    const existingIndex = newStock.findIndex(s => s.stock_id === stockId);
-    
-    let transactionType: 'stock_in' | 'stock_out' | 'adjust' = 'adjust';
-
-    if (action === 'stockIn') {
-        transactionType = 'stock_in';
-        if (existingIndex > -1) {
-            newStock[existingIndex] = { ...newStock[existingIndex], quantity: newStock[existingIndex].quantity + payload.quantity, last_update: now, name: product?.name || newStock[existingIndex].name };
-        } else {
-            newStock.push({
-                stock_id: stockId,
-                product_id: payload.product_id,
-                name: product?.name || '',
-                location: payload.location,
-                floor: payload.floor,
-                area: payload.area,
-                quantity: payload.quantity,
-                expiry_date: payload.expiry_date,
-                specification: payload.specification,
-                last_update: now
-            });
-        }
-    } else if (action === 'stockOut') {
-        transactionType = 'stock_out';
-        if (existingIndex > -1) {
-            const updatedQty = Math.max(0, newStock[existingIndex].quantity - payload.quantity);
-            if (updatedQty <= 0) {
-                const idToRemove = newStock[existingIndex].stock_id;
-                newStock.splice(existingIndex, 1);
-                await dbStock.removeItem(idToRemove);
-            } else {
-                newStock[existingIndex] = { ...newStock[existingIndex], quantity: updatedQty, last_update: now };
-            }
-        }
-    } else if (action === 'adjustStock') {
-        transactionType = 'adjust';
-        if (payload.quantity <= 0) {
-            if (existingIndex > -1) {
-                const idToRemove = newStock[existingIndex].stock_id;
-                newStock.splice(existingIndex, 1);
-                await dbStock.removeItem(idToRemove);
-            }
-        } else {
-            if (existingIndex > -1) {
-                newStock[existingIndex] = { ...newStock[existingIndex], quantity: payload.quantity, last_update: now, name: product?.name || newStock[existingIndex].name };
-            } else {
-                newStock.push({
-                    stock_id: stockId,
-                    product_id: payload.product_id,
-                    name: product?.name || '',
-                    location: payload.location,
-                    floor: payload.floor,
-                    area: payload.area,
-                    quantity: payload.quantity,
-                    expiry_date: payload.expiry_date,
-                    specification: payload.specification,
-                    last_update: now
-                });
-            }
-        }
-    }
-
-    // Add optimistic transaction
-    const newId = uuidv4();
-    const newTransaction: Transaction = {
-        id: newId,
-        transaction_id: `OPT_${newId}`,
-        product_id: payload.product_id,
-        type: transactionType,
-        quantity: payload.quantity,
-        date: now,
-        operator: get().operator,
-        location: payload.location,
-        floor: payload.floor,
-        area: payload.area,
-        cost_price: payload.cost_price,
-        vendor_id: payload.vendor_id,
-        note: payload.note
-    };
 
     set((state) => ({ 
-        syncQueue: [...state.syncQueue, item], 
-        stock: newStock,
-        transactions: [newTransaction, ...state.transactions]
+        syncQueue: [...state.syncQueue, item]
     }));
-    
-    // Also save updated stock and transaction to localforage immediately
-    await dbTransactions.setItem(newTransaction.transaction_id!, newTransaction);
-    for (const s of newStock) {
-        await dbStock.setItem(s.stock_id, s);
-    }
     
     // Try to sync immediately
     get().syncData();
@@ -316,16 +214,18 @@ export const useStore = create<AppState>((set, get) => ({
         const dP = await rP.json();
         
         // Normalize boolean strings from GAS DisplayValues
-        const normalizedProducts = dP.map((p: any) => ({
-          ...p,
-          has_expiry: String(p.has_expiry).toUpperCase() === 'TRUE',
-          cost_price: Number(p.cost_price) || 0,
-          min_stock: p.min_stock !== undefined ? Number(p.min_stock) : undefined
-        }));
+        const normalizedProducts = dP
+          .filter((p: any) => p && p.product_id)
+          .map((p: any) => ({
+            ...p,
+            has_expiry: String(p.has_expiry).toUpperCase() === 'TRUE',
+            cost_price: Number(p.cost_price) || 0,
+            min_stock: p.min_stock !== undefined ? Number(p.min_stock) : undefined
+          }));
 
         await dbProducts.clear();
         for (const p of normalizedProducts) {
-          if (p.product_id) await dbProducts.setItem(p.product_id, p);
+          await dbProducts.setItem(p.product_id, p);
         }
         set({ products: normalizedProducts });
       } else {
@@ -336,11 +236,12 @@ export const useStore = create<AppState>((set, get) => ({
       const rS = await fetch(`${gasApiUrl}?action=getStock`);
       if (rS.ok) {
         const dS = await rS.json();
+        const validS = dS.filter((s: any) => s && s.stock_id);
         await dbStock.clear();
-        for (const s of dS) {
-          if (s.stock_id) await dbStock.setItem(s.stock_id, s);
+        for (const s of validS) {
+          await dbStock.setItem(s.stock_id, s);
         }
-        set({ stock: dS });
+        set({ stock: validS });
       } else {
          throw new Error(`庫存資料獲取失敗狀態碼: ${rS.status}`);
       }
@@ -349,11 +250,12 @@ export const useStore = create<AppState>((set, get) => ({
       const rV = await fetch(`${gasApiUrl}?action=getVendors`);
       if (rV.ok) {
         const dV = await rV.json();
+        const validV = dV.filter((v: any) => v && v.vendor_id);
         await dbVendors.clear();
-        for (const v of dV) {
-          if (v.vendor_id) await dbVendors.setItem(v.vendor_id, v);
+        for (const v of validV) {
+          await dbVendors.setItem(v.vendor_id, v);
         }
-        set({ vendors: dV });
+        set({ vendors: validV });
       } else {
          throw new Error(`供應商資料獲取失敗狀態碼: ${rV.status}`);
       }
@@ -362,11 +264,12 @@ export const useStore = create<AppState>((set, get) => ({
       const rT = await fetch(`${gasApiUrl}?action=getTransactions`);
       if (rT.ok) {
         const dT = await rT.json();
+        const validT = dT.filter((t: any) => t && t.transaction_id);
         await dbTransactions.clear();
-        for (const t of dT) {
-          if (t.transaction_id) await dbTransactions.setItem(t.transaction_id, t);
+        for (const t of validT) {
+          await dbTransactions.setItem(t.transaction_id, t);
         }
-        set({ transactions: dT.sort((a: any, b: any) => b.date.localeCompare(a.date)) });
+        set({ transactions: validT.sort((a: any, b: any) => String(b.date || '').localeCompare(String(a.date || ''))) });
       }
 
     } catch (e: any) {

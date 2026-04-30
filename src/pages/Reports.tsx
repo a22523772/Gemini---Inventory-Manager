@@ -26,6 +26,11 @@ export default function Reports() {
     const soonToExpireList: any[] = [];
     const lowStockByVendor: Record<string, any[]> = {};
     
+    const productTotalStock: Record<string, number> = {};
+    stock.forEach(s => {
+      productTotalStock[s.product_id] = (productTotalStock[s.product_id] || 0) + s.quantity;
+    });
+
     // Process Stock Details
     stock.forEach(s => {
       const product = products.find(p => p.product_id === s.product_id);
@@ -46,12 +51,17 @@ export default function Reports() {
           soonToExpireList.push({ ...s, product, diffDays });
         }
       }
+    });
 
-      // Low Stock Check
-      if (s.quantity > 0 && s.quantity <= (product.min_stock || 5)) { // default safe stock 5 if not set
+    // Low Stock Check (using total stock for the product)
+    Object.keys(productTotalStock).forEach(pid => {
+      const product = products.find(p => p.product_id === pid);
+      if (!product) return;
+      const totalQty = productTotalStock[pid];
+      if (totalQty > 0 && totalQty <= (product.min_stock || 5)) { // default safe stock 5 if not set
         const vendorId = product.vendor_id || 'unknown';
         if (!lowStockByVendor[vendorId]) lowStockByVendor[vendorId] = [];
-        lowStockByVendor[vendorId].push({ ...s, product });
+        lowStockByVendor[vendorId].push({ product, quantity: totalQty });
       }
     });
 
@@ -85,11 +95,7 @@ export default function Reports() {
       .slice(0, 10);
 
     // Stagnant: Items in stock that have NO sales in last 30 days
-    // To simplify, we sum total stock per product.
-    const productTotalStock: Record<string, number> = {};
-    stock.forEach(s => {
-      productTotalStock[s.product_id] = (productTotalStock[s.product_id] || 0) + s.quantity;
-    });
+    // We already computed productTotalStock above
 
     const stagnantItems = Object.keys(productTotalStock)
       .filter(pid => productTotalStock[pid] > 0 && !productSales[pid])
@@ -139,10 +145,10 @@ export default function Reports() {
       </div>
 
        {reportData.totalInventoryValue > 0 && (
-        <div className="glass-panel p-4 rounded-xl flex flex-col items-start justify-start">
+        <div className="glass-panel p-4 rounded-xl flex flex-col items-start justify-start w-full overflow-hidden">
            <h3 className="text-sm font-bold text-[var(--color-text-main)] mb-4 flex items-center w-full"><PieChartIcon className="w-4 h-4 mr-2 text-[var(--color-accent-blue)]"/> 資金健康度比例</h3>
-           <div style={{ width: '100%', height: 200, minHeight: 200 }}>
-             <ResponsiveContainer width="100%" height="100%" minWidth={10} minHeight={10}>
+           <div className="w-full h-[200px]">
+             <ResponsiveContainer width="100%" height={200}>
                <PieChart>
                  <Pie
                    data={reportData.stockValueDistribution}
@@ -167,14 +173,14 @@ export default function Reports() {
         </div>
       )}
 
-      <div className="glass-panel p-4 rounded-xl flex flex-col items-start justify-start">
+      <div className="glass-panel p-4 rounded-xl flex flex-col items-start justify-start w-full overflow-hidden">
          <h3 className="text-sm font-bold text-[var(--color-text-main)] mb-4 flex items-center w-full"><TrendingUp className="w-4 h-4 mr-2 text-emerald-400"/> 近 30 天熱銷排行 (出貨量)</h3>
-         <div style={{ width: '100%', height: 220, minHeight: 220 }}>
-           <ResponsiveContainer width="100%" height="100%" minWidth={10} minHeight={10}>
+         <div className="w-full h-[220px]">
+           <ResponsiveContainer width="100%" height={220}>
              <BarChart data={reportData.hotItems} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
                <XAxis type="number" stroke="#64748b" />
-               <YAxis dataKey="product.name" type="category" width={80} stroke="#64748b" tick={{fontSize: 12, fill: '#cbd5e1'}} />
+               <YAxis dataKey="product.name" type="category" width={110} stroke="#64748b" tick={{fontSize: 10, fill: '#cbd5e1'}} interval={0} />
                <Tooltip 
                  cursor={{fill: 'rgba(255,255,255,0.1)'}}
                  contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px', color: '#fff' }}
@@ -258,12 +264,12 @@ export default function Reports() {
                 <div className="divide-y divide-white/5">
                   {group.items.map((item, iDx) => (
                     <div key={iDx} className="p-3">
-                      <div className="flex justify-between">
-                         <span className="font-medium text-sm text-white">{item.product?.name || '未知商品'}</span>
-                         <span className="bg-red-500/20 text-red-400 text-xs px-2 py-0.5 rounded-full">剩 {item.quantity} {item.product?.unit}</span>
+                      <div className="flex justify-between items-start gap-2">
+                         <span className="font-medium text-sm text-white break-words flex-1 min-w-0">{item.product?.name || '未知商品'}</span>
+                         <span className="bg-red-500/20 text-red-400 text-xs px-2 py-0.5 rounded-full shrink-0">總計 {item.quantity} {item.product?.unit}</span>
                       </div>
                       <div className="text-xs text-[var(--color-text-dim)] mt-1">
-                        安全庫存: {item.product?.min_stock || 5} | 批次: {item.stock_id?.split('_').slice(1,4).filter(Boolean).join('-') || '無'}
+                        安全庫存: {item.product?.min_stock || 5}
                       </div>
                     </div>
                   ))}
@@ -289,7 +295,7 @@ export default function Reports() {
                 <tr>
                   <th className="px-4 py-2 font-medium">商品名稱</th>
                   <th className="px-4 py-2 font-medium">積壓數量</th>
-                  <th className="px-4 py-2 font-medium">積壓資金估計</th>
+                  <th className="px-4 py-2 font-medium">資金估計</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
@@ -297,7 +303,7 @@ export default function Reports() {
                   const value = (item.product?.cost_price || 0) * item.stock;
                   return (
                   <tr key={idx} className="hover:bg-white/5">
-                    <td className="px-4 py-3 text-white text-xs truncate max-w-[120px]">{item.product?.name || '未知商品'}</td>
+                    <td className="px-4 py-3 text-white text-xs whitespace-normal break-words min-w-[120px]">{item.product?.name || '未知商品'}</td>
                     <td className="px-4 py-3 text-zinc-400">{item.stock} {item.product?.unit}</td>
                     <td className="px-4 py-3 text-red-400">${value.toLocaleString()}</td>
                   </tr>

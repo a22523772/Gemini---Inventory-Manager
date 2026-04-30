@@ -7,17 +7,19 @@ export default function Transactions() {
   const { transactions, products, vendors } = useStore();
   const [filterType, setFilterType] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [startDate, setStartDate] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
+  const [startDate, setStartDate] = useState(format(subDays(new Date(), 7), 'yyyy-MM-dd'));
   const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [showFilters, setShowFilters] = useState(false);
   const [filterLocation, setFilterLocation] = useState('');
   const { fetchRemoteData, gasApiUrl, isLoading: storeIsLoading } = useStore();
   
   useEffect(() => {
-    if (transactions.length === 0 && gasApiUrl && !storeIsLoading) {
+    // Always consider fetching remote data on mount to ensure we have the latest from the sheet,
+    // not just the optimistic local ones.
+    if (gasApiUrl && !storeIsLoading) {
        fetchRemoteData();
     }
-  }, [gasApiUrl, storeIsLoading, transactions.length, fetchRemoteData]);
+  }, [gasApiUrl]); // Fetch on mount or when API URL changes
 
   const locations = useMemo(() => Array.from(new Set(transactions.map(t => t.location).filter(Boolean))), [transactions]);
 
@@ -26,34 +28,38 @@ export default function Transactions() {
     if (filterType && t.type !== filterType) return false;
 
     // Date Range Filter
-    try {
-      if (!t.date) return false;
-      
-      // Normalize date string: replace "/" with "-" and ensure " " is replaced by "T" for ISO parsing
-      const normalizedDate = t.date.replace(/\//g, '-');
-      const dateStr = normalizedDate.includes(' ') && !normalizedDate.includes('T') 
-        ? normalizedDate.replace(' ', 'T') 
-        : normalizedDate;
-      
-      const tDate = new Date(dateStr);
-      if (isNaN(tDate.getTime())) return false;
-
-      const isWithin = isWithinInterval(tDate, {
-        start: startOfDay(parseISO(startDate)),
-        end: endOfDay(parseISO(endDate))
-      });
-      if (!isWithin) return false;
-    } catch (e) {
-      console.warn("Date parsing error for record:", t, e);
-      // In case of error, show it anyway to be safe, or hide it if it's clearly out of range
-      return true; 
+    if (startDate && endDate) {
+      try {
+        if (!t.date) return true; // Default to showing records without date
+        
+        // Handle common formats like "2026/04/30 17:10:36", "2026-04-30", etc.
+        let dStr = String(t.date);
+        // Replace dashes with slashes for Safari compatibility if it doesn't have T
+        if (!dStr.includes('T')) {
+           dStr = dStr.replace(/-/g, '/');
+        }
+        let tDate = new Date(dStr);
+        
+        if (!isNaN(tDate.getTime())) {
+          const start = startOfDay(new Date(startDate.replace(/-/g, '/')));
+          const end = endOfDay(new Date(endDate.replace(/-/g, '/')));
+          if (tDate < start || tDate > end) return false;
+        }
+      } catch (e) {
+        console.warn("Date parsing error for record:", t, e);
+        // In case of error, show it anyway to be safe
+      }
     }
 
     // Search Filter (Product Name, ID, or Operator)
     if (searchTerm) {
       const s = searchTerm.toLowerCase();
-      const productName = products.find(p => p.product_id === t.product_id)?.name.toLowerCase() || '';
-      if (!productName.includes(s) && !t.product_id.toLowerCase().includes(s) && !t.operator.toLowerCase().includes(s)) {
+      const product = products.find(p => p.product_id === t.product_id);
+      const productName = product?.name.toLowerCase() || '';
+      const pid = String(t.product_id || '').toLowerCase();
+      const op = String(t.operator || '').toLowerCase();
+      
+      if (!productName.includes(s) && !pid.includes(s) && !op.includes(s)) {
         return false;
       }
     }
@@ -183,10 +189,10 @@ export default function Transactions() {
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         <div className="flex justify-between items-center px-1 mb-1">
           <p className="text-xs text-[var(--color-text-dim)] font-medium">
-            {transactions.length > 0 && filteredTransactions.length === 0 ? (
-              <span>找到 {transactions.length} 筆總紀錄，但目前的篩選條件下無結果</span>
+            {transactions.length > 0 && transactions.length !== filteredTransactions.length ? (
+              <span>共找到 {transactions.length} 筆總紀錄，目前篩選條件下顯示 <span className="text-[var(--color-accent-blue)] font-bold">{filteredTransactions.length}</span> 筆</span>
             ) : (
-              <>共 <span className="text-[var(--color-accent-blue)] font-bold">{filteredTransactions.length}</span> 筆紀錄</>
+              <>系統共載入 <span className="text-[var(--color-accent-blue)] font-bold">{transactions.length}</span> 筆紀錄</>
             )}
           </p>
           {(filterType || searchTerm || filterLocation) && (
@@ -195,7 +201,7 @@ export default function Transactions() {
                 setFilterType('');
                 setSearchTerm('');
                 setFilterLocation('');
-                setStartDate(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
+                setStartDate(format(subDays(new Date(), 7), 'yyyy-MM-dd'));
                 setEndDate(format(new Date(), 'yyyy-MM-dd'));
               }}
               className="text-[10px] text-[var(--color-accent-blue)] font-bold flex items-center gap-1 hover:underline"
@@ -220,16 +226,16 @@ export default function Transactions() {
             )}
           </div>
         ) : (
-          filteredTransactions.map(t => (
-            <div key={t.id || t.transaction_id} className="glass-panel border border-[var(--color-glass-border)] rounded-xl p-4 transition-all">
+          filteredTransactions.map((t, idx) => (
+            <div key={t.id || t.transaction_id || `tx-${idx}`} className="glass-panel border border-[var(--color-glass-border)] rounded-xl p-4 transition-all">
               <div className="flex items-start mb-2 gap-3">
                 <div className="mt-1 w-10 h-10 shrink-0 rounded-xl bg-white/5 flex items-center justify-center">
                   {getIcon(t.type)}
                 </div>
-                <div className="flex-1">
-                  <div className="flex justify-between items-start">
-                    <h3 className="font-bold text-[var(--color-text-main)] text-base">{getProductName(t.product_id)}</h3>
-                    <div className="text-right">
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-start gap-2">
+                    <h3 className="font-bold text-[var(--color-text-main)] text-base break-words flex-1 min-w-0">{getProductName(t.product_id)}</h3>
+                    <div className="text-right shrink-0">
                       <span className="text-xs text-[var(--color-text-dim)] font-mono">
                         {t.date.includes('T') ? new Date(t.date).toLocaleString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(/\//g, '-') : t.date}
                       </span>
