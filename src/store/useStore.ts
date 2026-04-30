@@ -25,6 +25,7 @@ interface AppState {
   addVendor: (vendor: Vendor) => Promise<void>;
   editVendor: (vendor: Vendor) => Promise<void>;
   deleteVendor: (vendorId: string) => Promise<void>;
+  reformatDatabase: () => Promise<void>;
   toastMessage: string | null;
   showToast: (msg: string) => void;
   lowStockAlertEnabled: boolean;
@@ -145,9 +146,24 @@ export const useStore = create<AppState>((set, get) => ({
     await dbSyncQueue.setItem(item.id, item);
     
     // Locally optimistically update stock and transactions
-    const { stock, transactions } = get();
-    const now = new Date().toISOString().replace('T', ' ').split('.')[0];
-    const stockId = payload.stock_id || `${payload.product_id}_${payload.location}_${payload.floor}_${payload.area}_${payload.expiry_date || ''}_${payload.specification || ''}`;
+    const { stock, transactions, products } = get();
+    const product = products.find(p => p.product_id === payload.product_id);
+    
+    // Ensure name is in payload for GAS
+    if (product && !payload.name) {
+        payload.name = product.name;
+    }
+    
+    // For consistency with GAS script
+    const d = new Date();
+    const pad = (n: number) => n < 10 ? '0' + n : n;
+    const now = `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    
+    // Consistent stockId generation
+    const cleanExpiry = (payload.expiry_date || '').toString().trim();
+    const cleanSpec = (payload.specification || '').toString().trim();
+    const idParts = [payload.product_id, payload.location, payload.floor, payload.area, cleanExpiry, cleanSpec];
+    const stockId = payload.stock_id || idParts.join('_').replace(/_+$/, '');
     
     let newStock = [...stock];
     const existingIndex = newStock.findIndex(s => s.stock_id === stockId);
@@ -157,11 +173,12 @@ export const useStore = create<AppState>((set, get) => ({
     if (action === 'stockIn') {
         transactionType = 'stock_in';
         if (existingIndex > -1) {
-            newStock[existingIndex] = { ...newStock[existingIndex], quantity: newStock[existingIndex].quantity + payload.quantity, last_update: now };
+            newStock[existingIndex] = { ...newStock[existingIndex], quantity: newStock[existingIndex].quantity + payload.quantity, last_update: now, name: product?.name || newStock[existingIndex].name };
         } else {
             newStock.push({
                 stock_id: stockId,
                 product_id: payload.product_id,
+                name: product?.name || '',
                 location: payload.location,
                 floor: payload.floor,
                 area: payload.area,
@@ -193,11 +210,12 @@ export const useStore = create<AppState>((set, get) => ({
             }
         } else {
             if (existingIndex > -1) {
-                newStock[existingIndex] = { ...newStock[existingIndex], quantity: payload.quantity, last_update: now };
+                newStock[existingIndex] = { ...newStock[existingIndex], quantity: payload.quantity, last_update: now, name: product?.name || newStock[existingIndex].name };
             } else {
                 newStock.push({
                     stock_id: stockId,
                     product_id: payload.product_id,
+                    name: product?.name || '',
                     location: payload.location,
                     floor: payload.floor,
                     area: payload.area,
@@ -365,14 +383,17 @@ export const useStore = create<AppState>((set, get) => ({
     const pad = (n: number) => n < 10 ? '0' + n : n;
     const formattedDate = `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
-    const newProduct: Product = { ...product, created_at: formattedDate };
+    // If product_id is not provided, we store it with a temporary UUID locally
+    const id = product.product_id || `TEMP_${uuidv4().substring(0, 8)}`;
+    const newProduct: Product = { ...product, product_id: id, created_at: formattedDate };
     
     // Save to local cache optimistic update
     await dbProducts.setItem(newProduct.product_id, newProduct);
     set(state => ({ products: [...state.products, newProduct] }));
     
-    // Queue the sync to Google Sheets
-    await get().enqueueAction('addProduct', newProduct);
+    // Queue the sync to Google Sheets (Original payload if it was empty id)
+    const syncPayload = { ...product, created_at: formattedDate };
+    await get().enqueueAction('addProduct', syncPayload);
   },
 
   editProduct: async (product) => {
@@ -406,5 +427,28 @@ export const useStore = create<AppState>((set, get) => ({
     await dbVendors.removeItem(vendorId);
     set(state => ({ vendors: state.vendors.filter(v => v.vendor_id !== vendorId) }));
     await get().enqueueAction('deleteVendor', { vendor_id: vendorId });
+  },
+
+  reformatDatabase: async () => {
+    const { gasApiUrl } = get();
+    if (!gasApiUrl) return;
+    set({ isLoading: true, error: null });
+    try {
+      const res = await fetch(`${gasApiUrl}?action=reformatDatabase`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({})
+      });
+      if (res.ok) {
+        get().showToast('✅ 資料庫已重新排版並派發 ID！');
+        await get().fetchRemoteData();
+      } else {
+        throw new Error('伺服器回應異常');
+      }
+    } catch (e: any) {
+      set({ error: `重整失敗: ${e.message}` });
+    } finally {
+      set({ isLoading: false });
+    }
   }
 }));

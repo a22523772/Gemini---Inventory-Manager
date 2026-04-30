@@ -132,6 +132,18 @@ export default function SetupGuide() {
                 {isLoading ? '同步中...' : '立即同步'}
               </button>
             </div>
+
+            <div className="glass-panel p-4 rounded-2xl border-orange-500/20 bg-orange-500/5">
+              <h2 className="text-base font-bold text-orange-200 mb-2">資料庫維護工具</h2>
+              <p className="text-xs text-orange-200/60 mb-4">若您手動在 Google Sheets 新增了多行資料，請執行此功能以自動生成缺失的 ID 並確保格式正確。</p>
+              <button
+                onClick={() => useStore.getState().reformatDatabase()}
+                disabled={isLoading || !gasApiUrl}
+                className={`w-full flex items-center justify-center py-3 px-4 rounded-xl text-sm font-bold active:scale-95 transition-all outline-none border border-orange-500/30 text-orange-200 bg-orange-500/10 hover:bg-orange-500/20 disabled:opacity-50`}
+              >
+                整理資料庫格式與補齊 ID
+              </button>
+            </div>
           </>
         )}
 
@@ -155,7 +167,7 @@ export default function SetupGuide() {
                 <ul className="list-disc pl-5 mt-2 space-y-1 text-white/80 font-mono text-xs">
                   <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, specification, min_stock, created_at</li>
                   <li><strong>vendors</strong> (供應商): vendor_id, vendor_name, contact, phone</li>
-                  <li><strong>stock</strong> (庫存表): stock_id, product_id, location, floor, area, quantity, expiry_date, specification, last_update</li>
+                  <li><strong>stock</strong> (庫存表): stock_id, product_id, name, location, floor, area, quantity, expiry_date, specification, last_update</li>
                   <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, type, quantity, location, floor, area, specification, cost_price, vendor_id, date, note, operator</li>
                 </ul>
              </section>
@@ -184,13 +196,61 @@ export default function SetupGuide() {
       if (headers.indexOf('min_stock') === -1) { headers.push('min_stock'); prodSheet.getRange(1, headers.length).setValue('min_stock'); }
     }
     
+    // Automatic ID generation (Pattern B: P000001)
+    if (!data.product_id || data.product_id === '') {
+      var lastIdNum = 0;
+      if (prodSheet.getLastRow() > 1) {
+        var idValues = prodSheet.getRange(2, headers.indexOf('product_id') + 1, prodSheet.getLastRow() - 1, 1).getValues();
+        for (var i = 0; i < idValues.length; i++) {
+          var currentId = String(idValues[i][0]);
+          if (currentId.indexOf('P') === 0) {
+            var num = parseInt(currentId.substring(1));
+            if (!isNaN(num) && num > lastIdNum) lastIdNum = num;
+          }
+        }
+      }
+      var nextId = 'P' + String(lastIdNum + 1).padStart(6, '0');
+      data.product_id = nextId;
+    }
+
     var rowData = [];
     for (var j = 0; j < headers.length; j++) {
       var val = data[headers[j]];
       rowData.push(val !== undefined ? val : '');
     }
     prodSheet.appendRow(rowData);
-    return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({success:true, product_id: data.product_id})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'reformatDatabase') {
+    // 1. Refresh Products table
+    var prodSheet = ss.getSheetByName('products');
+    if (prodSheet && prodSheet.getLastRow() > 0) {
+       var headers = ['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at', 'brand', 'specification', 'min_stock'];
+       var existingHeaders = prodSheet.getRange(1, 1, 1, prodSheet.getLastColumn()).getValues()[0];
+       var values = prodSheet.getDataRange().getValues();
+       var idIdx = existingHeaders.indexOf('product_id');
+       var lastIdNum = 0;
+       
+       // Pass 1: Find max ID
+       for(var i=1; i<values.length; i++) {
+         var cid = String(values[i][idIdx] || '');
+         if(cid.indexOf('P') === 0) {
+           var n = parseInt(cid.substring(1));
+           if(!isNaN(n) && n > lastIdNum) lastIdNum = n;
+         }
+       }
+       
+       // Pass 2: Assign IDs to empty rows
+       for(var i=1; i<values.length; i++) {
+         if(!values[i][idIdx] || values[i][idIdx] === '') {
+           lastIdNum++;
+           var nid = 'P' + String(lastIdNum).padStart(6, '0');
+           prodSheet.getRange(i+1, idIdx + 1).setValue(nid);
+         }
+       }
+    }
+    return ContentService.createTextOutput(JSON.stringify({success:true, message: 'Database reformatted and IDs assigned'})).setMimeType(ContentService.MimeType.JSON);
   }
 
   if (action === 'editProduct') {
@@ -290,46 +350,70 @@ export default function SetupGuide() {
     if (!transSheet) transSheet = ss.insertSheet('transactions');
     
     var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
-
-    var stockId = data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area + '_' + (data.expiry_date || '') + '_' + (data.specification || '');
+    var stockId = data.stock_id || [data.product_id, data.location, data.floor, data.area, data.expiry_date || '', data.specification || ''].join('_').replace(/_+$/, '');
     
-    // Find or create in stock
-    var lastRow = stockSheet.getLastRow();
-    var found = false;
+    // Manage stock headers dynamically
+    var stockHeaders = [];
+    if (stockSheet.getLastRow() === 0) {
+      stockHeaders = ['stock_id', 'product_id', 'name', 'location', 'floor', 'area', 'quantity', 'expiry_date', 'specification', 'last_update'];
+      stockSheet.appendRow(stockHeaders);
+    } else {
+      stockHeaders = stockSheet.getRange(1, 1, 1, stockSheet.getLastColumn()).getValues()[0];
+      // Ensure specific optional/new columns exist
+      var requiredStockCols = ['name', 'specification', 'last_update'];
+      requiredStockCols.forEach(function(col) {
+        if (stockHeaders.indexOf(col) === -1) {
+          stockHeaders.push(col);
+          stockSheet.getRange(1, stockHeaders.length).setValue(col);
+        }
+      });
+    }
     
-    if (lastRow > 0) {
-      var values = stockSheet.getDataRange().getValues();
-      var headers = values[0];
-      if (headers.indexOf('specification') === -1) { 
-        headers.push('specification'); 
-        stockSheet.getRange(1, headers.length).setValue('specification');
-        // Refresh values after header update
-        values = stockSheet.getDataRange().getValues();
-      }
-
+    var values = stockSheet.getDataRange().getValues();
+    var stockIdIdx = stockHeaders.indexOf('stock_id');
+    var prodIdx = stockHeaders.indexOf('product_id');
+    var locIdx = stockHeaders.indexOf('location');
+    var floorIdx = stockHeaders.indexOf('floor');
+    var areaIdx = stockHeaders.indexOf('area');
+    var expiryIdx = stockHeaders.indexOf('expiry_date');
+    var specIdx = stockHeaders.indexOf('specification');
+    var qtyIdx = stockHeaders.indexOf('quantity');
+    var updateIdx = stockHeaders.indexOf('last_update');
+    
+    var foundIndex = -1;
+    if (values.length > 1) {
       for (var i = 1; i < values.length; i++) {
-         if (values[i][0] == stockId) {
-            stockSheet.getRange(i+1, 6).setValue(Number(values[i][5]) + Number(data.quantity));
-            stockSheet.getRange(i+1, 9).setValue(now); // Updated last_update column index? No, let's stick to headers.
-            
-            // safer way: find index
-            var updateIdx = headers.indexOf('last_update');
-            if (updateIdx !== -1) stockSheet.getRange(i+1, updateIdx + 1).setValue(now);
-
-            found = true;
+         // Match by ID OR by attributes
+         var matchById = (stockIdIdx !== -1 && values[i][stockIdIdx] == stockId);
+         var matchByAttrs = (
+           values[i][prodIdx] == data.product_id &&
+           values[i][locIdx] == data.location &&
+           values[i][floorIdx] == data.floor &&
+           values[i][areaIdx] == data.area &&
+           String(values[i][expiryIdx] || '') == String(data.expiry_date || '') &&
+           String(values[i][specIdx] || '') == String(data.specification || '')
+         );
+         
+         if (matchById || matchByAttrs) {
+            foundIndex = i;
             break;
          }
       }
-    } else {
-      // Initialize headers if empty
-      stockSheet.appendRow(['stock_id', 'product_id', 'location', 'floor', 'area', 'quantity', 'expiry_date', 'specification', 'last_update']);
     }
-    
-    if (!found) {
-       var sHeaders = stockSheet.getRange(1, 1, 1, stockSheet.getLastColumn()).getValues()[0];
+
+    if (foundIndex !== -1) {
+       var oldQty = Number(values[foundIndex][qtyIdx]) || 0;
+       stockSheet.getRange(foundIndex + 1, qtyIdx + 1).setValue(oldQty + Number(data.quantity));
+       if (updateIdx !== -1) stockSheet.getRange(foundIndex + 1, updateIdx + 1).setValue(now);
+       // Update name if missing
+       var nameIdx = stockHeaders.indexOf('name');
+       if (nameIdx !== -1 && data.name && !values[foundIndex][nameIdx]) {
+         stockSheet.getRange(foundIndex + 1, nameIdx + 1).setValue(data.name);
+       }
+    } else {
        var sRow = [];
-       for(var m=0; m<sHeaders.length; m++) {
-         var key = sHeaders[m];
+       for(var m=0; m<stockHeaders.length; m++) {
+         var key = stockHeaders[m];
          var val = data[key];
          if (key === 'stock_id') val = stockId;
          if (key === 'last_update') val = now;
@@ -338,26 +422,31 @@ export default function SetupGuide() {
        stockSheet.appendRow(sRow);
     }
     
-    var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
+    // Transactions logic
+    var transHeaders = [];
     if(transSheet.getLastRow() === 0) {
+      transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
       transSheet.appendRow(transHeaders);
     } else {
       transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
-      if (transHeaders.indexOf('specification') === -1) { transHeaders.push('specification'); transSheet.getRange(1, transHeaders.length).setValue('specification'); }
-      if (transHeaders.indexOf('cost_price') === -1) { transHeaders.push('cost_price'); transSheet.getRange(1, transHeaders.length).setValue('cost_price'); }
-      if (transHeaders.indexOf('vendor_id') === -1) { transHeaders.push('vendor_id'); transSheet.getRange(1, transHeaders.length).setValue('vendor_id'); }
+      var requiredTransCols = ['specification', 'cost_price', 'vendor_id'];
+      requiredTransCols.forEach(function(col) {
+        if (transHeaders.indexOf(col) === -1) {
+          transHeaders.push(col);
+          transSheet.getRange(1, transHeaders.length).setValue(col);
+        }
+      });
     }
     
-    var trData = {
-      transaction_id: Utilities.getUuid(), product_id: data.product_id, type: 'stock_in',
-      quantity: data.quantity, location: data.location, floor: data.floor, area: data.area,
-      specification: data.specification, cost_price: data.cost_price, vendor_id: data.vendor_id, 
-      date: now, note: '', operator: data.operator
-    };
+    data.transaction_id = Utilities.getUuid();
+    data.type = 'stock_in';
+    data.date = now;
+    data.note = data.note || '';
     
     var trRow = [];
     for (var k = 0; k < transHeaders.length; k++) {
-      trRow.push(trData[transHeaders[k]] !== undefined ? trData[transHeaders[k]] : '');
+      var kName = transHeaders[k];
+      trRow.push(data[kName] !== undefined ? data[kName] : '');
     }
     transSheet.appendRow(trRow);
     
@@ -367,18 +456,29 @@ export default function SetupGuide() {
   if(action === 'stockOut') {
     var stockSheet = ss.getSheetByName('stock');
     var transSheet = ss.getSheetByName('transactions');
-    var stockId = data.stock_id || (data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area + '_' + (data.expiry_date || '') + '_' + (data.specification || ''));
     var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
+    var stockId = data.stock_id || [data.product_id, data.location, data.floor, data.area, data.expiry_date || '', data.specification || ''].join('_').replace(/_+$/, '');
 
-    if(stockSheet && stockSheet.getLastRow() > 0) {
+    if(stockSheet && stockSheet.getLastRow() > 1) {
+      var stockHeaders = stockSheet.getRange(1, 1, 1, stockSheet.getLastColumn()).getValues()[0];
       var values = stockSheet.getDataRange().getValues();
-      var headers = values[0];
-      var qtyIdx = headers.indexOf('quantity');
-      var updateIdx = headers.indexOf('last_update');
+      var idIdx = stockHeaders.indexOf('stock_id');
+      var qtyIdx = stockHeaders.indexOf('quantity');
+      var updateIdx = stockHeaders.indexOf('last_update');
 
       for (var i = 1; i < values.length; i++) {
-         if (values[i][0] == stockId || values[i][0] == data.stock_id) {
-            var newQ = Number(values[i][qtyIdx]) - Number(data.quantity);
+         var matchById = (idIdx !== -1 && values[i][idIdx] == stockId);
+         var matchByAttrs = (
+           values[i][stockHeaders.indexOf('product_id')] == data.product_id &&
+           values[i][stockHeaders.indexOf('location')] == data.location &&
+           values[i][stockHeaders.indexOf('floor')] == data.floor &&
+           values[i][stockHeaders.indexOf('area')] == data.area &&
+           String(values[i][stockHeaders.indexOf('expiry_date')] || '') == String(data.expiry_date || '') &&
+           String(values[i][stockHeaders.indexOf('specification')] || '') == String(data.specification || '')
+         );
+
+         if (matchById || matchByAttrs) {
+            var newQ = (Number(values[i][qtyIdx]) || 0) - Number(data.quantity);
             if (newQ <= 0) {
                stockSheet.deleteRow(i + 1);
             } else {
@@ -390,25 +490,18 @@ export default function SetupGuide() {
       }
     }
     
-    var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
-    if(transSheet.getLastRow() === 0) {
-      transSheet.appendRow(transHeaders);
-    } else {
-      transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
-      if (transHeaders.indexOf('specification') === -1) { transHeaders.push('specification'); transSheet.getRange(1, transHeaders.length).setValue('specification'); }
-      if (transHeaders.indexOf('cost_price') === -1) { transHeaders.push('cost_price'); transSheet.getRange(1, transHeaders.length).setValue('cost_price'); }
-      if (transHeaders.indexOf('vendor_id') === -1) { transHeaders.push('vendor_id'); transSheet.getRange(1, transHeaders.length).setValue('vendor_id'); }
-    }
-    
-    var trData = {
-      transaction_id: Utilities.getUuid(), product_id: data.product_id, type: 'stock_out',
-      quantity: data.quantity, location: data.location, floor: data.floor, area: data.area,
-      specification: data.specification, cost_price: '', vendor_id: '', date: now, note: '', operator: data.operator
-    };
+    var transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+    data.transaction_id = Utilities.getUuid();
+    data.type = 'stock_out';
+    data.date = now;
+    data.note = data.note || '';
+    data.cost_price = '';
+    data.vendor_id = '';
     
     var trRow = [];
     for (var k = 0; k < transHeaders.length; k++) {
-      trRow.push(trData[transHeaders[k]] !== undefined ? trData[transHeaders[k]] : '');
+      var kName = transHeaders[k];
+      trRow.push(data[kName] !== undefined ? data[kName] : '');
     }
     transSheet.appendRow(trRow);
     
@@ -416,54 +509,56 @@ export default function SetupGuide() {
   }
 
   if(action === 'adjustStock') {
-      var stockSheet = ss.getSheetByName('stock');
-      var transSheet = ss.getSheetByName('transactions');
-      var stockId = data.stock_id || (data.product_id + '_' + data.location + '_' + data.floor + '_' + data.area + '_' + (data.expiry_date || '') + '_' + (data.specification || ''));
-      var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
-      
-      if(stockSheet && stockSheet.getLastRow() > 0) {
-        var values = stockSheet.getDataRange().getValues();
-        var headers = values[0];
-        var qtyIdx = headers.indexOf('quantity');
-        var updateIdx = headers.indexOf('last_update');
+    var stockSheet = ss.getSheetByName('stock');
+    var transSheet = ss.getSheetByName('transactions');
+    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
+    var stockId = data.stock_id || [data.product_id, data.location, data.floor, data.area, data.expiry_date || '', data.specification || ''].join('_').replace(/_+$/, '');
+    
+    if(stockSheet && stockSheet.getLastRow() > 1) {
+      var stockHeaders = stockSheet.getRange(1, 1, 1, stockSheet.getLastColumn()).getValues()[0];
+      var values = stockSheet.getDataRange().getValues();
+      var idIdx = stockHeaders.indexOf('stock_id');
+      var qtyIdx = stockHeaders.indexOf('quantity');
+      var updateIdx = stockHeaders.indexOf('last_update');
 
-        for (var i = 1; i < values.length; i++) {
-           if (values[i][0] == stockId || values[i][0] == data.stock_id) {
-              if (Number(data.quantity) <= 0) {
-                 stockSheet.deleteRow(i + 1);
-              } else {
-                 stockSheet.getRange(i+1, qtyIdx + 1).setValue(Number(data.quantity));
-                 if (updateIdx !== -1) stockSheet.getRange(i+1, updateIdx + 1).setValue(now);
-              }
-              break;
-           }
-        }
-      }
-      
-      var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
-      if(transSheet.getLastRow() === 0) {
-        transSheet.appendRow(transHeaders);
-      } else {
-        transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
-        if (transHeaders.indexOf('specification') === -1) { transHeaders.push('specification'); transSheet.getRange(1, transHeaders.length).setValue('specification'); }
-        if (transHeaders.indexOf('cost_price') === -1) { transHeaders.push('cost_price'); transSheet.getRange(1, transHeaders.length).setValue('cost_price'); }
-        if (transHeaders.indexOf('vendor_id') === -1) { transHeaders.push('vendor_id'); transSheet.getRange(1, transHeaders.length).setValue('vendor_id'); }
-      }
-      
-      var trData = {
-        transaction_id: Utilities.getUuid(), product_id: data.product_id, type: 'adjust',
-        quantity: data.quantity, location: data.location, floor: data.floor, area: data.area,
-        specification: data.specification, cost_price: '', vendor_id: '', date: now, note: data.note, 
-        operator: data.operator
-      };
-      
-      var trRow = [];
-      for (var k = 0; k < transHeaders.length; k++) {
-        trRow.push(trData[transHeaders[k]] !== undefined ? trData[transHeaders[k]] : '');
-      }
-      transSheet.appendRow(trRow);
+      for (var i = 1; i < values.length; i++) {
+         var matchById = (idIdx !== -1 && values[i][idIdx] == stockId);
+         var matchByAttrs = (
+           values[i][stockHeaders.indexOf('product_id')] == data.product_id &&
+           values[i][stockHeaders.indexOf('location')] == data.location &&
+           values[i][stockHeaders.indexOf('floor')] == data.floor &&
+           values[i][stockHeaders.indexOf('area')] == data.area &&
+           String(values[i][stockHeaders.indexOf('expiry_date')] || '') == String(data.expiry_date || '') &&
+           String(values[i][stockHeaders.indexOf('specification')] || '') == String(data.specification || '')
+         );
 
-      return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
+         if (matchById || matchByAttrs) {
+            if (Number(data.quantity) <= 0) {
+               stockSheet.deleteRow(i + 1);
+            } else {
+               stockSheet.getRange(i+1, qtyIdx + 1).setValue(Number(data.quantity));
+               if (updateIdx !== -1) stockSheet.getRange(i+1, updateIdx + 1).setValue(now);
+            }
+            break;
+         }
+      }
+    }
+    
+    var transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+    data.transaction_id = Utilities.getUuid();
+    data.type = 'adjust';
+    data.date = now;
+    data.cost_price = '';
+    data.vendor_id = '';
+    
+    var trRow = [];
+    for (var k = 0; k < transHeaders.length; k++) {
+      var kName = transHeaders[k];
+      trRow.push(data[kName] !== undefined ? data[kName] : '');
+    }
+    transSheet.appendRow(trRow);
+
+    return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
 }
 

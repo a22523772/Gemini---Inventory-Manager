@@ -23,7 +23,7 @@ export default function AddProduct() {
   }, [products]);
 
   // Form state
-  const [productId, setProductId] = useState(`P${Date.now().toString().slice(-6)}`);
+  const [productId, setProductId] = useState('');
   const [barcode, setBarcode] = useState(searchParams.get('pid') || '');
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
@@ -113,14 +113,14 @@ export default function AddProduct() {
         
         <div className="glass-panel p-4 rounded-2xl space-y-4">
           <div>
-            <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">商品 ID (唯一)</label>
+            <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">商品 ID (留空將由系統自動編號)</label>
             <input
               type="text"
-              required
               disabled={!!existingProduct}
               value={productId}
               onChange={(e) => setProductId(e.target.value)}
-              className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              placeholder="例如：P000001 (選填)"
+              className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] placeholder-[var(--color-text-dim)] focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             />
           </div>
 

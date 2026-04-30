@@ -27,6 +27,7 @@ export type Product = {
 export type Stock = {
   stock_id: string;
   product_id: string;
+  name?: string;
   location: string;
   floor: string;
   area: string;
