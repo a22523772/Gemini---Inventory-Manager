@@ -66,13 +66,20 @@ export default function Products() {
         const key = p.barcode || p.product_id;
         if (!groups[key]) {
             groups[key] = { 
-              product: p, 
+              product: { ...p }, 
               stockEntries: [], 
               totalStock: 0, 
               totalCostValue: 0,
               isExpired: false,
               isExpiringSoon: false
             };
+        }
+        if (p.specification) {
+            const existingProd = groups[key].product;
+            const specs = [existingProd.specification, p.specification]
+                .flatMap(spec => spec ? spec.split(/[,\/，\s、]+/).map(s => s.trim()).filter(Boolean) : []);
+            const uniqSpecs = Array.from(new Set(specs));
+            existingProd.specification = uniqSpecs.join('、');
         }
      });
 

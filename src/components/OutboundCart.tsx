@@ -441,7 +441,7 @@ export default function OutboundCart() {
                              >
                                {availableStocks.map(s => (
                                  <option key={s.stock_id} value={s.stock_id}>
-                                   {s.location}-{s.floor}-{s.area} [剩餘: {s.quantity}] {s.expiry_date ? `(效: ${s.expiry_date})` : ''}
+                                   {s.location}-{s.floor}-{s.area} {s.specification ? `[${s.specification}]` : ''} [剩餘: {s.quantity}] {s.expiry_date ? `(效: ${s.expiry_date})` : ''}
                                  </option>
                                ))}
                              </select>

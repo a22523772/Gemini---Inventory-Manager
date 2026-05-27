@@ -142,17 +142,39 @@ export default function StockManage() {
   const selectedStock = availableStockEntries.find(s => s.stock_id === selectedStockId);
 
   const getSpecOptions = useMemo(() => {
-    if (!product?.specification) return [];
-    // Split by comma, slash, or full-width comma
-    return product.specification.split(/[,\/，\s]+/).map(s => s.trim()).filter(Boolean);
-  }, [product?.specification]);
+    if (!product) return [];
+    const matchingProducts = products.filter(p => p.product_id === product.product_id);
+    const allSpecs: string[] = [];
+    matchingProducts.forEach(p => {
+      if (p.specification) {
+        p.specification.split(/[,\/，\s、]+/).forEach(s => {
+          const trimmed = s.trim();
+          if (trimmed && !allSpecs.includes(trimmed)) {
+            allSpecs.push(trimmed);
+          }
+        });
+      }
+    });
+    return allSpecs;
+  }, [product, products]);
 
   useEffect(() => {
     if (product) {
       if (type === 'stock_in') {
         setCurrentExpiry('');
-        const specs = product.specification?.split(/[,\/，\s]+/).map(s => s.trim()).filter(Boolean) || [];
-        setCurrentSpecification(specs[0] || '');
+        const matchingProducts = products.filter(p => p.product_id === product.product_id);
+        const allSpecs: string[] = [];
+        matchingProducts.forEach(p => {
+          if (p.specification) {
+            p.specification.split(/[,\/，\s、]+/).forEach(s => {
+              const trimmed = s.trim();
+              if (trimmed && !allSpecs.includes(trimmed)) {
+                allSpecs.push(trimmed);
+              }
+            });
+          }
+        });
+        setCurrentSpecification(allSpecs[0] || '');
         setCostPrice(product.cost_price?.toString() || '');
         setVendorId(product.vendor_id || '');
       } else if (selectedStock) {
@@ -386,20 +408,26 @@ export default function StockManage() {
           </div>
         )}
 
-        {type === 'stock_in' && getSpecOptions.length > 0 && (
+        {type === 'stock_in' && (
           <div className="animate-in fade-in slide-in-from-top-2 p-3 border border-[var(--color-accent-blue)]/30 bg-[var(--color-accent-blue)]/5 rounded-xl">
             <label className="block text-sm font-bold text-[var(--color-accent-blue)] uppercase tracking-wider text-[10px] mb-1">
-              商品規格 (請選擇)
+              商品規格 {getSpecOptions.length > 0 ? '(可點選下拉選單或手動輸入新規格)' : '(手動輸入)'}
             </label>
-            <select
+            <input
+              type="text"
+              list="spec-suggestions"
               value={currentSpecification}
               onChange={(e) => setCurrentSpecification(e.target.value)}
+              placeholder="例如：灰 或 紅色 (可自行輸入新規格)"
               className="block w-full rounded-xl border border-white/10 bg-black/20 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all"
-            >
-              {getSpecOptions.map(opt => (
-                <option key={opt} value={opt}>{opt}</option>
-              ))}
-            </select>
+            />
+            {getSpecOptions.length > 0 && (
+              <datalist id="spec-suggestions">
+                {getSpecOptions.map(opt => (
+                  <option key={opt} value={opt} />
+                ))}
+              </datalist>
+            )}
           </div>
         )}
 

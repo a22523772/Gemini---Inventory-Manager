@@ -63,7 +63,22 @@ export default function AddProduct() {
       setName(existingProduct.name);
       setCategory(existingProduct.category || '');
       setBrand(existingProduct.brand || '');
-      setSpecification(existingProduct.specification || '');
+      
+      // Merge any multiple specification rows for safety when displaying in editing mode
+      const sameProducts = products.filter(p => p.product_id === existingProduct.product_id);
+      const allSpecs: string[] = [];
+      sameProducts.forEach(p => {
+        if (p.specification) {
+          p.specification.split(/[,\/，\s、]+/).forEach(s => {
+            const trimmed = s.trim();
+            if (trimmed && !allSpecs.includes(trimmed)) {
+              allSpecs.push(trimmed);
+            }
+          });
+        }
+      });
+      setSpecification(allSpecs.join('、'));
+
       setUnit(existingProduct.unit || '個');
       setCostPrice(existingProduct.cost_price?.toString() || '');
       setVendorId(existingProduct.vendor_id || '');
@@ -226,7 +241,10 @@ export default function AddProduct() {
             </div>
             <div>
               <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">規格</label>
-              <input type="text" value={specification} onChange={(e) => setSpecification(e.target.value)} placeholder="例如：大號 / 紅色" className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
+              <input type="text" value={specification} onChange={(e) => setSpecification(e.target.value)} placeholder="例如：紅色, 藍色, 黑色" className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
+              <p className="mt-1 text-[10px] text-[var(--color-text-dim)] leading-normal">
+                💡 可輸入多個規格，請用 <strong>全/半形逗號</strong>、<strong>斜線</strong> 或 <strong>頓號</strong> 隔開（例如：<code>大號, 中號, 小號</code> 或 <code>紅、黃、藍</code>）
+              </p>
             </div>
           </div>
 

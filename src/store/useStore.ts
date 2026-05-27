@@ -446,15 +446,30 @@ export const useStore = create<AppState>((set, get) => ({
       if (rP.ok) {
         const dP = await rP.json();
         
-        // Normalize boolean strings from GAS DisplayValues
-        const normalizedProducts = dP
-          .filter((p: any) => p && p.product_id)
-          .map((p: any) => ({
-            ...p,
-            has_expiry: String(p.has_expiry).toUpperCase() === 'TRUE',
-            cost_price: Number(p.cost_price) || 0,
-            min_stock: p.min_stock !== undefined ? Number(p.min_stock) : undefined
-          }));
+        // If there are duplicate product_ids or multiple records, merge their specifications cleanly
+        const productMap: Record<string, any> = {};
+        dP.filter((p: any) => p && p.product_id).forEach((p: any) => {
+          const id = p.product_id;
+          if (!productMap[id]) {
+            productMap[id] = {
+              ...p,
+              has_expiry: String(p.has_expiry).toUpperCase() === 'TRUE',
+              cost_price: Number(p.cost_price) || 0,
+              min_stock: p.min_stock !== undefined ? Number(p.min_stock) : undefined
+            };
+          } else {
+            // Merge specifications
+            const s1 = productMap[id].specification || '';
+            const s2 = p.specification || '';
+            const combinedSpecs = Array.from(new Set(
+              [s1, s2]
+                .flatMap(spec => spec ? spec.split(/[,\/，\s、]+/).map((s: any) => s.trim()).filter(Boolean) : [])
+            )).join('、');
+            productMap[id].specification = combinedSpecs;
+          }
+        });
+
+        const normalizedProducts = Object.values(productMap);
 
         await dbProducts.clear();
         for (const p of normalizedProducts) {
@@ -525,7 +540,10 @@ export const useStore = create<AppState>((set, get) => ({
     
     // Save to local cache optimistic update
     await dbProducts.setItem(newProduct.product_id, newProduct);
-    set(state => ({ products: [...state.products, newProduct] }));
+    set(state => {
+      const filtered = state.products.filter(p => p.product_id !== id);
+      return { products: [...filtered, newProduct] };
+    });
     
     // Queue the sync to Google Sheets (Original payload if it was empty id)
     const syncPayload = { ...product, created_at: formattedDate };
@@ -533,8 +551,14 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   editProduct: async (product) => {
+    // Write updated product directly to dbProducts cache
     await dbProducts.setItem(product.product_id, product);
-    set(state => ({ products: state.products.map(p => p.product_id === product.product_id ? product : p) }));
+    
+    // Update state first
+    set(state => ({
+      products: state.products.map(p => p.product_id === product.product_id ? { ...p, ...product } : p)
+    }));
+
     await get().enqueueAction('editProduct', product);
   },
 
