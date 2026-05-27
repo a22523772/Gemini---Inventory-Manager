@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { dbProducts, dbStock, dbVendors, dbSyncQueue, dbSettings, dbTransactions, Product, Stock, Vendor, SyncItem, Transaction } from '../lib/db';
 import { v4 as uuidv4 } from 'uuid';
+import { format, subDays } from 'date-fns';
 
 interface AppState {
   products: Product[];
@@ -26,12 +27,55 @@ interface AppState {
   editVendor: (vendor: Vendor) => Promise<void>;
   deleteVendor: (vendorId: string) => Promise<void>;
   reformatDatabase: () => Promise<void>;
+  overwriteCloudStock: () => Promise<boolean>;
+  overwriteCloudTransactions: () => Promise<boolean>;
   toastMessage: string | null;
   showToast: (msg: string) => void;
   lowStockAlertEnabled: boolean;
   setLowStockAlertEnabled: (enabled: boolean) => Promise<void>;
   expiryThreshold: number;
   setExpiryThreshold: (days: number) => Promise<void>;
+
+  // Page Preserving States
+  productsPageState: {
+    searchTerm: string;
+    filterBrand: string;
+    filterCategory: string;
+    filterVendor: string;
+    sortOrder: string;
+    showFilters: boolean;
+  };
+  setProductsPageState: (state: Partial<AppState['productsPageState']>) => void;
+
+  transactionsPageState: {
+    filterType: string;
+    searchTerm: string;
+    startDate: string;
+    endDate: string;
+    filterLocation: string;
+    showFilters: boolean;
+  };
+  setTransactionsPageState: (state: Partial<AppState['transactionsPageState']>) => void;
+
+  reportsPageState: {
+    activeTab: 'dashboard' | 'list';
+  };
+  setReportsPageState: (state: Partial<AppState['reportsPageState']>) => void;
+
+  vendorsPageState: {
+    searchTerm: string;
+  };
+  setVendorsPageState: (state: Partial<AppState['vendorsPageState']>) => void;
+
+  // Route Memory
+  lastPaths: {
+    home: string;
+    products: string;
+    scan: string;
+    manage: string;
+    setup: string;
+  };
+  setLastPath: (key: 'home' | 'products' | 'scan' | 'manage' | 'setup', path: string) => void;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -48,6 +92,56 @@ export const useStore = create<AppState>((set, get) => ({
   toastMessage: null,
   lowStockAlertEnabled: true,
   expiryThreshold: 30,
+
+  // Page Preserving States
+  productsPageState: {
+    searchTerm: '',
+    filterBrand: '',
+    filterCategory: '',
+    filterVendor: '',
+    sortOrder: 'name_asc',
+    showFilters: false
+  },
+  setProductsPageState: (newState) => {
+    set((state) => ({ productsPageState: { ...state.productsPageState, ...newState } }));
+  },
+
+  transactionsPageState: {
+    filterType: '',
+    searchTerm: '',
+    startDate: format(subDays(new Date(), 7), 'yyyy-MM-dd'),
+    endDate: format(new Date(), 'yyyy-MM-dd'),
+    filterLocation: '',
+    showFilters: false
+  },
+  setTransactionsPageState: (newState) => {
+    set((state) => ({ transactionsPageState: { ...state.transactionsPageState, ...newState } }));
+  },
+
+  reportsPageState: {
+    activeTab: 'dashboard'
+  },
+  setReportsPageState: (newState) => {
+    set((state) => ({ reportsPageState: { ...state.reportsPageState, ...newState } }));
+  },
+
+  vendorsPageState: {
+    searchTerm: ''
+  },
+  setVendorsPageState: (newState) => {
+    set((state) => ({ vendorsPageState: { ...state.vendorsPageState, ...newState } }));
+  },
+
+  lastPaths: {
+    home: '/',
+    products: '/products',
+    scan: '/scan',
+    manage: '/manage?type=stock_in',
+    setup: '/setup'
+  },
+  setLastPath: (key, path) => {
+    set((state) => ({ lastPaths: { ...state.lastPaths, [key]: path } }));
+  },
 
   setLowStockAlertEnabled: async (enabled: boolean) => {
     await dbSettings.setItem('lowStockAlertEnabled', enabled);
@@ -137,19 +231,158 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   enqueueAction: async (action, payload) => {
+    // Fill in product name for GAS if missing first!
+    const { products } = get();
+    const product = products.find(p => p.product_id === payload.product_id);
+    const updatedPayload = { ...payload };
+    if (product && !updatedPayload.name) {
+        updatedPayload.name = product.name;
+    }
+
     const item: SyncItem = {
       id: uuidv4(),
       action,
-      payload: { ...payload, operator: get().operator },
+      payload: { ...updatedPayload, operator: get().operator },
       timestamp: new Date().toISOString()
     };
     await dbSyncQueue.setItem(item.id, item);
-    
-    // Fill in product name for GAS if missing
-    const { products } = get();
-    const product = products.find(p => p.product_id === payload.product_id);
-    if (product && !payload.name) {
-        payload.name = product.name;
+
+    // Optimistic Local Updates for instant local UI responsiveness & sheet sync assurance!
+    if (action === 'stockIn') {
+        const { stock, transactions } = get();
+        const existingIdx = stock.findIndex(s => 
+            s.product_id === updatedPayload.product_id &&
+            s.location === updatedPayload.location &&
+            s.floor === updatedPayload.floor &&
+            s.area === updatedPayload.area &&
+            (s.expiry_date || '') === (updatedPayload.expiry_date || '') &&
+            (s.specification || '') === (updatedPayload.specification || '')
+        );
+
+        let updatedStock = [...stock];
+        if (existingIdx !== -1) {
+            updatedStock[existingIdx] = {
+                ...updatedStock[existingIdx],
+                quantity: updatedStock[existingIdx].quantity + Number(updatedPayload.quantity),
+                last_update: new Date().toISOString()
+            };
+            await dbStock.setItem(updatedStock[existingIdx].stock_id, updatedStock[existingIdx]);
+        } else {
+            const newStock: Stock = {
+                stock_id: `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
+                product_id: updatedPayload.product_id,
+                name: product?.name || '',
+                location: updatedPayload.location,
+                floor: updatedPayload.floor,
+                area: updatedPayload.area,
+                quantity: Number(updatedPayload.quantity),
+                expiry_date: updatedPayload.expiry_date || '',
+                specification: updatedPayload.specification || '',
+                last_update: new Date().toISOString()
+            };
+            updatedStock.push(newStock);
+            await dbStock.setItem(newStock.stock_id, newStock);
+        }
+
+        const newTx: Transaction = {
+            id: uuidv4(),
+            transaction_id: `TX_${Date.now()}`,
+            product_id: updatedPayload.product_id,
+            type: 'stock_in',
+            quantity: Number(updatedPayload.quantity),
+            location: updatedPayload.location,
+            floor: updatedPayload.floor,
+            area: updatedPayload.area,
+            specification: updatedPayload.specification || '',
+            cost_price: Number(updatedPayload.cost_price) || 0,
+            vendor_id: updatedPayload.vendor_id || '',
+            date: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
+            note: updatedPayload.note || '',
+            operator: get().operator
+        };
+
+        const updatedTx = [newTx, ...transactions];
+        await dbTransactions.setItem(newTx.transaction_id, newTx);
+        
+        set({ stock: updatedStock, transactions: updatedTx });
+    } else if (action === 'stockOut') {
+        const { stock, transactions } = get();
+        const existingIdx = stock.findIndex(s => s.stock_id === updatedPayload.stock_id);
+
+        let updatedStock = [...stock];
+        if (existingIdx !== -1) {
+            const currentQty = updatedStock[existingIdx].quantity;
+            const deduct = Number(updatedPayload.quantity);
+            if (currentQty <= deduct) {
+                const deletedId = updatedStock[existingIdx].stock_id;
+                updatedStock.splice(existingIdx, 1);
+                await dbStock.removeItem(deletedId);
+            } else {
+                updatedStock[existingIdx] = {
+                    ...updatedStock[existingIdx],
+                    quantity: currentQty - deduct,
+                    last_update: new Date().toISOString()
+                };
+                await dbStock.setItem(updatedStock[existingIdx].stock_id, updatedStock[existingIdx]);
+            }
+        }
+
+        const newTx: Transaction = {
+            id: uuidv4(),
+            transaction_id: `TX_${Date.now()}`,
+            product_id: updatedPayload.product_id,
+            type: 'stock_out',
+            quantity: Number(updatedPayload.quantity),
+            location: updatedPayload.location,
+            floor: updatedPayload.floor,
+            area: updatedPayload.area,
+            specification: updatedPayload.specification || '',
+            cost_price: product?.cost_price || 0,
+            vendor_id: product?.vendor_id || '',
+            date: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
+            note: updatedPayload.note || '',
+            operator: get().operator
+        };
+
+        const updatedTx = [newTx, ...transactions];
+        await dbTransactions.setItem(newTx.transaction_id, newTx);
+
+        set({ stock: updatedStock, transactions: updatedTx });
+    } else if (action === 'adjustStock') {
+        const { stock, transactions } = get();
+        const existingIdx = stock.findIndex(s => s.stock_id === updatedPayload.stock_id);
+
+        let updatedStock = [...stock];
+        if (existingIdx !== -1) {
+            updatedStock[existingIdx] = {
+                ...updatedStock[existingIdx],
+                quantity: Number(updatedPayload.quantity),
+                last_update: new Date().toISOString()
+            };
+            await dbStock.setItem(updatedStock[existingIdx].stock_id, updatedStock[existingIdx]);
+        }
+
+        const newTx: Transaction = {
+            id: uuidv4(),
+            transaction_id: `TX_${Date.now()}`,
+            product_id: updatedPayload.product_id,
+            type: 'adjust',
+            quantity: Number(updatedPayload.quantity),
+            location: updatedPayload.location,
+            floor: updatedPayload.floor,
+            area: updatedPayload.area,
+            specification: updatedPayload.specification || '',
+            cost_price: product?.cost_price || 0,
+            vendor_id: product?.vendor_id || '',
+            date: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
+            note: updatedPayload.note || '',
+            operator: get().operator
+        };
+
+        const updatedTx = [newTx, ...transactions];
+        await dbTransactions.setItem(newTx.transaction_id, newTx);
+
+        set({ stock: updatedStock, transactions: updatedTx });
     }
 
     set((state) => ({ 
@@ -350,6 +583,58 @@ export const useStore = create<AppState>((set, get) => ({
       }
     } catch (e: any) {
       set({ error: `重整失敗: ${e.message}` });
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  overwriteCloudStock: async () => {
+    const { gasApiUrl, stock } = get();
+    if (!gasApiUrl) return false;
+    set({ isLoading: true, error: null });
+    try {
+      const res = await fetch(`${gasApiUrl}?action=overwriteStock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(stock)
+      });
+      if (res.ok) {
+        const d = await res.json();
+        if (d.success) {
+          get().showToast(`✅ 庫存工作表已同步修復！共覆載了 ${stock.length} 筆庫存紀錄。`);
+          return true;
+        }
+      }
+      throw new Error('伺服器回應異常，請確認 Web App 已更新為最新代碼！');
+    } catch (e: any) {
+      set({ error: `強行修復庫存表失敗: ${e.message}` });
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  overwriteCloudTransactions: async () => {
+    const { gasApiUrl, transactions } = get();
+    if (!gasApiUrl) return false;
+    set({ isLoading: true, error: null });
+    try {
+      const res = await fetch(`${gasApiUrl}?action=overwriteTransactions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(transactions)
+      });
+      if (res.ok) {
+        const d = await res.json();
+        if (d.success) {
+          get().showToast(`✅ 進出貨紀錄工作表已補齊！共覆載了 ${transactions.length} 筆紀錄。`);
+          return true;
+        }
+      }
+      throw new Error('伺服器回應異常，請確認 Web App 已更新為最新代碼！');
+    } catch (e: any) {
+      set({ error: `強行修復紀錄表失敗: ${e.message}` });
+      return false;
     } finally {
       set({ isLoading: false });
     }

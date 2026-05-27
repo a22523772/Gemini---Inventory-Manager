@@ -1,12 +1,19 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { Save, Check, RefreshCw, FileCode2 } from 'lucide-react';
+import { Save, Check, RefreshCw, FileCode2, AlertTriangle, X } from 'lucide-react';
 
 export default function SetupGuide() {
-  const { gasApiUrl, setGasApiUrl, syncData, syncQueue, operator, setOperator, isLoading } = useStore();
+  const { gasApiUrl, setGasApiUrl, syncData, syncQueue, operator, setOperator, isLoading, stock, transactions } = useStore();
   const [url, setUrl] = useState(gasApiUrl);
   const [saved, setSaved] = useState(false);
   const [tab, setTab] = useState<'settings' | 'docs'>('settings');
+
+  const [confirmAction, setConfirmAction] = useState<{
+    type: 'stock' | 'transactions' | null;
+    title: string;
+    message: string;
+    targetCount: number;
+  }>({ type: null, title: '', message: '', targetCount: 0 });
 
   useEffect(() => {
     setUrl(gasApiUrl);
@@ -16,6 +23,23 @@ export default function SetupGuide() {
     await setGasApiUrl(url);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleExecuteOverwrite = async () => {
+    const type = confirmAction.type;
+    setConfirmAction({ type: null, title: '', message: '', targetCount: 0 });
+    
+    if (type === 'stock') {
+      const success = await useStore.getState().overwriteCloudStock();
+      if (success) {
+        useStore.getState().showToast("✅ 庫存校正成功！雲端庫存工作表（stock）已完全還原為本系統資訊。");
+      }
+    } else if (type === 'transactions') {
+      const success = await useStore.getState().overwriteCloudTransactions();
+      if (success) {
+        useStore.getState().showToast("✅ 紀錄還原成功！雲端交易紀錄工作表（transactions）已完全同步補齊。");
+      }
+    }
   };
 
   return (
@@ -143,6 +167,66 @@ export default function SetupGuide() {
               >
                 整理資料庫格式與補齊 ID
               </button>
+            </div>
+
+            <div className="glass-panel p-4 rounded-2xl border-emerald-500/20 bg-emerald-500/5 space-y-4">
+              <h2 className="text-base font-bold text-emerald-200 flex items-center gap-1.5 animate-pulse">
+                <span>✨ 雲端試算表手動修復與強行校正</span>
+              </h2>
+              <p className="text-xs text-emerald-200/60">
+                如果您的 <strong>stock (庫存)</strong> 或 <strong>transactions (交易紀錄)</strong> 工作表與 APP 顯示的資訊 (APP 目前庫存、紀錄最完整) 不一致，請利用下方工具，以本地快取資料覆寫雲端：
+              </p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 font-semibold text-xs text-emerald-100">
+                <div className="p-3 bg-black/40 rounded-xl border border-white/5 space-y-2 flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <span>1. 庫存工作表 (stock) 校正</span>
+                    </div>
+                    <p className="text-[10px] text-zinc-400 font-mono mb-2">APP 本地庫存批次數：{stock.length} 筆</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setConfirmAction({
+                        type: 'stock',
+                        title: '確定強制覆寫雲端庫存嗎？',
+                        message: '確定要將雲端試算表的 stock 工作表完全覆蓋為此 APP 上之庫存嗎？雲端現有 stock 資料將被完全清除並重新寫入，本系統將以本地現有最新庫存資料覆蓋雲端！並同步修正。',
+                        targetCount: stock.length
+                      });
+                    }}
+                    disabled={isLoading || !gasApiUrl}
+                    className="w-full flex items-center justify-center py-2 px-3 rounded-lg text-xs font-bold transition-all border border-emerald-500/40 text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/30 disabled:opacity-50 cursor-pointer"
+                  >
+                    以本地快取強制覆寫雲端庫存
+                  </button>
+                </div>
+
+                <div className="p-3 bg-black/40 rounded-xl border border-white/5 space-y-2 flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <span>2. 交易紀錄 (transactions) 補齊</span>
+                    </div>
+                    <p className="text-[10px] text-zinc-400 font-mono mb-2">APP 本地紀錄：{transactions.length} 筆</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setConfirmAction({
+                        type: 'transactions',
+                        title: '確定強制還原雲端交易紀錄嗎？',
+                        message: '確定要將雲端試算表的 transactions 交易歷史工作表完全覆蓋並完整補回來嗎？雲端現有交易紀錄將被完全清除，本系統將以本地的正常運行歷史紀錄覆寫。',
+                        targetCount: transactions.length
+                      });
+                    }}
+                    disabled={isLoading || !gasApiUrl}
+                    className="w-full flex items-center justify-center py-2 px-3 rounded-lg text-xs font-bold transition-all border border-emerald-500/40 text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/30 disabled:opacity-50 cursor-pointer"
+                  >
+                    以本地快取強制還原雲端交易紀錄
+                  </button>
+                </div>
+              </div>
+              <p className="text-[10px] text-emerald-300/60 leading-relaxed md:leading-normal">
+                * 提醒：強行覆寫功能需要最新的 Apps Script 代碼。請點選上方「後端代碼與文件」，完整拷貝程式碼至 Apps Script 取代並儲存部署（部署為網頁應用程式 & 權限設定為任何人）。
+              </p>
             </div>
           </>
         )}
@@ -560,6 +644,54 @@ export default function SetupGuide() {
 
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
+
+  if (action === 'overwriteStock') {
+    var stockSheet = ss.getSheetByName('stock');
+    if (!stockSheet) stockSheet = ss.insertSheet('stock');
+    if (stockSheet.getLastRow() > 0) {
+      stockSheet.clear();
+    }
+    var stockHeaders = ['stock_id', 'product_id', 'name', 'location', 'floor', 'area', 'quantity', 'expiry_date', 'specification', 'last_update'];
+    stockSheet.appendRow(stockHeaders);
+    if (data && data.length > 0) {
+      var rows = [];
+      for (var i = 0; i < data.length; i++) {
+        var item = data[i];
+        var row = [];
+        for (var j = 0; j < stockHeaders.length; j++) {
+          var val = item[stockHeaders[j]];
+          row.push(val !== undefined ? val : '');
+        }
+        rows.push(row);
+      }
+      stockSheet.getRange(2, 1, rows.length, stockHeaders.length).setValues(rows);
+    }
+    return ContentService.createTextOutput(JSON.stringify({success:true, count: data.length})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'overwriteTransactions') {
+    var transSheet = ss.getSheetByName('transactions');
+    if (!transSheet) transSheet = ss.insertSheet('transactions');
+    if (transSheet.getLastRow() > 0) {
+      transSheet.clear();
+    }
+    var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
+    transSheet.appendRow(transHeaders);
+    if (data && data.length > 0) {
+      var rows = [];
+      for (var i = 0; i < data.length; i++) {
+        var item = data[i];
+        var row = [];
+        for (var j = 0; j < transHeaders.length; j++) {
+          var val = item[transHeaders[j]];
+          row.push(val !== undefined ? val : '');
+        }
+        rows.push(row);
+      }
+      transSheet.getRange(2, 1, rows.length, transHeaders.length).setValues(rows);
+    }
+    return ContentService.createTextOutput(JSON.stringify({success:true, count: data.length})).setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 function doGet(e) {
@@ -700,6 +832,42 @@ class ScannerScreen extends StatelessWidget {
            </div>
         )}
       </div>
+
+      {confirmAction.type !== null && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-[#0f172a] border border-white/10 rounded-2xl overflow-hidden shadow-2xl p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2 bg-amber-500/20 border border-amber-500/30 rounded-xl shrink-0">
+                <AlertTriangle className="w-5 h-5 text-amber-400" />
+              </div>
+              <div className="flex-1 space-y-1">
+                <h3 className="text-sm font-bold text-white mb-1">{confirmAction.title}</h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">{confirmAction.message}</p>
+              </div>
+            </div>
+
+            <div className="bg-white/5 rounded-xl p-3 border border-white/5 flex justify-between items-center text-xs font-mono">
+              <span className="text-zinc-500 font-sans">本地預備寫入筆數</span>
+              <span className="text-emerald-400 font-bold">{confirmAction.targetCount} 筆</span>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => setConfirmAction({ type: null, title: '', message: '', targetCount: 0 })}
+                className="flex-1 py-2 px-4 bg-white/5 border border-white/10 hover:bg-white/10 rounded-xl text-xs font-bold text-zinc-300 transition-colors cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleExecuteOverwrite}
+                className="flex-1 py-2 px-4 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-[#0f172a] rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-500/15 cursor-pointer"
+              >
+                確認執行覆寫
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

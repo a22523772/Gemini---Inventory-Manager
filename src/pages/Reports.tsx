@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { 
   BarChart2, List, AlertTriangle, Clock, MapPin, 
@@ -6,17 +6,34 @@ import {
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
-  PieChart, Pie, Cell, Legend
+  PieChart, Pie, Cell, Legend, LabelList
 } from 'recharts';
 import { format, differenceInDays, subDays } from 'date-fns';
+
+// Suppress Recharts defaultProps deprecation warning in React 18
+const originalWarn = console.warn;
+console.warn = (...args) => {
+  if (typeof args[0] === 'string' && args[0].includes('defaultProps')) return;
+  originalWarn(...args);
+};
+
+const originalError = console.error;
+console.error = (...args) => {
+  if (typeof args[0] === 'string' && (args[0].includes('defaultProps') || args[0].includes('ResponsiveContainer'))) return;
+  originalError(...args);
+};
 
 type TabType = 'dashboard' | 'list';
 
 export default function Reports() {
-  const { products, stock, transactions, vendors, expiryThreshold } = useStore();
-  const [activeTab, setActiveTab] = useState<TabType>('dashboard');
+  const { products, stock, transactions, vendors, expiryThreshold, reportsPageState, setReportsPageState } = useStore();
+  const [activeTab, setActiveTab] = useState<TabType>(reportsPageState.activeTab || 'dashboard');
 
   const now = new Date();
+
+  useEffect(() => {
+    setReportsPageState({ activeTab });
+  }, [activeTab, setReportsPageState]);
 
   // 1. Data Processing
   const reportData = useMemo(() => {
@@ -175,18 +192,20 @@ export default function Reports() {
 
       <div className="glass-panel p-4 rounded-xl flex flex-col items-start justify-start w-full overflow-hidden">
          <h3 className="text-sm font-bold text-[var(--color-text-main)] mb-4 flex items-center w-full"><TrendingUp className="w-4 h-4 mr-2 text-emerald-400"/> 近 30 天熱銷排行 (出貨量)</h3>
-         <div className="w-full h-[220px]">
-           <ResponsiveContainer width="100%" height={220}>
-             <BarChart data={reportData.hotItems} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+         <div className="w-full h-[280px]">
+           <ResponsiveContainer width="100%" height={280}>
+             <BarChart data={reportData.hotItems} layout="vertical" margin={{ top: 15, right: 30, left: 10, bottom: 5 }}>
                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
-               <XAxis type="number" stroke="#64748b" />
-               <YAxis dataKey="product.name" type="category" width={110} stroke="#64748b" tick={{fontSize: 10, fill: '#cbd5e1'}} interval={0} />
+               <XAxis type="number" stroke="#64748b" hide />
+               <YAxis dataKey="product.name" type="category" hide />
                <Tooltip 
                  cursor={{fill: 'rgba(255,255,255,0.1)'}}
                  contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px', color: '#fff' }}
                  formatter={(value: number) => [`${value} 件`, '出貨量']}
                />
-               <Bar dataKey="sales" fill="#10b981" radius={[0, 4, 4, 0]} />
+               <Bar dataKey="sales" fill="#10b981" radius={[0, 4, 4, 0]} barSize={16}>
+                 <LabelList dataKey="product.name" position="top" fill="#ffffff" fontSize={11} offset={4} style={{fontWeight: '500'}} />
+               </Bar>
              </BarChart>
            </ResponsiveContainer>
          </div>

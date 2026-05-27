@@ -37,7 +37,27 @@ export default function AddProduct() {
   const [expiryDate, setExpiryDate] = useState('');
 
   useEffect(() => {
-    if (existingProduct) {
+    const draftStr = sessionStorage.getItem('add_product_draft');
+    if (draftStr) {
+      try {
+        const draft = JSON.parse(draftStr);
+        setProductId(draft.productId || '');
+        setBarcode(draft.barcode || '');
+        setName(draft.name || '');
+        setCategory(draft.category || '');
+        setBrand(draft.brand || '');
+        setSpecification(draft.specification || '');
+        setUnit(draft.unit || '個');
+        setCostPrice(draft.costPrice || '');
+        setVendorId(draft.vendorId || '');
+        setHasExpiry(draft.hasExpiry || false);
+        setMinStock(draft.minStock || '');
+        if (draft.expiryDate) setExpiryDate(draft.expiryDate);
+      } catch (e) {
+        console.error("Error restoring product draft:", e);
+      }
+      sessionStorage.removeItem('add_product_draft');
+    } else if (existingProduct) {
       setProductId(existingProduct.product_id);
       setBarcode(existingProduct.barcode || '');
       setName(existingProduct.name);
@@ -51,6 +71,13 @@ export default function AddProduct() {
       setMinStock(existingProduct.min_stock?.toString() || '');
     }
   }, [existingProduct]);
+
+  useEffect(() => {
+    const pid = searchParams.get('pid');
+    if (pid) {
+      setBarcode(pid);
+    }
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -146,9 +173,25 @@ export default function AddProduct() {
                 placeholder="手動輸入或掃描"
                 className="flex-1 block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] placeholder-[var(--color-text-dim)] focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] outline-none transition-all"
               />
-              <button 
+               <button 
                 type="button" 
-                onClick={() => navigate(`/scan?returnTo=${encodeURIComponent(`/add-product${existingProduct ? `?editId=${existingProduct.product_id}` : ''}`)}`)}
+                onClick={() => {
+                  sessionStorage.setItem('add_product_draft', JSON.stringify({
+                    productId,
+                    barcode,
+                    name,
+                    category,
+                    brand,
+                    specification,
+                    unit,
+                    costPrice,
+                    vendorId,
+                    hasExpiry,
+                    minStock,
+                    expiryDate
+                  }));
+                  navigate(`/scan?returnTo=${encodeURIComponent(`/add-product${existingProduct ? `?editId=${existingProduct.product_id}` : ''}`)}`);
+                }}
                 className="px-4 py-2 glass-panel text-[var(--color-accent-blue)] rounded-xl font-bold flex items-center justify-center hover:bg-white/10 transition-colors"
                 title="掃描條碼"
               >

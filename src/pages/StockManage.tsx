@@ -32,6 +32,7 @@ export default function StockManage() {
   const [filterCategory, setFilterCategory] = useState('');
   const [filterBrand, setFilterBrand] = useState('');
   const [filterVendor, setFilterVendor] = useState('');
+  const [sortOrder, setSortOrder] = useState('name_asc');
 
   // Extract unique brands and categories for dropdowns
   const brands = useMemo(() => Array.from(new Set(products.map(p => p.brand).filter(Boolean))), [products]);
@@ -54,8 +55,27 @@ export default function StockManage() {
     if (filterBrand) result = result.filter(p => p.brand === filterBrand);
     if (filterVendor) result = result.filter(p => p.vendor_id === filterVendor);
 
-    return result;
-  }, [searchTerm, products, filterCategory, filterBrand, filterVendor]);
+    // Dynamic stock aggregation for sorting
+    const productTotalStock: Record<string, number> = {};
+    stock.forEach(s => {
+      productTotalStock[s.product_id] = (productTotalStock[s.product_id] || 0) + s.quantity;
+    });
+
+    const sorted = [...result];
+    if (sortOrder === 'name_asc') {
+      sorted.sort((a, b) => a.name.localeCompare(b.name, 'zh-HK'));
+    } else if (sortOrder === 'name_desc') {
+      sorted.sort((a, b) => b.name.localeCompare(a.name, 'zh-HK'));
+    } else if (sortOrder === 'newest') {
+      sorted.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    } else if (sortOrder === 'stock_low') {
+      sorted.sort((a, b) => (productTotalStock[a.product_id] || 0) - (productTotalStock[b.product_id] || 0));
+    } else if (sortOrder === 'stock_high') {
+      sorted.sort((a, b) => (productTotalStock[b.product_id] || 0) - (productTotalStock[a.product_id] || 0));
+    }
+
+    return sorted;
+  }, [searchTerm, products, filterCategory, filterBrand, filterVendor, sortOrder, stock]);
 
   const getVendorName = (vid: string) => {
     const v = vendors.find(v => v.vendor_id === vid);
@@ -66,6 +86,30 @@ export default function StockManage() {
   const uniqueLocations = Array.from(new Set(stock.map(s => s.location).filter(Boolean)));
   const uniqueFloors = Array.from(new Set(stock.map(s => s.floor).filter(Boolean)));
   const uniqueAreas = Array.from(new Set(stock.map(s => s.area).filter(Boolean)));
+
+  useEffect(() => {
+    const draftStr = sessionStorage.getItem('stock_manage_draft');
+    if (draftStr) {
+      try {
+        const draft = JSON.parse(draftStr);
+        if (draft.type) setType(draft.type);
+        if (draft.quantity) setQuantity(draft.quantity);
+        if (draft.location) setLocation(draft.location);
+        if (draft.floor) setFloor(draft.floor);
+        if (draft.area) setArea(draft.area);
+        if (draft.costPrice) setCostPrice(draft.costPrice);
+        if (draft.vendorId) setVendorId(draft.vendorId);
+        if (draft.note) setNote(draft.note);
+        if (draft.currentExpiry) setCurrentExpiry(draft.currentExpiry);
+        if (draft.currentSpecification) setCurrentSpecification(draft.currentSpecification);
+        if (draft.selectedStockId) setSelectedStockId(draft.selectedStockId);
+        if (draft.pid) setPid(draft.pid);
+      } catch (e) {
+        console.error("Error restoring stock draft:", e);
+      }
+      sessionStorage.removeItem('stock_manage_draft');
+    }
+  }, []);
 
   useEffect(() => {
     const scannedPid = searchParams.get('pid');
@@ -123,10 +167,17 @@ export default function StockManage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pid || !quantity || isSubmitting || !product) return;
+    if (!pid || quantity === '' || isSubmitting || !product) return;
     setIsSubmitting(true);
 
     const targetPid = product.product_id;
+
+    const parsedQty = Number(quantity);
+    if (isNaN(parsedQty) || (type !== 'adjust' && parsedQty <= 0) || (type === 'adjust' && parsedQty < 0)) {
+        showToast('❌ 請輸入正確的庫存數量！');
+        setIsSubmitting(false);
+        return;
+    }
 
     // Helper: Check if expired
     const isExpired = (dateStr?: string) => {
@@ -275,9 +326,25 @@ export default function StockManage() {
                 <span className="text-[var(--color-text-dim)]">點擊搜尋商品、條碼、ID...</span>
               )}
             </div>
-            <button 
+             <button 
               type="button" 
-              onClick={() => navigate(`/scan?returnTo=${encodeURIComponent('/manage?type=' + type)}`)}
+              onClick={() => {
+                sessionStorage.setItem('stock_manage_draft', JSON.stringify({
+                  type,
+                  quantity,
+                  location,
+                  floor,
+                  area,
+                  costPrice,
+                  vendorId,
+                  note,
+                  currentExpiry,
+                  currentSpecification,
+                  selectedStockId,
+                  pid
+                }));
+                navigate(`/scan?returnTo=${encodeURIComponent('/manage?type=' + type)}`);
+              }}
               className="w-12 flex items-center justify-center glass-panel text-[var(--color-accent-blue)] rounded-xl hover:bg-white/10"
             >
               <ScanBarcode className="w-5 h-5" />
@@ -362,7 +429,7 @@ export default function StockManage() {
           <input
             type="number"
             required
-            min="1"
+            min={type === 'adjust' ? "0" : "1"}
             value={quantity}
             onChange={(e) => setQuantity(e.target.value)}
             className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]"
@@ -501,10 +568,22 @@ export default function StockManage() {
                       <select 
                         value={filterVendor} 
                         onChange={e => setFilterVendor(e.target.value)}
-                        className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none min-w-[120px]"
+                        className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none min-w-[100px]"
                       >
                         <option value="" className="bg-[#0f172a]">所有廠商</option>
                         {uniqueVendors.map(v => <option key={v as string} value={v as string} className="bg-[#0f172a]">{getVendorName(v as string)}</option>)}
+                      </select>
+
+                      <select 
+                        value={sortOrder} 
+                        onChange={e => setSortOrder(e.target.value)}
+                        className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none min-w-[100px]"
+                      >
+                        <option value="name_asc" className="bg-[#0f172a]">排列風格: A-Z</option>
+                        <option value="name_desc" className="bg-[#0f172a]">排列風格: Z-A</option>
+                        <option value="newest" className="bg-[#0f172a]">排列風格: 最新上架</option>
+                        <option value="stock_low" className="bg-[#0f172a]">排列風格: 庫存低到高</option>
+                        <option value="stock_high" className="bg-[#0f172a]">排列風格: 庫存高到低</option>
                       </select>
                     </div>
                   )}

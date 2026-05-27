@@ -4,14 +4,25 @@ import { PackageOpen, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Calendar, Se
 import { format, subDays, isWithinInterval, startOfDay, endOfDay, parseISO } from 'date-fns';
 
 export default function Transactions() {
-  const { transactions, products, vendors } = useStore();
-  const [filterType, setFilterType] = useState('');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [startDate, setStartDate] = useState(format(subDays(new Date(), 7), 'yyyy-MM-dd'));
-  const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [showFilters, setShowFilters] = useState(false);
-  const [filterLocation, setFilterLocation] = useState('');
+  const { transactions, products, vendors, transactionsPageState, setTransactionsPageState } = useStore();
+  const [filterType, setFilterType] = useState(transactionsPageState.filterType);
+  const [searchTerm, setSearchTerm] = useState(transactionsPageState.searchTerm);
+  const [startDate, setStartDate] = useState(transactionsPageState.startDate || format(subDays(new Date(), 7), 'yyyy-MM-dd'));
+  const [endDate, setEndDate] = useState(transactionsPageState.endDate || format(new Date(), 'yyyy-MM-dd'));
+  const [showFilters, setShowFilters] = useState(transactionsPageState.showFilters);
+  const [filterLocation, setFilterLocation] = useState(transactionsPageState.filterLocation);
   const { fetchRemoteData, gasApiUrl, isLoading: storeIsLoading } = useStore();
+
+  useEffect(() => {
+    setTransactionsPageState({
+      filterType,
+      searchTerm,
+      startDate,
+      endDate,
+      filterLocation,
+      showFilters
+    });
+  }, [filterType, searchTerm, startDate, endDate, filterLocation, showFilters, setTransactionsPageState]);
   
   useEffect(() => {
     // Always consider fetching remote data on mount to ensure we have the latest from the sheet,

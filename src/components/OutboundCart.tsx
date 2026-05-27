@@ -29,6 +29,7 @@ export default function OutboundCart() {
   const [filterCategory, setFilterCategory] = useState('');
   const [filterBrand, setFilterBrand] = useState('');
   const [filterVendor, setFilterVendor] = useState('');
+  const [sortOrder, setSortOrder] = useState('name_asc');
 
   // Load product if passed via URL (e.g. from Scanner)
   useEffect(() => {
@@ -79,8 +80,27 @@ export default function OutboundCart() {
     if (filterBrand) result = result.filter(p => p.brand === filterBrand);
     if (filterVendor) result = result.filter(p => p.vendor_id === filterVendor);
 
-    return result;
-  }, [searchTerm, products, filterCategory, filterBrand, filterVendor]);
+    // Dynamic stock aggregation for sorting
+    const productTotalStock: Record<string, number> = {};
+    stock.forEach(s => {
+      productTotalStock[s.product_id] = (productTotalStock[s.product_id] || 0) + s.quantity;
+    });
+
+    const sorted = [...result];
+    if (sortOrder === 'name_asc') {
+      sorted.sort((a, b) => a.name.localeCompare(b.name, 'zh-HK'));
+    } else if (sortOrder === 'name_desc') {
+      sorted.sort((a, b) => b.name.localeCompare(a.name, 'zh-HK'));
+    } else if (sortOrder === 'newest') {
+      sorted.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    } else if (sortOrder === 'stock_low') {
+      sorted.sort((a, b) => (productTotalStock[a.product_id] || 0) - (productTotalStock[b.product_id] || 0));
+    } else if (sortOrder === 'stock_high') {
+      sorted.sort((a, b) => (productTotalStock[b.product_id] || 0) - (productTotalStock[a.product_id] || 0));
+    }
+
+    return sorted;
+  }, [searchTerm, products, filterCategory, filterBrand, filterVendor, sortOrder, stock]);
 
   // Extract unique brands and categories for dropdowns
   const brands = useMemo(() => Array.from(new Set(products.map(p => p.brand).filter(Boolean))), [products]);
@@ -347,10 +367,22 @@ export default function OutboundCart() {
                         <select 
                           value={filterVendor} 
                           onChange={e => setFilterVendor(e.target.value)}
-                          className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none min-w-[120px]"
+                          className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none min-w-[100px]"
                         >
                           <option value="" className="bg-[#0f172a]">所有廠商</option>
                           {uniqueVendors.map(v => <option key={v as string} value={v as string} className="bg-[#0f172a]">{getVendorName(v as string)}</option>)}
+                        </select>
+
+                        <select 
+                          value={sortOrder} 
+                          onChange={e => setSortOrder(e.target.value)}
+                          className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none min-w-[100px]"
+                        >
+                          <option value="name_asc" className="bg-[#0f172a]">排列風格: A-Z</option>
+                          <option value="name_desc" className="bg-[#0f172a]">排列風格: Z-A</option>
+                          <option value="newest" className="bg-[#0f172a]">排列風格: 最新上架</option>
+                          <option value="stock_low" className="bg-[#0f172a]">排列風格: 庫存低到高</option>
+                          <option value="stock_high" className="bg-[#0f172a]">排列風格: 庫存高到低</option>
                         </select>
                       </div>
                     )}

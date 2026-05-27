@@ -7,16 +7,16 @@ import { differenceInDays } from 'date-fns';
 type SortType = 'name_asc' | 'name_desc' | 'newest' | 'stock_low' | 'stock_high';
 
 export default function Products() {
-  const { products, stock, deleteProduct, showToast, vendors, lowStockAlertEnabled, expiryThreshold } = useStore();
+  const { products, stock, deleteProduct, showToast, vendors, lowStockAlertEnabled, expiryThreshold, productsPageState, setProductsPageState } = useStore();
   const [searchParams] = useSearchParams();
-  const [searchTerm, setSearchTerm] = useState(searchParams.get('pid') || '');
+  const [searchTerm, setSearchTerm] = useState(productsPageState.searchTerm || searchParams.get('pid') || '');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [showFilters, setShowFilters] = useState(false);
-  const [filterBrand, setFilterBrand] = useState('');
-  const [filterCategory, setFilterCategory] = useState('');
-  const [filterVendor, setFilterVendor] = useState('');
-  const [sortOrder, setSortOrder] = useState<SortType>('name_asc');
+  const [showFilters, setShowFilters] = useState(productsPageState.showFilters);
+  const [filterBrand, setFilterBrand] = useState(productsPageState.filterBrand);
+  const [filterCategory, setFilterCategory] = useState(productsPageState.filterCategory);
+  const [filterVendor, setFilterVendor] = useState(productsPageState.filterVendor);
+  const [sortOrder, setSortOrder] = useState<SortType>((productsPageState.sortOrder as SortType) || 'name_asc');
   const navigate = useNavigate();
 
   const now = new Date();
@@ -27,6 +27,17 @@ export default function Products() {
       setSearchTerm(pid);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    setProductsPageState({
+      searchTerm,
+      filterBrand,
+      filterCategory,
+      filterVendor,
+      sortOrder,
+      showFilters
+    });
+  }, [searchTerm, filterBrand, filterCategory, filterVendor, sortOrder, showFilters, setProductsPageState]);
 
   // Extract unique brands and categories for dropdowns
   const brands = useMemo(() => Array.from(new Set(products.map(p => p.brand).filter(Boolean))), [products]);
