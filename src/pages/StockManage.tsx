@@ -177,6 +177,17 @@ export default function StockManage() {
         setCurrentSpecification(allSpecs[0] || '');
         setCostPrice(product.cost_price?.toString() || '');
         setVendorId(product.vendor_id || '');
+
+        // Automatically fill existing stock location when a product is selected for stock_in
+        const existingEntries = stock.filter(s => s.product_id === product.product_id);
+        if (existingEntries.length > 0) {
+          const mainEntry = [...existingEntries].sort((a, b) => b.quantity - a.quantity)[0];
+          if (mainEntry) {
+            setLocation(mainEntry.location || '倉庫');
+            setFloor(mainEntry.floor || '1F');
+            setArea(mainEntry.area || 'A區');
+          }
+        }
       } else if (selectedStock) {
         setCurrentExpiry(selectedStock.expiry_date || '');
         setCurrentSpecification(selectedStock.specification || '');
@@ -185,7 +196,7 @@ export default function StockManage() {
         setArea(selectedStock.area);
       }
     }
-  }, [product?.product_id, selectedStock?.stock_id, type]);
+  }, [product?.product_id, selectedStock?.stock_id, type, stock, products]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
