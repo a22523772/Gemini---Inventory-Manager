@@ -14,8 +14,58 @@ export default function OutboundCart() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { products, stock, vendors, enqueueAction, operator, showToast } = useStore();
-  const [cart, setCart] = useState<CartItem[]>([]);
+  const [cart, setCart] = useState<CartItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('outbound_cart');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Sync cart state to localStorage on modification
+  useEffect(() => {
+    try {
+      localStorage.setItem('outbound_cart', JSON.stringify(cart));
+    } catch (e) {
+      console.error('Error saving cart to localStorage:', e);
+    }
+  }, [cart]);
+
+  // Dynamically reconcile cache items with the latest products and stock data
+  useEffect(() => {
+    if (products.length === 0 || stock.length === 0) return;
+    
+    let updated = false;
+    const reconciled = cart.map(item => {
+      const freshProd = products.find(p => p.product_id === item.product.product_id);
+      const freshST = stock.find(s => s.stock_id === item.stockEntry.stock_id);
+      
+      if (!freshST) return null; // stock no longer exists
+      
+      const newQty = Math.min(item.quantity, freshST.quantity);
+      const productChanged = freshProd && JSON.stringify(freshProd) !== JSON.stringify(item.product);
+      const stockChanged = freshST && JSON.stringify(freshST) !== JSON.stringify(item.stockEntry);
+      const qtyChanged = newQty !== item.quantity;
+      
+      if (productChanged || stockChanged || qtyChanged) {
+        updated = true;
+        return {
+          ...item,
+          product: freshProd || item.product,
+          stockEntry: freshST,
+          quantity: newQty
+        };
+      }
+      return item;
+    }).filter((item): item is CartItem => item !== null && item.quantity > 0);
+    
+    // If reconciliation changed anything, update state
+    if (updated || reconciled.length !== cart.length) {
+      setCart(reconciled);
+    }
+  }, [products, stock]);
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
