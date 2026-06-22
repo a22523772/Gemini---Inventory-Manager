@@ -1,10 +1,10 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { PackageOpen, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Calendar, Search, Filter, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { PackageOpen, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Calendar, Search, Filter, X, ChevronDown, ChevronUp, Eye, Edit, Trash2 } from 'lucide-react';
 import { format, subDays, isWithinInterval, startOfDay, endOfDay, parseISO } from 'date-fns';
 
 export default function Transactions() {
-  const { transactions, products, vendors, transactionsPageState, setTransactionsPageState } = useStore();
+  const { transactions, products, vendors, transactionsPageState, setTransactionsPageState, deleteTransaction, editTransaction } = useStore();
   const [filterType, setFilterType] = useState(transactionsPageState.filterType);
   const [searchTerm, setSearchTerm] = useState(transactionsPageState.searchTerm);
   const [startDate, setStartDate] = useState(transactionsPageState.startDate || format(subDays(new Date(), 7), 'yyyy-MM-dd'));
@@ -12,6 +12,38 @@ export default function Transactions() {
   const [showFilters, setShowFilters] = useState(transactionsPageState.showFilters);
   const [filterLocation, setFilterLocation] = useState(transactionsPageState.filterLocation);
   const { fetchRemoteData, gasApiUrl, isLoading: storeIsLoading } = useStore();
+
+  // Detail / Edit / Delete Modal States
+  const [selectedTxForView, setSelectedTxForView] = useState<any | null>(null);
+  const [selectedTxForEdit, setSelectedTxForEdit] = useState<any | null>(null);
+  const [txToDelete, setTxToDelete] = useState<any | null>(null);
+
+  // Edit form states
+  const [editQty, setEditQty] = useState('');
+  const [editLocation, setEditLocation] = useState('');
+  const [editFloor, setEditFloor] = useState('');
+  const [editArea, setEditArea] = useState('');
+  const [editSpec, setEditSpec] = useState('');
+  const [editCost, setEditCost] = useState('');
+  const [editVendor, setEditVendor] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [editNote, setEditNote] = useState('');
+  const [editOperator, setEditOperator] = useState('');
+
+  useEffect(() => {
+    if (selectedTxForEdit) {
+      setEditQty(selectedTxForEdit.quantity?.toString() || '');
+      setEditLocation(selectedTxForEdit.location || '');
+      setEditFloor(selectedTxForEdit.floor || '');
+      setEditArea(selectedTxForEdit.area || '');
+      setEditSpec(selectedTxForEdit.specification || '');
+      setEditCost(selectedTxForEdit.cost_price?.toString() || '');
+      setEditVendor(selectedTxForEdit.vendor_id || '');
+      setEditDate(selectedTxForEdit.date || '');
+      setEditNote(selectedTxForEdit.note || '');
+      setEditOperator(selectedTxForEdit.operator || '');
+    }
+  }, [selectedTxForEdit]);
 
   useEffect(() => {
     setTransactionsPageState({
@@ -286,11 +318,343 @@ export default function Transactions() {
                     <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)]">{t.area}</span>
                     <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)] ml-auto border border-white/10 opacity-60">人員: {t.operator}</span>
                 </div>
+                
+                <div className="col-span-2 flex justify-end gap-2 mt-2 pt-2 border-t border-white/5">
+                  <button
+                    onClick={() => setSelectedTxForView(t)}
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 border border-white/5 text-[10px] font-bold text-[var(--color-text-dim)] hover:text-white hover:bg-white/10 active:scale-95 transition-all cursor-pointer"
+                  >
+                    <Eye className="w-3 h-3" />
+                    詳情
+                  </button>
+                  <button
+                    onClick={() => setSelectedTxForEdit(t)}
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 border border-white/5 text-[10px] font-bold text-[var(--color-text-dim)] hover:text-[var(--color-accent-blue)] hover:bg-[var(--color-accent-blue)]/5 active:scale-95 transition-all cursor-pointer"
+                  >
+                    <Edit className="w-3 h-3" />
+                    編輯
+                  </button>
+                  <button
+                    onClick={() => setTxToDelete(t)}
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 border border-white/5 text-[10px] font-bold text-[var(--color-text-dim)] hover:text-red-400 hover:bg-red-500/5 active:scale-95 transition-all cursor-pointer"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    刪除
+                  </button>
+                </div>
               </div>
             </div>
           ))
         )}
       </div>
+
+      {/* 查看詳情 Modal */}
+      {selectedTxForView && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+          <div className="glass-panel border border-white/10 rounded-2xl w-full max-w-sm p-5 max-h-[85vh] overflow-y-auto space-y-4 shadow-2xl relative">
+            <div className="flex justify-between items-center pb-2 border-b border-white/10">
+              <h2 className="text-sm font-bold text-[var(--color-text-main)] flex items-center gap-1.5">
+                {getIcon(selectedTxForView.type)}
+                紀錄詳細資訊
+              </h2>
+              <button 
+                onClick={() => setSelectedTxForView(null)}
+                className="p-1 px-[7px] rounded-lg bg-white/5 hover:bg-white/10 text-[var(--color-text-dim)] hover:text-white transition-all cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-2.5 text-xs">
+              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                <span className="text-[var(--color-text-dim)]">異動編號</span>
+                <span className="col-span-2 font-mono text-white select-all">{selectedTxForView.transaction_id}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                <span className="text-[var(--color-text-dim)]">商品 PID</span>
+                <span className="col-span-2 font-mono text-white select-all">{selectedTxForView.product_id}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                <span className="text-[var(--color-text-dim)]">商品名稱</span>
+                <span className="col-span-2 text-white font-bold">{getProductName(selectedTxForView.product_id)}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                <span className="text-[var(--color-text-dim)]">異動類型</span>
+                <span className="col-span-2 text-white">{getTypeLabel(selectedTxForView.type)}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                <span className="text-[var(--color-text-dim)]">異動數量</span>
+                <span className="col-span-2 text-[var(--color-accent-blue)] font-bold">{selectedTxForView.quantity}</span>
+              </div>
+              {selectedTxForView.type === 'stock_in' && (
+                <>
+                  <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                    <span className="text-[var(--color-text-dim)]">進價成本</span>
+                    <span className="col-span-2 text-[var(--color-accent-green)] font-bold">${selectedTxForView.cost_price || 0}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                    <span className="text-[var(--color-text-dim)]">供應商</span>
+                    <span className="col-span-2 text-white">{getVendorName(selectedTxForView.vendor_id)}</span>
+                  </div>
+                </>
+              )}
+              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                <span className="text-[var(--color-text-dim)]">批次規格</span>
+                <span className="col-span-2 text-white">{selectedTxForView.specification || '無'}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                <span className="text-[var(--color-text-dim)]">存儲位置</span>
+                <span className="col-span-2 text-white">
+                  {selectedTxForView.location} - {selectedTxForView.floor} - {selectedTxForView.area}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                <span className="text-[var(--color-text-dim)]">異動時間</span>
+                <span className="col-span-2 text-white font-mono">{selectedTxForView.date}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                <span className="text-[var(--color-text-dim)]">經辦人員</span>
+                <span className="col-span-2 text-white">{selectedTxForView.operator}</span>
+              </div>
+              {selectedTxForView.note && (
+                <div className="pt-1.5">
+                  <p className="text-[var(--color-text-dim)] mb-1">備註說明</p>
+                  <p className="bg-white/5 p-2 rounded-lg text-white text-[11px] whitespace-pre-wrap leading-relaxed border border-white/5">{selectedTxForView.note}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-3 flex justify-end">
+              <button
+                onClick={() => setSelectedTxForView(null)}
+                className="px-4 py-2 bg-white/5 hover:bg-white/10 text-[var(--color-text-main)] rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                關閉
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 編輯 Modal */}
+      {selectedTxForEdit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+          <form 
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const fields: any = {
+                quantity: Number(editQty),
+                location: editLocation,
+                floor: editFloor,
+                area: editArea,
+                specification: editSpec,
+                date: editDate,
+                note: editNote,
+                operator: editOperator,
+              };
+              if (selectedTxForEdit.type === 'stock_in') {
+                fields.cost_price = Number(editCost);
+                fields.vendor_id = editVendor;
+              }
+              await editTransaction(selectedTxForEdit.transaction_id, fields);
+              setSelectedTxForEdit(null);
+            }}
+            className="glass-panel border border-white/10 rounded-2xl w-full max-w-sm p-5 max-h-[85vh] overflow-y-auto space-y-3.5 shadow-2xl"
+          >
+            <div className="flex justify-between items-center pb-2 border-b border-white/10">
+              <h2 className="text-sm font-bold text-[var(--color-text-main)]">
+                編輯 {getTypeLabel(selectedTxForEdit.type)} 紀錄
+              </h2>
+              <button 
+                type="button"
+                onClick={() => setSelectedTxForEdit(null)}
+                className="p-1 px-[7px] rounded-lg bg-white/5 hover:bg-white/10 text-[var(--color-text-dim)] cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-[var(--color-text-main)]">
+              <div>
+                <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-1">商品名稱 (唯讀)</label>
+                <div className="p-2 bg-white/5 rounded-xl text-white/50 border border-white/5 font-bold">
+                  {getProductName(selectedTxForEdit.product_id)}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">異動數量</label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    value={editQty}
+                    onChange={(e) => setEditQty(e.target.value)}
+                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">規格說明</label>
+                  <input
+                    type="text"
+                    value={editSpec}
+                    onChange={(e) => setEditSpec(e.target.value)}
+                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                  />
+                </div>
+              </div>
+
+              {selectedTxForEdit.type === 'stock_in' && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">進價成本</label>
+                    <input
+                      type="number"
+                      value={editCost}
+                      onChange={(e) => setEditCost(e.target.value)}
+                      className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">供應商</label>
+                    <select
+                      value={editVendor}
+                      onChange={(e) => setEditVendor(e.target.value)}
+                      className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                    >
+                      <option value="">無</option>
+                      {vendors.map(v => (
+                        <option key={v.vendor_id} value={v.vendor_id}>{v.vendor_name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-3 gap-1.5">
+                <div>
+                  <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">地點</label>
+                  <input
+                    type="text"
+                    required
+                    value={editLocation}
+                    onChange={(e) => setEditLocation(e.target.value)}
+                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">樓層</label>
+                  <input
+                    type="text"
+                    required
+                    value={editFloor}
+                    onChange={(e) => setEditFloor(e.target.value)}
+                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">區域</label>
+                  <input
+                    type="text"
+                    required
+                    value={editArea}
+                    onChange={(e) => setEditArea(e.target.value)}
+                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">日期與時間</label>
+                  <input
+                    type="text"
+                    required
+                    value={editDate}
+                    onChange={(e) => setEditDate(e.target.value)}
+                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">經辦人員</label>
+                  <input
+                    type="text"
+                    required
+                    value={editOperator}
+                    onChange={(e) => setEditOperator(e.target.value)}
+                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">備註說明</label>
+                <textarea
+                  rows={2}
+                  value={editNote}
+                  onChange={(e) => setEditNote(e.target.value)}
+                  className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="pt-3 flex justify-end gap-2 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => setSelectedTxForEdit(null)}
+                className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 bg-[var(--color-accent-blue)] hover:bg-[var(--color-accent-blue)]/80 text-[#0f172a] rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                儲存更新
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* 刪除確認 Modal */}
+      {txToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+          <div className="glass-panel border border-red-500/25 rounded-2xl w-full max-w-xs p-5 space-y-4 shadow-2xl">
+            <h2 className="text-md font-bold text-red-400 flex items-center gap-1.5">🚨 刪除確認</h2>
+            <div className="space-y-2 text-xs leading-relaxed text-white/85">
+              <p>確定要刪除此筆 <strong>{getTypeLabel(txToDelete.type)}</strong> 紀錄嗎？</p>
+              <div className="p-2.5 bg-red-950/20 border border-red-500/10 rounded-xl mt-1 space-y-1 text-red-200">
+                <p><strong>商品：</strong>{getProductName(txToDelete.product_id)}</p>
+                <p><strong>數量：</strong>{txToDelete.quantity}</p>
+                <p><strong>位置：</strong>{txToDelete.location}-{txToDelete.floor}-{txToDelete.area}</p>
+              </div>
+              <p className="text-amber-400 font-bold mt-2 leading-snug">
+                ⚠️ 注意：此操作將會自動還原或扣除對應的本地庫存，並自動覆蓋同步雲端試算表工作表。請認真核對！
+              </p>
+            </div>
+
+            <div className="pt-1.5 flex justify-end gap-2">
+              <button
+                onClick={() => setTxToDelete(null)}
+                className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                onClick={async () => {
+                  await deleteTransaction(txToDelete.transaction_id);
+                  setTxToDelete(null);
+                }}
+                className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                確定刪除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
