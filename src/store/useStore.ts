@@ -55,6 +55,7 @@ interface AppState {
     startDate: string;
     endDate: string;
     filterLocation: string;
+    filterVendor: string;
     showFilters: boolean;
   };
   setTransactionsPageState: (state: Partial<AppState['transactionsPageState']>) => void;
@@ -114,6 +115,7 @@ export const useStore = create<AppState>((set, get) => ({
     startDate: format(subDays(new Date(), 7), 'yyyy-MM-dd'),
     endDate: format(new Date(), 'yyyy-MM-dd'),
     filterLocation: '',
+    filterVendor: '',
     showFilters: false
   },
   setTransactionsPageState: (newState) => {
@@ -331,7 +333,7 @@ export const useStore = create<AppState>((set, get) => ({
 
         const newTx: Transaction = {
             id: uuidv4(),
-            transaction_id: `TX_${Date.now()}`,
+            transaction_id: updatedPayload.batch_tx_id || `TX_${Date.now()}`,
             product_id: updatedPayload.product_id,
             type: 'stock_out',
             quantity: Number(updatedPayload.quantity),

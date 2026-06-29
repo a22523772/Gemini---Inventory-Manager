@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import { ArrowLeft, Save, Search, X, Filter, Plus, ScanBarcode } from 'lucide-react';
 import OutboundCart from '../components/OutboundCart';
+import QuantityInput from '../components/QuantityInput';
 
 export default function StockManage() {
   const [searchParams] = useSearchParams();
@@ -465,13 +466,11 @@ export default function StockManage() {
 
         <div>
           <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">數量</label>
-          <input
-            type="number"
-            required
-            min={type === 'adjust' ? "0" : "1"}
+          <QuantityInput
+            min={type === 'adjust' ? 0 : 1}
             value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]"
+            onChange={(val) => setQuantity(val)}
+            className="!bg-white/5 !border-white/10"
           />
         </div>
 

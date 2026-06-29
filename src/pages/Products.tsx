@@ -50,7 +50,7 @@ export default function Products() {
      return v ? v.vendor_name : vid;
   };
 
-  // Grouping the products by barcode (or product_id if no barcode)
+  // Grouping the products by product_id
   const groupedProducts = useMemo(() => {
      const groups: Record<string, { 
        product: any, 
@@ -63,7 +63,7 @@ export default function Products() {
      
      // 1. Identify primary products
      products.forEach(p => {
-        const key = p.barcode || p.product_id;
+        const key = p.product_id;
         if (!groups[key]) {
             groups[key] = { 
               product: { ...p }, 
@@ -87,7 +87,7 @@ export default function Products() {
      stock.forEach(s => {
         const p = products.find(prod => prod.product_id === s.product_id);
         if (p) {
-            const key = p.barcode || p.product_id;
+            const key = p.product_id;
             if (groups[key]) {
                groups[key].stockEntries.push(s);
                groups[key].totalStock += s.quantity;
@@ -251,7 +251,7 @@ export default function Products() {
         ) : (
           groupedProducts.map(group => {
             const p = group.product;
-            const groupId = p.barcode || p.product_id;
+            const groupId = p.product_id;
             const isGroupExpanded = expandedId === groupId;
 
             const alertThreshold = p.min_stock !== undefined ? p.min_stock : 5;

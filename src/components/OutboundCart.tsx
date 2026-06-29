@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import { Save, Plus, Trash2, Search, X, ScanBarcode, Minus, ShoppingCart, Filter } from 'lucide-react';
+import QuantityInput from './QuantityInput';
 
 interface CartItem {
   id: string; // unique item id for the cart
@@ -37,34 +38,37 @@ export default function OutboundCart() {
   useEffect(() => {
     if (products.length === 0 || stock.length === 0) return;
     
-    let updated = false;
-    const reconciled = cart.map(item => {
-      const freshProd = products.find(p => p.product_id === item.product.product_id);
-      const freshST = stock.find(s => s.stock_id === item.stockEntry.stock_id);
+    setCart(prevCart => {
+      let updated = false;
+      const reconciled = prevCart.map(item => {
+        const freshProd = products.find(p => p.product_id === item.product.product_id);
+        const freshST = stock.find(s => s.stock_id === item.stockEntry.stock_id);
+        
+        if (!freshST) return null; // stock no longer exists
+        
+        const newQty = Math.min(item.quantity, freshST.quantity);
+        const productChanged = freshProd && JSON.stringify(freshProd) !== JSON.stringify(item.product);
+        const stockChanged = freshST && JSON.stringify(freshST) !== JSON.stringify(item.stockEntry);
+        const qtyChanged = newQty !== item.quantity;
+        
+        if (productChanged || stockChanged || qtyChanged) {
+          updated = true;
+          return {
+            ...item,
+            product: freshProd || item.product,
+            stockEntry: freshST,
+            quantity: newQty
+          };
+        }
+        return item;
+      }).filter((item): item is CartItem => item !== null && item.quantity > 0);
       
-      if (!freshST) return null; // stock no longer exists
-      
-      const newQty = Math.min(item.quantity, freshST.quantity);
-      const productChanged = freshProd && JSON.stringify(freshProd) !== JSON.stringify(item.product);
-      const stockChanged = freshST && JSON.stringify(freshST) !== JSON.stringify(item.stockEntry);
-      const qtyChanged = newQty !== item.quantity;
-      
-      if (productChanged || stockChanged || qtyChanged) {
-        updated = true;
-        return {
-          ...item,
-          product: freshProd || item.product,
-          stockEntry: freshST,
-          quantity: newQty
-        };
+      // Only return new array if something changed, else return prev to avoid re-renders
+      if (updated || reconciled.length !== prevCart.length) {
+        return reconciled;
       }
-      return item;
-    }).filter((item): item is CartItem => item !== null && item.quantity > 0);
-    
-    // If reconciliation changed anything, update state
-    if (updated || reconciled.length !== cart.length) {
-      setCart(reconciled);
-    }
+      return prevCart;
+    });
   }, [products, stock]);
 
   // Modal State
@@ -89,6 +93,8 @@ export default function OutboundCart() {
       const p = products.find(p => p.product_id.toLowerCase() === term || p.barcode?.toLowerCase() === term);
       if (p) {
         setSelectedProduct(p);
+        const pStocks = stock.filter(s => s.product_id === p.product_id);
+        setSelectedStockId(pStocks.length > 0 ? pStocks[0].stock_id : '');
         setIsModalOpen(true);
         // Clear param so it doesn't reopen on reload
         setSearchParams(prev => {
@@ -105,12 +111,6 @@ export default function OutboundCart() {
     if (!selectedProduct) return [];
     return stock.filter(s => s.product_id === selectedProduct.product_id);
   }, [selectedProduct, stock]);
-
-  useEffect(() => {
-    if (availableStocks.length > 0 && !selectedStockId) {
-      setSelectedStockId(availableStocks[0].stock_id);
-    }
-  }, [availableStocks, selectedStockId]);
 
   const searchResults = useMemo(() => {
     let result = products;
@@ -237,6 +237,9 @@ export default function OutboundCart() {
 
     setIsSubmitting(true);
     try {
+      // Create a single transaction ID for the entire cart batch
+      const batchTxId = `TX_${Date.now()}`;
+      
       // Process items array serially
       for (const item of cart) {
         let payload = {
@@ -248,6 +251,7 @@ export default function OutboundCart() {
           area: item.stockEntry.area,
           expiry_date: item.stockEntry.expiry_date || '',
           specification: item.stockEntry.specification || '',
+          batch_tx_id: batchTxId,
           operator
         };
         await enqueueAction('stockOut', payload);
@@ -321,14 +325,14 @@ export default function OutboundCart() {
                  <div className="text-sm font-bold text-white">
                     小計: <span className="text-[var(--color-accent-blue)]">${(item.product.cost_price * item.quantity).toFixed(2)}</span>
                  </div>
-                 <div className="flex items-center gap-3 bg-black/30 rounded-lg p-1 border border-white/10">
-                   <button onClick={() => updateQuantity(item.id, item.quantity - 1)} className="p-1 active:bg-white/10 rounded">
-                     <Minus className="w-4 h-4 text-white/70" />
-                   </button>
-                   <span className="w-8 text-center text-sm font-bold text-white">{item.quantity}</span>
-                   <button onClick={() => updateQuantity(item.id, item.quantity + 1)} className="p-1 active:bg-white/10 rounded">
-                     <Plus className="w-4 h-4 text-white/70" />
-                   </button>
+                 <div className="w-32">
+                   <QuantityInput
+                     min={1}
+                     max={item.stockEntry.quantity}
+                     value={item.quantity}
+                     onChange={(val) => updateQuantity(item.id, Number(val))}
+                     className="!bg-black/30 !py-0 !h-8"
+                   />
                  </div>
                </div>
             </div>
@@ -446,6 +450,8 @@ export default function OutboundCart() {
                             key={p.product_id}
                             onClick={() => {
                               setSelectedProduct(p);
+                              const pStocks = stock.filter(s => s.product_id === p.product_id);
+                              setSelectedStockId(pStocks.length > 0 ? pStocks[0].stock_id : '');
                               setSearchTerm('');
                             }}
                             className="glass-panel p-3 rounded-xl border border-white/5 hover:border-[var(--color-accent-blue)]/50 cursor-pointer active:scale-[0.98] transition-all flex items-center justify-between w-full"
@@ -500,13 +506,10 @@ export default function OutboundCart() {
 
                         <div>
                           <label className="block text-xs font-bold text-[var(--color-text-dim)] uppercase tracking-wider mb-2">出貨數量</label>
-                          <input 
-                            type="number"
-                            min="1"
+                          <QuantityInput
+                            min={1}
                             value={quantityToAdd}
-                            onChange={(e) => setQuantityToAdd(e.target.value)}
-                            onFocus={(e) => e.target.select()}
-                            className="block w-full rounded-xl border border-white/10 bg-black/30 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]"
+                            onChange={(val) => setQuantityToAdd(val)}
                           />
                         </div>
 

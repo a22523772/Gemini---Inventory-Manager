@@ -1,16 +1,20 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { PackageOpen, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Calendar, Search, Filter, X, ChevronDown, ChevronUp, Eye, Edit, Trash2 } from 'lucide-react';
-import { format, subDays, isWithinInterval, startOfDay, endOfDay, parseISO } from 'date-fns';
+import { PackageOpen, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Calendar, Search, Filter, X, ChevronDown, ChevronUp, Eye, Edit, Trash2, ScanBarcode } from 'lucide-react';
+import { format, subDays, startOfDay, endOfDay } from 'date-fns';
+import { useSearchParams, Link } from 'react-router-dom';
+import QuantityInput from '../components/QuantityInput';
 
 export default function Transactions() {
   const { transactions, products, vendors, transactionsPageState, setTransactionsPageState, deleteTransaction, editTransaction } = useStore();
+  const [searchParams] = useSearchParams();
   const [filterType, setFilterType] = useState(transactionsPageState.filterType);
-  const [searchTerm, setSearchTerm] = useState(transactionsPageState.searchTerm);
+  const [searchTerm, setSearchTerm] = useState(transactionsPageState.searchTerm || searchParams.get('pid') || '');
   const [startDate, setStartDate] = useState(transactionsPageState.startDate || format(subDays(new Date(), 7), 'yyyy-MM-dd'));
   const [endDate, setEndDate] = useState(transactionsPageState.endDate || format(new Date(), 'yyyy-MM-dd'));
   const [showFilters, setShowFilters] = useState(transactionsPageState.showFilters);
   const [filterLocation, setFilterLocation] = useState(transactionsPageState.filterLocation);
+  const [filterVendor, setFilterVendor] = useState(transactionsPageState.filterVendor);
   const { fetchRemoteData, gasApiUrl, isLoading: storeIsLoading } = useStore();
 
   // Detail / Edit / Delete Modal States
@@ -46,15 +50,23 @@ export default function Transactions() {
   }, [selectedTxForEdit]);
 
   useEffect(() => {
+    const pid = searchParams.get('pid');
+    if (pid) {
+      setSearchTerm(pid);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
     setTransactionsPageState({
       filterType,
       searchTerm,
       startDate,
       endDate,
       filterLocation,
+      filterVendor,
       showFilters
     });
-  }, [filterType, searchTerm, startDate, endDate, filterLocation, showFilters, setTransactionsPageState]);
+  }, [filterType, searchTerm, startDate, endDate, filterLocation, filterVendor, showFilters, setTransactionsPageState]);
   
   useEffect(() => {
     // Always consider fetching remote data on mount to ensure we have the latest from the sheet,
@@ -110,8 +122,29 @@ export default function Transactions() {
     // Location Filter
     if (filterLocation && t.location !== filterLocation) return false;
 
+    // Vendor Filter
+    if (filterVendor && t.vendor_id !== filterVendor) return false;
+
     return true;
   });
+
+  const groupedTransactions = useMemo(() => {
+    const groups: { [key: string]: typeof filteredTransactions } = {};
+    const result: (typeof filteredTransactions)[] = [];
+    filteredTransactions.forEach(t => {
+      // Group outbound transactions by transaction_id if they share one
+      if (t.transaction_id && t.type === 'stock_out') {
+        if (!groups[t.transaction_id]) {
+          groups[t.transaction_id] = [];
+          result.push(groups[t.transaction_id]);
+        }
+        groups[t.transaction_id].push(t);
+      } else {
+        result.push([t]);
+      }
+    });
+    return result;
+  }, [filteredTransactions]);
 
   const getProductName = (pid: string) => {
     const p = products.find(prod => prod.product_id === pid);
@@ -163,8 +196,11 @@ export default function Transactions() {
               placeholder="搜尋商品、PID 或人員..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+              className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-10 py-2.5 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
             />
+            <Link to="/scan?returnTo=/transactions" className="absolute inset-y-0 right-0 pr-3 flex items-center">
+              <ScanBarcode className="h-5 w-5 text-[var(--color-accent-blue)]" />
+            </Link>
           </div>
 
           {showFilters && (
@@ -196,13 +232,13 @@ export default function Transactions() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">類別</label>
                   <select 
                     value={filterType} 
                     onChange={e => setFilterType(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
                   >
                     <option value="" className="bg-[#0f172a]">所有類型</option>
                     <option value="stock_in" className="bg-[#0f172a]">進貨</option>
@@ -215,11 +251,24 @@ export default function Transactions() {
                   <select 
                     value={filterLocation} 
                     onChange={e => setFilterLocation(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
                   >
                     <option value="" className="bg-[#0f172a]">所有地點</option>
                     {locations.map(loc => (
                       <option key={loc} value={loc} className="bg-[#0f172a]">{loc}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">供應商</label>
+                  <select 
+                    value={filterVendor} 
+                    onChange={e => setFilterVendor(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
+                  >
+                    <option value="" className="bg-[#0f172a]">所有廠商</option>
+                    {vendors.map(v => (
+                      <option key={v.vendor_id} value={v.vendor_id} className="bg-[#0f172a]">{v.vendor_name}</option>
                     ))}
                   </select>
                 </div>
@@ -269,82 +318,153 @@ export default function Transactions() {
             )}
           </div>
         ) : (
-          filteredTransactions.map((t, idx) => (
-            <div key={t.id || t.transaction_id || `tx-${idx}`} className="glass-panel border border-[var(--color-glass-border)] rounded-xl p-4 transition-all">
-              <div className="flex items-start mb-2 gap-3">
-                <div className="mt-1 w-10 h-10 shrink-0 rounded-xl bg-white/5 flex items-center justify-center">
-                  {getIcon(t.type)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-start gap-2">
-                    <h3 className="font-bold text-[var(--color-text-main)] text-base break-words flex-1 min-w-0">{getProductName(t.product_id)}</h3>
-                    <div className="text-right shrink-0">
-                      <span className="text-xs text-[var(--color-text-dim)] font-mono">
-                        {t.date.includes('T') ? new Date(t.date).toLocaleString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(/\//g, '-') : t.date}
-                      </span>
-                      <p className="text-xs font-bold text-[var(--color-text-main)]">{getTypeLabel(t.type)}</p>
+          groupedTransactions.map((group, idx) => {
+            if (group.length === 1) {
+              const t = group[0];
+              return (
+                <div key={t.id || t.transaction_id || `tx-${idx}`} className="glass-panel border border-[var(--color-glass-border)] rounded-xl p-4 transition-all">
+                  <div className="flex items-start mb-2 gap-3">
+                    <div className="mt-1 w-10 h-10 shrink-0 rounded-xl bg-white/5 flex items-center justify-center">
+                      {getIcon(t.type)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between items-start gap-2">
+                        <h3 className="font-bold text-[var(--color-text-main)] text-base break-words flex-1 min-w-0">{getProductName(t.product_id)}</h3>
+                        <div className="text-right shrink-0">
+                          <span className="text-xs text-[var(--color-text-dim)] font-mono">
+                            {t.date.includes('T') ? new Date(t.date).toLocaleString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(/\//g, '-') : t.date}
+                          </span>
+                          <p className="text-xs font-bold text-[var(--color-text-main)]">{getTypeLabel(t.type)}</p>
+                        </div>
+                      </div>
+                      <p className="text-xs text-[var(--color-text-dim)] font-mono mt-1">PID: {t.product_id}</p>
                     </div>
                   </div>
-                  <p className="text-xs text-[var(--color-text-dim)] font-mono mt-1">PID: {t.product_id}</p>
-                </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-white/5 text-sm">
-                <div>
-                  <p className="text-[10px] text-[var(--color-text-dim)] uppercase">異動數量</p>
-                  <p className="font-bold text-[var(--color-accent-blue)]">{t.quantity}</p>
+                  <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-white/5 text-sm">
+                    <div>
+                      <p className="text-[10px] text-[var(--color-text-dim)] uppercase">異動數量</p>
+                      <p className="font-bold text-[var(--color-accent-blue)]">{t.quantity}</p>
+                    </div>
+                    {t.type === 'stock_in' && t.cost_price ? (
+                      <div>
+                        <p className="text-[10px] text-[var(--color-text-dim)] uppercase">進價/成本</p>
+                        <p className="font-bold text-[var(--color-accent-green)]">${t.cost_price}</p>
+                      </div>
+                    ) : null}
+                    {t.type === 'stock_in' && t.vendor_id && (
+                      <div className="col-span-2">
+                        <p className="text-[10px] text-[var(--color-text-dim)] uppercase">供應商</p>
+                        <p className="font-medium text-[var(--color-text-main)]">{getVendorName(t.vendor_id)}</p>
+                      </div>
+                    )}
+                    {t.type === 'adjust' && t.note && (
+                      <div className="col-span-2">
+                        <p className="text-[10px] text-[var(--color-text-dim)] uppercase">盤點備註</p>
+                        <p className="font-medium text-[var(--color-text-main)] bg-white/5 p-2 rounded-lg mt-1">{t.note}</p>
+                      </div>
+                    )}
+                    <div className="col-span-2 flex gap-2 text-xs">
+                        <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)]">{t.location}</span>
+                        <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)]">{t.floor}</span>
+                        <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)]">{t.area}</span>
+                        <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)] ml-auto border border-white/10 opacity-60">人員: {t.operator}</span>
+                    </div>
+                    
+                    <div className="col-span-2 flex justify-end gap-2 mt-2 pt-2 border-t border-white/5">
+                      <button
+                        onClick={() => setSelectedTxForView(t)}
+                        className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 border border-white/5 text-[10px] font-bold text-[var(--color-text-dim)] hover:text-white hover:bg-white/10 active:scale-95 transition-all cursor-pointer"
+                      >
+                        <Eye className="w-3 h-3" />
+                        詳情
+                      </button>
+                      <button
+                        onClick={() => setSelectedTxForEdit(t)}
+                        className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 border border-white/5 text-[10px] font-bold text-[var(--color-text-dim)] hover:text-[var(--color-accent-blue)] hover:bg-[var(--color-accent-blue)]/5 active:scale-95 transition-all cursor-pointer"
+                      >
+                        <Edit className="w-3 h-3" />
+                        編輯
+                      </button>
+                      <button
+                        onClick={() => setTxToDelete(t)}
+                        className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 border border-white/5 text-[10px] font-bold text-[var(--color-text-dim)] hover:text-red-400 hover:bg-red-500/5 active:scale-95 transition-all cursor-pointer"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        刪除
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                {t.type === 'stock_in' && t.cost_price ? (
+              );
+            }
+
+            // Batched Transaction Group
+            const first = group[0];
+            const totalQuantity = group.reduce((sum, item) => sum + item.quantity, 0);
+
+            return (
+              <div key={first.transaction_id || `tx-group-${idx}`} className="glass-panel border border-[var(--color-glass-border)] rounded-xl p-4 transition-all">
+                <div className="flex items-start mb-2 gap-3">
+                  <div className="mt-1 w-10 h-10 shrink-0 rounded-xl bg-white/5 flex items-center justify-center">
+                    {getIcon('stock_out')}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between items-start gap-2">
+                      <h3 className="font-bold text-[var(--color-text-main)] text-base break-words flex-1 min-w-0">批次出貨</h3>
+                      <div className="text-right shrink-0">
+                        <span className="text-xs text-[var(--color-text-dim)] font-mono">
+                          {first.date.includes('T') ? new Date(first.date).toLocaleString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(/\//g, '-') : first.date}
+                        </span>
+                        <p className="text-xs font-bold text-[var(--color-text-main)]">出貨</p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-[var(--color-text-dim)] font-mono mt-1">包含 {group.length} 項商品</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-white/5 text-sm">
                   <div>
-                    <p className="text-[10px] text-[var(--color-text-dim)] uppercase">進價/成本</p>
-                    <p className="font-bold text-[var(--color-accent-green)]">${t.cost_price}</p>
+                    <p className="text-[10px] text-[var(--color-text-dim)] uppercase">總數量</p>
+                    <p className="font-bold text-[var(--color-accent-blue)]">{totalQuantity}</p>
                   </div>
-                ) : null}
-                {t.type === 'stock_in' && t.vendor_id && (
-                  <div className="col-span-2">
-                    <p className="text-[10px] text-[var(--color-text-dim)] uppercase">供應商</p>
-                    <p className="font-medium text-[var(--color-text-main)]">{getVendorName(t.vendor_id)}</p>
+                  <div className="col-span-2 flex flex-col gap-2 text-xs mt-2 bg-white/5 rounded-lg p-2">
+                    {group.map((t, i) => (
+                      <div key={i} className="flex flex-col border-b border-white/5 pb-2 mb-2 last:border-0 last:mb-0 last:pb-0">
+                        <div className="flex justify-between items-center">
+                          <span className="truncate mr-2 flex-1 text-white/80 font-bold">{getProductName(t.product_id)}</span>
+                          <span className="text-[var(--color-accent-blue)] font-bold shrink-0">{t.quantity}</span>
+                        </div>
+                        <div className="flex justify-end gap-2 mt-2">
+                          <button
+                            onClick={() => setSelectedTxForView(t)}
+                            className="p-1.5 rounded bg-white/5 text-[var(--color-text-dim)] hover:text-white"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setSelectedTxForEdit(t)}
+                            className="p-1.5 rounded bg-white/5 text-[var(--color-text-dim)] hover:text-[var(--color-accent-blue)]"
+                          >
+                            <Edit className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setTxToDelete(t)}
+                            className="p-1.5 rounded bg-white/5 text-[var(--color-text-dim)] hover:text-red-400"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                )}
-                {t.type === 'adjust' && t.note && (
-                  <div className="col-span-2">
-                    <p className="text-[10px] text-[var(--color-text-dim)] uppercase">盤點備註</p>
-                    <p className="font-medium text-[var(--color-text-main)] bg-white/5 p-2 rounded-lg mt-1">{t.note}</p>
+                  <div className="col-span-2 flex justify-end">
+                    <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)] text-xs border border-white/10 opacity-60">人員: {first.operator}</span>
                   </div>
-                )}
-                <div className="col-span-2 flex gap-2 text-xs">
-                    <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)]">{t.location}</span>
-                    <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)]">{t.floor}</span>
-                    <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)]">{t.area}</span>
-                    <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)] ml-auto border border-white/10 opacity-60">人員: {t.operator}</span>
-                </div>
-                
-                <div className="col-span-2 flex justify-end gap-2 mt-2 pt-2 border-t border-white/5">
-                  <button
-                    onClick={() => setSelectedTxForView(t)}
-                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 border border-white/5 text-[10px] font-bold text-[var(--color-text-dim)] hover:text-white hover:bg-white/10 active:scale-95 transition-all cursor-pointer"
-                  >
-                    <Eye className="w-3 h-3" />
-                    詳情
-                  </button>
-                  <button
-                    onClick={() => setSelectedTxForEdit(t)}
-                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 border border-white/5 text-[10px] font-bold text-[var(--color-text-dim)] hover:text-[var(--color-accent-blue)] hover:bg-[var(--color-accent-blue)]/5 active:scale-95 transition-all cursor-pointer"
-                  >
-                    <Edit className="w-3 h-3" />
-                    編輯
-                  </button>
-                  <button
-                    onClick={() => setTxToDelete(t)}
-                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 border border-white/5 text-[10px] font-bold text-[var(--color-text-dim)] hover:text-red-400 hover:bg-red-500/5 active:scale-95 transition-all cursor-pointer"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                    刪除
-                  </button>
                 </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 
@@ -485,13 +605,11 @@ export default function Transactions() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">異動數量</label>
-                  <input
-                    type="number"
-                    required
-                    min="1"
+                  <QuantityInput
+                    min={1}
                     value={editQty}
-                    onChange={(e) => setEditQty(e.target.value)}
-                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                    onChange={(val) => setEditQty(val)}
+                    className="!bg-[#1e293b]"
                   />
                 </div>
                 <div>
