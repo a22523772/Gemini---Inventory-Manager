@@ -3,6 +3,16 @@ import { dbProducts, dbStock, dbVendors, dbSyncQueue, dbSettings, dbTransactions
 import { v4 as uuidv4 } from 'uuid';
 import { format, subDays } from 'date-fns';
 
+const normalizeKeys = (obj: any) => {
+  if (!obj || typeof obj !== 'object') return obj;
+  const result: any = {};
+  for (const key of Object.keys(obj)) {
+    const cleanKey = key.trim().toLowerCase();
+    result[cleanKey] = typeof obj[key] === 'string' ? obj[key].trim() : obj[key];
+  }
+  return result;
+};
+
 interface AppState {
   products: Product[];
   stock: Stock[];
@@ -450,21 +460,31 @@ export const useStore = create<AppState>((set, get) => ({
       if (rP.ok) {
         const dP = await rP.json();
         
+        const normalizedList = (dP || []).map((item: any) => normalizeKeys(item));
+        
         // If there are duplicate product_ids or multiple records, merge their specifications cleanly
         const productMap: Record<string, any> = {};
-        dP.filter((p: any) => p && p.product_id).forEach((p: any) => {
-          const id = p.product_id;
+        normalizedList.filter((p: any) => p && p.product_id).forEach((p: any) => {
+          const id = String(p.product_id).trim();
+          const cleanP = {
+            ...p,
+            product_id: id,
+            barcode: p.barcode ? String(p.barcode).trim() : '',
+            name: p.name ? String(p.name).trim() : '',
+            brand: p.brand ? String(p.brand).trim() : '',
+            category: p.category ? String(p.category).trim() : '',
+            unit: p.unit ? String(p.unit).trim() : '',
+            specification: p.specification ? String(p.specification).trim() : '',
+            has_expiry: String(p.has_expiry).toUpperCase() === 'TRUE',
+            cost_price: Number(p.cost_price) || 0,
+            min_stock: p.min_stock !== undefined ? Number(p.min_stock) : undefined
+          };
           if (!productMap[id]) {
-            productMap[id] = {
-              ...p,
-              has_expiry: String(p.has_expiry).toUpperCase() === 'TRUE',
-              cost_price: Number(p.cost_price) || 0,
-              min_stock: p.min_stock !== undefined ? Number(p.min_stock) : undefined
-            };
+            productMap[id] = cleanP;
           } else {
             // Merge specifications
             const s1 = productMap[id].specification || '';
-            const s2 = p.specification || '';
+            const s2 = cleanP.specification || '';
             const combinedSpecs = Array.from(new Set(
               [s1, s2]
                 .flatMap(spec => spec ? spec.split(/[,\/，\s、]+/).map((s: any) => s.trim()).filter(Boolean) : [])
@@ -488,7 +508,13 @@ export const useStore = create<AppState>((set, get) => ({
       const rS = await fetch(`${gasApiUrl}?action=getStock`);
       if (rS.ok) {
         const dS = await rS.json();
-        const validS = dS.filter((s: any) => s && s.stock_id);
+        const validS = (dS || []).map((item: any) => normalizeKeys(item))
+          .filter((s: any) => s && s.stock_id)
+          .map((s: any) => ({
+            ...s,
+            stock_id: String(s.stock_id).trim(),
+            product_id: s.product_id ? String(s.product_id).trim() : ''
+          }));
         await dbStock.clear();
         for (const s of validS) {
           await dbStock.setItem(s.stock_id, s);
@@ -502,7 +528,12 @@ export const useStore = create<AppState>((set, get) => ({
       const rV = await fetch(`${gasApiUrl}?action=getVendors`);
       if (rV.ok) {
         const dV = await rV.json();
-        const validV = dV.filter((v: any) => v && v.vendor_id);
+        const validV = (dV || []).map((item: any) => normalizeKeys(item))
+          .filter((v: any) => v && v.vendor_id)
+          .map((v: any) => ({
+            ...v,
+            vendor_id: String(v.vendor_id).trim()
+          }));
         await dbVendors.clear();
         for (const v of validV) {
           await dbVendors.setItem(v.vendor_id, v);
@@ -516,7 +547,15 @@ export const useStore = create<AppState>((set, get) => ({
       const rT = await fetch(`${gasApiUrl}?action=getTransactions`);
       if (rT.ok) {
         const dT = await rT.json();
-        const validT = dT.filter((t: any) => t && t.transaction_id);
+        const validT = (dT || []).map((item: any) => normalizeKeys(item))
+          .filter((t: any) => t && t.transaction_id)
+          .map((t: any) => ({
+            ...t,
+            transaction_id: String(t.transaction_id).trim(),
+            product_id: t.product_id ? String(t.product_id).trim() : '',
+            quantity: Number(t.quantity) || 0,
+            cost_price: Number(t.cost_price) || 0
+          }));
         await dbTransactions.clear();
         for (const t of validT) {
           await dbTransactions.setItem(t.transaction_id, t);

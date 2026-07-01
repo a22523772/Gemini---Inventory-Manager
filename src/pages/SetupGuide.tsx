@@ -252,7 +252,7 @@ export default function SetupGuide() {
                   <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, specification, min_stock, created_at</li>
                   <li><strong>vendors</strong> (供應商): vendor_id, vendor_name, contact, phone</li>
                   <li><strong>stock</strong> (庫存表): stock_id, product_id, name, location, floor, area, quantity, expiry_date, specification, last_update</li>
-                  <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, type, quantity, location, floor, area, specification, cost_price, vendor_id, date, note, operator</li>
+                  <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, name, type, quantity, location, floor, area, specification, cost_price, vendor_id, date, note, operator</li>
                 </ul>
              </section>
 
@@ -509,10 +509,15 @@ export default function SetupGuide() {
     // Transactions logic
     var transHeaders = [];
     if(transSheet.getLastRow() === 0) {
-      transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
+      transHeaders = ['transaction_id', 'product_id', 'name', 'type', 'quantity', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
       transSheet.appendRow(transHeaders);
     } else {
       transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+      if (transHeaders.indexOf('name') === -1) {
+        transSheet.insertColumnsBefore(3, 1);
+        transSheet.getRange(1, 3).setValue('name');
+        transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+      }
       var requiredTransCols = ['specification', 'cost_price', 'vendor_id'];
       requiredTransCols.forEach(function(col) {
         if (transHeaders.indexOf(col) === -1) {
@@ -522,7 +527,7 @@ export default function SetupGuide() {
       });
     }
     
-    data.transaction_id = Utilities.getUuid();
+    data.transaction_id = data.transaction_id || Utilities.getUuid();
     data.type = 'stock_in';
     data.date = now;
     data.note = data.note || '';
@@ -575,7 +580,12 @@ export default function SetupGuide() {
     }
     
     var transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
-    data.transaction_id = Utilities.getUuid();
+    if (transHeaders.indexOf('name') === -1) {
+      transSheet.insertColumnsBefore(3, 1);
+      transSheet.getRange(1, 3).setValue('name');
+      transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+    }
+    data.transaction_id = data.batch_tx_id || data.transaction_id || Utilities.getUuid();
     data.type = 'stock_out';
     data.date = now;
     data.note = data.note || '';
@@ -629,7 +639,12 @@ export default function SetupGuide() {
     }
     
     var transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
-    data.transaction_id = Utilities.getUuid();
+    if (transHeaders.indexOf('name') === -1) {
+      transSheet.insertColumnsBefore(3, 1);
+      transSheet.getRange(1, 3).setValue('name');
+      transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+    }
+    data.transaction_id = data.transaction_id || Utilities.getUuid();
     data.type = 'adjust';
     data.date = now;
     data.cost_price = '';
@@ -675,7 +690,7 @@ export default function SetupGuide() {
     if (transSheet.getLastRow() > 0) {
       transSheet.clear();
     }
-    var transHeaders = ['transaction_id', 'product_id', 'type', 'quantity', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
+    var transHeaders = ['transaction_id', 'product_id', 'name', 'type', 'quantity', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
     transSheet.appendRow(transHeaders);
     if (data && data.length > 0) {
       var rows = [];
