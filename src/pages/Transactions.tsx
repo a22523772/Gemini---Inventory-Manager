@@ -180,6 +180,11 @@ export default function Transactions() {
     return p ? p.cost_price : 0;
   };
 
+  const getProductSpecification = (pid: string) => {
+    const p = products.find(prod => prod.product_id === pid);
+    return p ? p.specification : '';
+  };
+
   const getVendorName = (vid?: string) => {
     if (!vid) return '';
     const v = vendors.find(ven => ven.vendor_id === vid);
@@ -366,7 +371,14 @@ export default function Transactions() {
                           <p className="text-xs font-bold text-[var(--color-text-main)]">{getTypeLabel(t.type)}</p>
                         </div>
                       </div>
-                      <p className="text-xs text-[var(--color-text-dim)] font-mono mt-1">PID: {t.product_id}</p>
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
+                        <span className="text-xs text-[var(--color-text-dim)] font-mono">PID: {t.product_id}</span>
+                        {(t.specification || getProductSpecification(t.product_id)) && (
+                          <span className="bg-white/5 px-1.5 py-0.5 rounded text-[10px] text-white/60">
+                            規格: {t.specification || getProductSpecification(t.product_id)}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -375,12 +387,12 @@ export default function Transactions() {
                       <p className="text-[10px] text-[var(--color-text-dim)] uppercase">異動數量</p>
                       <p className="font-bold text-[var(--color-accent-blue)]">{t.quantity}</p>
                     </div>
-                    {t.type === 'stock_in' && t.cost_price ? (
-                      <div>
-                        <p className="text-[10px] text-[var(--color-text-dim)] uppercase">進價/成本</p>
-                        <p className="font-bold text-[var(--color-accent-green)]">${t.cost_price}</p>
-                      </div>
-                    ) : null}
+                    <div>
+                      <p className="text-[10px] text-[var(--color-text-dim)] uppercase">進價</p>
+                      <p className="font-bold text-[var(--color-accent-green)]">
+                        ${t.cost_price || getProductCostPrice(t.product_id) || 0}
+                      </p>
+                    </div>
                     {t.type === 'stock_in' && t.vendor_id && (
                       <div className="col-span-2">
                         <p className="text-[10px] text-[var(--color-text-dim)] uppercase">供應商</p>

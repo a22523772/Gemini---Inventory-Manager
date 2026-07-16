@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { dbProducts, dbStock, dbVendors, dbSyncQueue, dbSettings, dbTransactions, Product, Stock, Vendor, SyncItem, Transaction } from '../lib/db';
+import { dbProducts, dbStock, dbVendors, dbSyncQueue, dbSettings, dbTransactions, dbOnlineOrders, Product, Stock, Vendor, SyncItem, Transaction, OnlineOrder } from '../lib/db';
 import { v4 as uuidv4 } from 'uuid';
 import { format, subDays } from 'date-fns';
 
@@ -13,11 +13,80 @@ const normalizeKeys = (obj: any) => {
   return result;
 };
 
+const normalizeOnlineOrder = (rawItem: any): OnlineOrder | null => {
+  if (!rawItem || typeof rawItem !== 'object') return null;
+  
+  // Create lowercase & trimmed map
+  const map: Record<string, any> = {};
+  for (const k of Object.keys(rawItem)) {
+    const val = rawItem[k];
+    const cleanKey = k.trim().toLowerCase();
+    map[cleanKey] = typeof val === 'string' ? val.trim() : val;
+    map[k.trim()] = typeof val === 'string' ? val.trim() : val;
+  }
+
+  const getVal = (keys: string[]) => {
+    for (const key of keys) {
+      if (map[key.toLowerCase()] !== undefined) return map[key.toLowerCase()];
+      if (map[key] !== undefined) return map[key];
+    }
+    return '';
+  };
+
+  const order_id = String(getVal(['order_id', '訂單編號', '訂單編號', '訂單Id', 'id'])).trim();
+  if (!order_id) return null;
+
+  const platform = String(getVal(['platform', '來源平台', '平台']) || '蝦皮購物').trim();
+  const product_id = String(getVal(['product_id', '商品id', '商品編號', '產品編號', '產品id', '商品ID'])).trim();
+  const product_name = String(getVal(['product_name', '商品名稱', '產品名稱', '品名', '名稱'])).trim();
+  const quantity = Number(getVal(['quantity', '數量', '件數'])) || 0;
+  
+  // "price 是指 訂單總金額，不是商品單價，商品單價不顯示"
+  const price = Number(getVal(['price', '價格', '售價', '金額', '訂單金額', '訂單總金額'])) || 0;
+  
+  const customer_name = String(getVal(['customer_name', '收件人', '顧客姓名', '買家', '顧客'])).trim();
+  const status = String(getVal(['status', '最晚出貨時間', '出貨期限'])).trim();
+  const created_at = String(getVal(['created_at', '下單時間', '建立時間', '日期', '時間'])).trim();
+  const specification = String(getVal(['specification', '商品規格', '規格', '規格描述'])).trim();
+  const shipping_method = String(getVal(['shipping_method', '物流方式', '物流', '寄送方式', '物流管道'])).trim();
+
+  return {
+    order_id,
+    platform,
+    product_id,
+    product_name,
+    quantity,
+    price,
+    customer_name,
+    status, //的最晚出貨時間
+    created_at,
+    specification,
+    shipping_method
+  };
+};
+
+const resolveBlankProductIds = (orders: OnlineOrder[], products: Product[]): OnlineOrder[] => {
+  return orders.map(o => {
+    if (!o.product_id || o.product_id.trim() === '') {
+      const matchedProduct = products.find(p => p.name === o.product_name);
+      if (matchedProduct) {
+        return {
+          ...o,
+          product_id: matchedProduct.product_id,
+          specification: o.specification || matchedProduct.specification || ''
+        };
+      }
+    }
+    return o;
+  });
+};
+
 interface AppState {
   products: Product[];
   stock: Stock[];
   vendors: Vendor[];
   transactions: Transaction[];
+  onlineOrders: OnlineOrder[];
   syncQueue: SyncItem[];
   gasApiUrl: string;
   operator: string;
@@ -30,6 +99,9 @@ interface AppState {
   enqueueAction: (action: SyncItem['action'], payload: any) => Promise<void>;
   syncData: () => Promise<void>;
   fetchRemoteData: () => Promise<void>;
+  fetchOnlineOrders: () => Promise<void>;
+  updateOnlineOrderStatus: (orderId: string, status: string, productId?: string) => Promise<boolean>;
+  deleteOnlineOrder: (orderId: string) => Promise<boolean>;
   addProduct: (product: Omit<Product, 'created_at'>, isManual?: boolean) => Promise<void>;
   editProduct: (product: Product) => Promise<void>;
   deleteProduct: (productId: string) => Promise<void>;
@@ -96,6 +168,7 @@ export const useStore = create<AppState>((set, get) => ({
   stock: [],
   vendors: [],
   transactions: [],
+  onlineOrders: [],
   syncQueue: [],
   gasApiUrl: '',
   operator: 'staff',
@@ -226,7 +299,22 @@ export const useStore = create<AppState>((set, get) => ({
         if (item) tList.push(item);
       }
 
-      set({ products: pList, stock: sList, vendors: vList, transactions: tList.sort((a,b) => String(b.date || '').localeCompare(String(a.date || ''))) });
+      const oKeys = await dbOnlineOrders.keys();
+      const oList: OnlineOrder[] = [];
+      for (const k of oKeys) {
+        const item = await dbOnlineOrders.getItem<OnlineOrder>(k);
+        if (item) oList.push(item);
+      }
+
+      const resolvedOnlineOrders = resolveBlankProductIds(oList, pList);
+
+      set({ 
+        products: pList, 
+        stock: sList, 
+        vendors: vList, 
+        transactions: tList.sort((a,b) => String(b.date || '').localeCompare(String(a.date || ''))),
+        onlineOrders: resolvedOnlineOrders
+      });
     } catch (e: any) {
       set({ error: e.message });
     } finally {
@@ -563,12 +651,135 @@ export const useStore = create<AppState>((set, get) => ({
         set({ transactions: validT.sort((a: any, b: any) => String(b.date || '').localeCompare(String(a.date || ''))) });
       }
 
+      // Online Orders
+      try {
+        const rO = await fetch(`${gasApiUrl}?action=getOnlineOrders`);
+        if (rO.ok) {
+          const dO = await rO.json();
+          const validO = (dO || [])
+            .map((item: any) => normalizeOnlineOrder(item))
+            .filter((o: any): o is OnlineOrder => o !== null);
+          
+          const currentProducts = get().products;
+          const resolvedO = resolveBlankProductIds(validO, currentProducts);
+
+          await dbOnlineOrders.clear();
+          for (const o of resolvedO) {
+            await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id}`, o);
+          }
+          set({ onlineOrders: resolvedO });
+        }
+      } catch (err) {
+        console.warn("Failed to fetch online orders in fetchRemoteData, ignoring:", err);
+      }
+
     } catch (e: any) {
       console.error("fetchRemoteData error:", e);
       set({ error: `獲取遠端資料失敗 (${e.message})。目前為離線模式。`});
     } finally {
       set({ isLoading: false });
     }
+  },
+
+  fetchOnlineOrders: async () => {
+    const { gasApiUrl, showToast } = get();
+    if (!gasApiUrl) {
+      showToast("❌ 請先至設定頁面設定 Google Apps Script 網址！");
+      return;
+    }
+    set({ isLoading: true });
+    try {
+      const rO = await fetch(`${gasApiUrl}?action=getOnlineOrders`);
+      if (rO.ok) {
+        const dO = await rO.json();
+        const validO = (dO || [])
+          .map((item: any) => normalizeOnlineOrder(item))
+          .filter((o: any): o is OnlineOrder => o !== null);
+        
+        const currentProducts = get().products;
+        const resolvedO = resolveBlankProductIds(validO, currentProducts);
+
+        await dbOnlineOrders.clear();
+        for (const o of resolvedO) {
+          await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id}`, o);
+        }
+        set({ onlineOrders: resolvedO });
+        showToast(`✨ 成功讀取 ${resolvedO.length} 筆網路訂單資料！`);
+      } else {
+        throw new Error(`狀態碼: ${rO.status}`);
+      }
+    } catch (e: any) {
+      console.error("fetchOnlineOrders error:", e);
+      showToast(`❌ 讀取網路訂單失敗: ${e.message}`);
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  updateOnlineOrderStatus: async (orderId: string, status: string, productId?: string) => {
+    const { gasApiUrl, onlineOrders } = get();
+    // Update local state first for instant responsiveness
+    const updatedOrders = onlineOrders.map(o => {
+      const matchOrder = o.order_id === orderId;
+      const matchProduct = productId ? o.product_id === productId : true;
+      if (matchOrder && matchProduct) {
+        return { ...o, status };
+      }
+      return o;
+    });
+    set({ onlineOrders: updatedOrders });
+    
+    // Save to local cache
+    await dbOnlineOrders.clear();
+    for (const o of updatedOrders) {
+      await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id}`, o);
+    }
+
+    if (!gasApiUrl) return true;
+
+    // Send status update request to the Google Apps Script
+    try {
+      const response = await fetch(`${gasApiUrl}?action=updateOnlineOrder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ order_id: orderId, status, product_id: productId })
+      });
+      if (response.ok) {
+        return true;
+      }
+    } catch (err) {
+      console.error("Failed to update order status on cloud:", err);
+    }
+    return true;
+  },
+
+  deleteOnlineOrder: async (orderId: string) => {
+    const { gasApiUrl, onlineOrders } = get();
+    const updatedOrders = onlineOrders.filter(o => o.order_id !== orderId);
+    set({ onlineOrders: updatedOrders });
+
+    // Save to local cache
+    await dbOnlineOrders.clear();
+    for (const o of updatedOrders) {
+      await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id}`, o);
+    }
+
+    if (!gasApiUrl) return true;
+
+    // Send delete request to the Google Apps Script
+    try {
+      const response = await fetch(`${gasApiUrl}?action=deleteOnlineOrder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ order_id: orderId })
+      });
+      if (response.ok) {
+        return true;
+      }
+    } catch (err) {
+      console.error("Failed to delete online order on cloud:", err);
+    }
+    return true;
   },
 
   addProduct: async (product) => {

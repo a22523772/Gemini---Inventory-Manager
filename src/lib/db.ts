@@ -6,6 +6,21 @@ export const dbVendors = localforage.createInstance({ name: 'StockApp', storeNam
 export const dbSyncQueue = localforage.createInstance({ name: 'StockApp', storeName: 'syncQueue' });
 export const dbSettings = localforage.createInstance({ name: 'StockApp', storeName: 'settings' });
 export const dbTransactions = localforage.createInstance({ name: 'StockApp', storeName: 'transactions' });
+export const dbOnlineOrders = localforage.createInstance({ name: 'StockApp', storeName: 'onlineOrders' });
+
+export type OnlineOrder = {
+  order_id: string;
+  platform: string;
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  price: number;
+  customer_name: string;
+  status: string; // This is the latest shipment time (最晚出貨時間)
+  created_at: string;
+  specification?: string; // 商品規格
+  shipping_method?: string; // 物流方式
+};
 
 export type Product = {
   product_id: string;

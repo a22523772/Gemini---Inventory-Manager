@@ -247,12 +247,13 @@ export default function SetupGuide() {
 
              <section>
                 <h3 className="text-base font-bold text-[var(--color-text-main)]">1. Google Sheets 結構設定</h3>
-                <p className="text-[var(--color-text-dim)] mt-1">請建立一個新的 Google Sheet，並確保下方有這四個工作表 (區分大小寫)：</p>
+                <p className="text-[var(--color-text-dim)] mt-1">請建立一個新的 Google Sheet，並確保下方有這五個工作表 (區分大小寫)：</p>
                 <ul className="list-disc pl-5 mt-2 space-y-1 text-white/80 font-mono text-xs">
                   <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, specification, min_stock, created_at</li>
                   <li><strong>vendors</strong> (供應商): vendor_id, vendor_name, contact, phone</li>
                   <li><strong>stock</strong> (庫存表): stock_id, product_id, name, location, floor, area, quantity, expiry_date, specification, last_update</li>
                   <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, name, type, quantity, location, floor, area, specification, cost_price, vendor_id, date, note, operator</li>
+                  <li><strong>網路訂單</strong> (網路訂單): order_id, platform, product_id, product_name, quantity, price, customer_name, status, created_at, specification, shipping_method</li>
                 </ul>
              </section>
 
@@ -707,6 +708,49 @@ export default function SetupGuide() {
     }
     return ContentService.createTextOutput(JSON.stringify({success:true, count: data.length})).setMimeType(ContentService.MimeType.JSON);
   }
+
+  if (action === 'updateOnlineOrder') {
+    var orderSheet = ss.getSheetByName('網路訂單');
+    if (orderSheet && orderSheet.getLastRow() > 1) {
+      var headers = orderSheet.getRange(1, 1, 1, orderSheet.getLastColumn()).getValues()[0];
+      var orderIdIdx = headers.indexOf('order_id');
+      var statusIdx = headers.indexOf('status');
+      var productIdIdx = headers.indexOf('product_id');
+      if (orderIdIdx !== -1 && statusIdx !== -1) {
+        var values = orderSheet.getDataRange().getValues();
+        for (var i = 1; i < values.length; i++) {
+          var matchOrder = String(values[i][orderIdIdx]).trim() === String(data.order_id).trim();
+          var matchProduct = true;
+          if (data.product_id && productIdIdx !== -1) {
+            matchProduct = String(values[i][productIdIdx]).trim() === String(data.product_id).trim();
+          }
+          if (matchOrder && matchProduct) {
+            orderSheet.getRange(i+1, statusIdx + 1).setValue(data.status);
+          }
+        }
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'deleteOnlineOrder') {
+    var orderSheet = ss.getSheetByName('網路訂單');
+    if (orderSheet && orderSheet.getLastRow() > 1) {
+      var headers = orderSheet.getRange(1, 1, 1, orderSheet.getLastColumn()).getValues()[0];
+      var orderIdIdx = headers.indexOf('order_id');
+      if (orderIdIdx === -1) orderIdIdx = headers.indexOf('訂單編號');
+      if (orderIdIdx !== -1) {
+        var values = orderSheet.getDataRange().getValues();
+        for (var i = values.length - 1; i >= 1; i--) {
+          var currentOrderId = String(values[i][orderIdIdx]).trim();
+          if (currentOrderId === String(data.order_id).trim()) {
+            orderSheet.deleteRow(i + 1);
+          }
+        }
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 function doGet(e) {
@@ -800,6 +844,28 @@ function doGet(e) {
       }
       result.push(obj);
       if(result.length > 500) break; // Limit records to 500
+    }
+    return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'getOnlineOrders') {
+    var sheet = ss.getSheetByName('網路訂單');
+    if(!sheet || sheet.getLastRow() <= 1) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
+    var dataRange = sheet.getDataRange();
+    var data = dataRange.getDisplayValues();
+    if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
+    var keys = data[0];
+    var result = [];
+    for(var i=1; i<data.length; i++){
+      if (!data[i].join('').trim()) continue; // Skip empty rows
+      var obj = {};
+      for(var j=0; j<keys.length; j++){ 
+        var val = data[i][j];
+        if (keys[j] === 'quantity') val = Number(val) || 0;
+        if (keys[j] === 'price') val = Number(val) || 0;
+        obj[keys[j]] = val; 
+      }
+      result.push(obj);
     }
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
   }
