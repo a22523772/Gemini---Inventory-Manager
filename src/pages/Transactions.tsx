@@ -312,7 +312,7 @@ export default function Transactions() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-4 md:space-y-0">
         <div className="flex justify-between items-center px-1 mb-1">
           <p className="text-xs text-[var(--color-text-dim)] font-medium">
             {transactions.length > 0 && transactions.length !== filteredTransactions.length ? (

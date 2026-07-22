@@ -161,14 +161,17 @@ export default function Products() {
   return (
     <div className="h-full flex flex-col">
       <div className="glass-panel border-x-0 border-t-0 px-4 pt-6 pb-4 sticky top-0 z-10">
-        <div className="flex justify-between items-center mb-4">
-          <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text-main)]">商品列表</h1>
-          <div className="flex gap-2">
+        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-4">
+          <h1 className="text-xl sm:text-2xl font-black tracking-tight text-white shrink-0 whitespace-nowrap flex items-center gap-2">
+            商品列表
+            <span className="text-xs font-normal text-slate-400 font-mono">({groupedProducts.length})</span>
+          </h1>
+          <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap justify-end">
             <div className="relative">
               <select 
                 value={sortOrder}
                 onChange={(e) => setSortOrder(e.target.value as SortType)}
-                className="appearance-none bg-white/5 border border-white/10 rounded-full pl-8 pr-4 py-2 text-xs font-bold text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] transition-all cursor-pointer hover:bg-white/10"
+                className="appearance-none bg-white/5 border border-white/10 rounded-full pl-8 pr-4 py-1.5 text-xs font-bold text-white outline-none focus:border-sky-400 transition-all cursor-pointer hover:bg-white/10"
               >
                 <option value="name_asc" className="bg-[#0f172a]">名稱 A-Z</option>
                 <option value="name_desc" className="bg-[#0f172a]">名稱 Z-A</option>
@@ -176,18 +179,16 @@ export default function Products() {
                 <option value="stock_low" className="bg-[#0f172a]">庫存: 低 → 高</option>
                 <option value="stock_high" className="bg-[#0f172a]">庫存: 高 → 低</option>
               </select>
-              <ArrowUpDown className="w-3 h-3 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)] pointer-events-none" />
+              <ArrowUpDown className="w-3 h-3 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             </div>
             <button 
               onClick={() => setShowFilters(!showFilters)} 
-              className={`p-2 rounded-full transition-colors ${showFilters ? 'bg-white/20 text-white' : 'glass-panel text-[var(--color-text-dim)] hover:text-white'}`}
+              className={`p-2 rounded-full transition-colors ${showFilters ? 'bg-white/20 text-white' : 'glass-panel text-slate-400 hover:text-white'}`}
             >
-              <Filter className="w-5 h-5" />
+              <Filter className="w-4 h-4" />
             </button>
-            <Link to="/add-product" className="p-2 bg-[var(--color-accent-blue)] text-[#0f172a] rounded-full hover:opacity-90 transition-opacity active:scale-95 shadow-lg shadow-sky-400/20">
-              <span className="flex items-center text-sm font-bold px-2">
-                + 新增
-              </span>
+            <Link to="/add-product" className="px-3.5 py-1.5 bg-sky-400 hover:bg-sky-300 text-slate-950 font-extrabold rounded-full transition-colors active:scale-95 text-xs shadow-md shadow-sky-400/20 whitespace-nowrap flex items-center gap-1">
+              <span>+ 新增商品</span>
             </Link>
           </div>
         </div>
@@ -242,7 +243,7 @@ export default function Products() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 md:grid md:grid-cols-2 lg:grid-cols-3 md:gap-4 md:space-y-0">
         {groupedProducts.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-[var(--color-text-dim)] py-12">
             <PackageOpen className="w-12 h-12 mb-3 opacity-50" />

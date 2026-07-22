@@ -149,7 +149,7 @@ export default function Vendors() {
         </form>
       )}
 
-      <div className="flex-1 overflow-y-auto space-y-3">
+      <div className="flex-1 overflow-y-auto space-y-3 md:grid md:grid-cols-2 lg:grid-cols-3 md:gap-4 md:space-y-0">
         {vendors.length === 0 ? (
           <div className="h-40 flex flex-col items-center justify-center text-[var(--color-text-dim)] glass-panel rounded-2xl border-dashed">
             <Building2 className="w-8 h-8 mb-2 opacity-50 text-[var(--color-accent-blue)]" />
