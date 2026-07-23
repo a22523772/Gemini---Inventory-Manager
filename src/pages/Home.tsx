@@ -506,7 +506,8 @@ export default function Home() {
             {(() => {
               const lowStockProducts = products.filter(p => {
                 const pStock = stock.filter(s => s.product_id === p.product_id).reduce((acc, curr) => acc + curr.quantity, 0);
-                const alertThreshold = p.min_stock !== undefined ? p.min_stock : 5;
+                const rawMin = p.min_stock;
+                const alertThreshold = (typeof rawMin === 'number' && !isNaN(rawMin)) ? rawMin : (rawMin !== undefined && rawMin !== null && (rawMin as any) !== '' && !isNaN(Number(rawMin))) ? Number(rawMin) : 5;
                 return pStock <= alertThreshold;
               });
 

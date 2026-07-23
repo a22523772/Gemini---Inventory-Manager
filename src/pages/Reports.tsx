@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store/useStore';
+import { Link } from 'react-router-dom';
 import { 
   BarChart2, List, AlertTriangle, Clock, MapPin, 
   TrendingUp, TrendingDown, DollarSign, PackageX, PieChart as PieChartIcon
@@ -70,15 +71,27 @@ export default function Reports() {
       }
     });
 
-    // Low Stock Check (using total stock for the product)
-    Object.keys(productTotalStock).forEach(pid => {
-      const product = products.find(p => p.product_id === pid);
-      if (!product) return;
-      const totalQty = productTotalStock[pid];
-      if (totalQty > 0 && totalQty <= (product.min_stock || 5)) { // default safe stock 5 if not set
+    // Low Stock Check (evaluate ALL products, including out-of-stock items with 0 stock)
+    products.forEach(product => {
+      const totalQty = stock
+        .filter(s => s.product_id === product.product_id)
+        .reduce((acc, curr) => acc + (Number(curr.quantity) || 0), 0);
+
+      const rawMin = product.min_stock;
+      const safeStock = (typeof rawMin === 'number' && !isNaN(rawMin)) 
+        ? rawMin 
+        : (rawMin !== undefined && rawMin !== null && (rawMin as any) !== '' && !isNaN(Number(rawMin)))
+          ? Number(rawMin)
+          : 5;
+
+      if (totalQty <= safeStock) {
         const vendorId = product.vendor_id || 'unknown';
         if (!lowStockByVendor[vendorId]) lowStockByVendor[vendorId] = [];
-        lowStockByVendor[vendorId].push({ product, quantity: totalQty });
+        lowStockByVendor[vendorId].push({ 
+          product, 
+          quantity: totalQty,
+          safeStock 
+        });
       }
     });
 
@@ -285,10 +298,24 @@ export default function Reports() {
                     <div key={iDx} className="p-3">
                       <div className="flex justify-between items-start gap-2">
                          <span className="font-medium text-sm text-white break-words flex-1 min-w-0">{item.product?.name || '未知商品'}</span>
-                         <span className="bg-red-500/20 text-red-400 text-xs px-2 py-0.5 rounded-full shrink-0">總計 {item.quantity} {item.product?.unit}</span>
+                         <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 font-bold ${
+                           item.quantity === 0
+                             ? 'bg-red-500/30 text-red-300 border border-red-500/50 font-black'
+                             : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                         }`}>
+                           {item.quantity === 0 ? '缺貨 (0' : `目前庫存 ${item.quantity}`} {item.product?.unit || '個'})
+                         </span>
                       </div>
-                      <div className="text-xs text-[var(--color-text-dim)] mt-1">
-                        安全庫存: {item.product?.min_stock || 5}
+                      <div className="text-xs text-[var(--color-text-dim)] mt-1 flex items-center justify-between">
+                        <span>安全庫存: <strong className="text-white font-mono font-bold">{item.safeStock}</strong> {item.product?.unit || '個'}</span>
+                        {item.product?.product_id && (
+                          <Link 
+                            to={`/manage?type=stock_in&pid=${item.product.product_id}`}
+                            className="text-[10px] bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 px-2.5 py-0.5 rounded transition-all font-bold"
+                          >
+                            去補貨
+                          </Link>
+                        )}
                       </div>
                     </div>
                   ))}

@@ -565,7 +565,10 @@ export const useStore = create<AppState>((set, get) => ({
             specification: p.specification ? String(p.specification).trim() : '',
             has_expiry: String(p.has_expiry).toUpperCase() === 'TRUE',
             cost_price: Number(p.cost_price) || 0,
-            min_stock: p.min_stock !== undefined ? Number(p.min_stock) : undefined
+            min_stock: (() => {
+              const raw = p.min_stock ?? p['安全庫存'] ?? p['安全庫存量'] ?? p['最低庫存'] ?? p['最低庫存量'] ?? p['警示庫存'] ?? p.minstock;
+              return (raw !== undefined && raw !== null && raw !== '' && !isNaN(Number(raw))) ? Number(raw) : undefined;
+            })()
           };
           if (!productMap[id]) {
             productMap[id] = cleanP;

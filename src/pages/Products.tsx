@@ -255,7 +255,8 @@ export default function Products() {
             const groupId = p.product_id;
             const isGroupExpanded = expandedId === groupId;
 
-            const alertThreshold = p.min_stock !== undefined ? p.min_stock : 5;
+            const rawMin = p.min_stock;
+            const alertThreshold = (typeof rawMin === 'number' && !isNaN(rawMin)) ? rawMin : (rawMin !== undefined && rawMin !== null && (rawMin as any) !== '' && !isNaN(Number(rawMin))) ? Number(rawMin) : 5;
             const isLowStock = lowStockAlertEnabled && group.totalStock <= alertThreshold;
             const isExpired = group.isExpired;
             const isExpiringSoon = group.isExpiringSoon;
