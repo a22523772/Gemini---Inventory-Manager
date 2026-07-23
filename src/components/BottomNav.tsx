@@ -21,7 +21,7 @@ export default function BottomNav() {
       sector = 'products';
     } else if (location.pathname.startsWith('/scan')) {
       sector = 'scan';
-    } else if (location.pathname.startsWith('/manage')) {
+    } else if (location.pathname.startsWith('/manage') || location.pathname.startsWith('/transactions')) {
       sector = 'manage';
     } else if (location.pathname.startsWith('/setup')) {
       sector = 'setup';

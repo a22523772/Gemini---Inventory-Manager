@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { PackageOpen, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Calendar, Search, Filter, X, ChevronDown, ChevronUp, Eye, Edit, Trash2, ScanBarcode } from 'lucide-react';
+import { PackageOpen, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Calendar, Search, Filter, X, ChevronDown, ChevronUp, Eye, Edit, Trash2, ScanBarcode, ArrowLeft } from 'lucide-react';
 import { format, subDays, startOfDay, endOfDay } from 'date-fns';
 import { useSearchParams, Link } from 'react-router-dom';
 import QuantityInput from '../components/QuantityInput';
@@ -10,8 +10,8 @@ export default function Transactions() {
   const [searchParams] = useSearchParams();
   const [filterType, setFilterType] = useState(transactionsPageState.filterType);
   const [searchTerm, setSearchTerm] = useState(transactionsPageState.searchTerm || searchParams.get('pid') || '');
-  const [startDate, setStartDate] = useState(transactionsPageState.startDate || format(subDays(new Date(), 7), 'yyyy-MM-dd'));
-  const [endDate, setEndDate] = useState(transactionsPageState.endDate || format(new Date(), 'yyyy-MM-dd'));
+  const [startDate, setStartDate] = useState(transactionsPageState.startDate !== undefined ? transactionsPageState.startDate : '');
+  const [endDate, setEndDate] = useState(transactionsPageState.endDate !== undefined ? transactionsPageState.endDate : '');
   const [showFilters, setShowFilters] = useState(transactionsPageState.showFilters);
   const [filterLocation, setFilterLocation] = useState(transactionsPageState.filterLocation);
   const [filterVendor, setFilterVendor] = useState(transactionsPageState.filterVendor);
@@ -213,7 +213,16 @@ export default function Transactions() {
     <div className="h-full flex flex-col">
       <div className="glass-panel border-x-0 border-t-0 px-4 pt-6 pb-4 sticky top-0 z-20">
         <div className="flex justify-between items-center mb-4">
-          <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text-main)]">進出貨紀錄</h1>
+          <div className="flex items-center gap-2.5">
+            <Link 
+              to="/manage" 
+              className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition-all active:scale-95 flex items-center justify-center"
+              title="返回管理頁面"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </Link>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[var(--color-text-main)]">進出貨紀錄</h1>
+          </div>
           <button 
             onClick={() => setShowFilters(!showFilters)}
             className={`p-2 rounded-xl transition-all ${showFilters ? 'bg-[var(--color-accent-blue)] text-[#0f172a]' : 'bg-white/5 text-[var(--color-text-dim)] hover:text-white'}`}
@@ -239,6 +248,31 @@ export default function Transactions() {
 
           {showFilters && (
             <div className="space-y-3 pt-3 border-t border-white/5 animate-in fade-in slide-in-from-top-2">
+              <div className="flex items-center gap-1.5 pb-1 overflow-x-auto">
+                <span className="text-[10px] text-slate-400 font-bold shrink-0">快選:</span>
+                <button
+                  type="button"
+                  onClick={() => { setStartDate(''); setEndDate(''); }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all border shrink-0 ${!startDate && !endDate ? 'bg-sky-500 text-slate-950 border-sky-400' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'}`}
+                >
+                  全部時間
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setStartDate(format(subDays(new Date(), 7), 'yyyy-MM-dd')); setEndDate(format(new Date(), 'yyyy-MM-dd')); }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all border shrink-0 ${startDate === format(subDays(new Date(), 7), 'yyyy-MM-dd') ? 'bg-sky-500 text-slate-950 border-sky-400' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'}`}
+                >
+                  近 7 天
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setStartDate(format(subDays(new Date(), 30), 'yyyy-MM-dd')); setEndDate(format(new Date(), 'yyyy-MM-dd')); }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all border shrink-0 ${startDate === format(subDays(new Date(), 30), 'yyyy-MM-dd') ? 'bg-sky-500 text-slate-950 border-sky-400' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'}`}
+                >
+                  近 30 天
+                </button>
+              </div>
+
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">開始日期</label>
@@ -321,16 +355,17 @@ export default function Transactions() {
               <>系統共載入 <span className="text-[var(--color-accent-blue)] font-bold">{transactions.length}</span> 筆紀錄</>
             )}
           </p>
-          {(filterType || searchTerm || filterLocation) && (
+          {(filterType || searchTerm || filterLocation || filterVendor || startDate || endDate) && (
             <button 
               onClick={() => {
                 setFilterType('');
                 setSearchTerm('');
                 setFilterLocation('');
-                setStartDate(format(subDays(new Date(), 7), 'yyyy-MM-dd'));
-                setEndDate(format(new Date(), 'yyyy-MM-dd'));
+                setFilterVendor('');
+                setStartDate('');
+                setEndDate('');
               }}
-              className="text-[10px] text-[var(--color-accent-blue)] font-bold flex items-center gap-1 hover:underline"
+              className="text-[10px] text-sky-400 font-bold flex items-center gap-1 hover:underline"
             >
               清除所有篩選
             </button>

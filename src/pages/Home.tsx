@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { 
   Package, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, 
-  AlertTriangle, BarChart2, Globe, Truck, Trash2, X, PlusCircle, User, Calendar, CheckCircle, Flame, Search, ArrowRight
+  AlertTriangle, BarChart2, Globe, Truck, Trash2, X, PlusCircle, User, Calendar, CheckCircle, Flame, Search, ArrowRight, FileText
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -459,6 +459,16 @@ export default function Home() {
               </Link>
 
               <Link 
+                to="/transactions" 
+                className="flex flex-col items-center justify-center p-3.5 bg-gradient-to-br from-indigo-500/10 to-indigo-600/5 hover:from-indigo-500/20 hover:to-indigo-600/10 border border-indigo-500/20 rounded-xl transition-all active:scale-95 group"
+              >
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center mb-2 text-indigo-400 group-hover:scale-110 transition-transform">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <span className="text-xs font-bold text-white">交易紀錄</span>
+              </Link>
+
+              <Link 
                 to="/manage?type=adjust" 
                 className="flex flex-col items-center justify-center p-3.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition-all active:scale-95 group"
               >
@@ -466,16 +476,6 @@ export default function Home() {
                   <RefreshCcw className="w-5 h-5" />
                 </div>
                 <span className="text-xs font-bold text-white">盤點校正</span>
-              </Link>
-
-              <Link 
-                to="/add-product" 
-                className="flex flex-col items-center justify-center p-3.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition-all active:scale-95 group"
-              >
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center mb-2 text-emerald-400 group-hover:scale-110 transition-transform">
-                  <PlusCircle className="w-5 h-5" />
-                </div>
-                <span className="text-xs font-bold text-white">新增商品</span>
               </Link>
             </div>
 

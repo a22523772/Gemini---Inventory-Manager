@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useStore } from '../store/useStore';
-import { ArrowLeft, Save, Search, X, Filter, Plus, ScanBarcode } from 'lucide-react';
+import { ArrowLeft, Save, Search, X, Filter, Plus, ScanBarcode, FileText } from 'lucide-react';
 import OutboundCart from '../components/OutboundCart';
 import QuantityInput from '../components/QuantityInput';
 
@@ -327,18 +327,27 @@ export default function StockManage() {
         <h1 className="ml-2 text-xl font-bold text-[var(--color-text-main)]">庫存管理</h1>
       </header>
 
-      <div className="p-4 glass-panel border-x-0 border-t-0 flex gap-2 overflow-x-auto">
-        {['stock_in', 'stock_out', 'adjust'].map((t) => (
-          <button
-            key={t}
-            onClick={() => setType(t as any)}
-            className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-colors ${
-              type === t ? 'bg-[var(--color-accent-blue)] text-[#0f172a]' : 'glass-panel text-[var(--color-text-dim)] hover:text-white'
-            }`}
-          >
-            {t === 'stock_in' ? '進貨' : t === 'stock_out' ? '出貨' : '調整'}
-          </button>
-        ))}
+      <div className="p-4 glass-panel border-x-0 border-t-0 flex items-center justify-between gap-2 overflow-x-auto">
+        <div className="flex gap-2">
+          {['stock_in', 'stock_out', 'adjust'].map((t) => (
+            <button
+              key={t}
+              onClick={() => setType(t as any)}
+              className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-colors ${
+                type === t ? 'bg-[var(--color-accent-blue)] text-[#0f172a]' : 'glass-panel text-[var(--color-text-dim)] hover:text-white'
+              }`}
+            >
+              {t === 'stock_in' ? '進貨' : t === 'stock_out' ? '出貨' : '調整'}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => navigate('/transactions')}
+          className="px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 transition-all flex items-center gap-1.5 shrink-0"
+        >
+          <FileText className="w-4 h-4" />
+          <span>交易歷史紀錄</span>
+        </button>
       </div>
 
       {type === 'stock_out' ? (
