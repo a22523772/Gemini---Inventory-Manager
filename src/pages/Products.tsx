@@ -19,6 +19,9 @@ export default function Products() {
   const [sortOrder, setSortOrder] = useState<SortType>((productsPageState.sortOrder as SortType) || 'name_asc');
   const navigate = useNavigate();
 
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 24;
+
   const now = new Date();
 
   useEffect(() => {
@@ -27,6 +30,10 @@ export default function Products() {
       setSearchTerm(pid);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterBrand, filterCategory, filterVendor, sortOrder]);
 
   useEffect(() => {
     setProductsPageState({
@@ -44,13 +51,15 @@ export default function Products() {
   const categories = useMemo(() => Array.from(new Set(products.map(p => p.category).filter(Boolean))), [products]);
   const uniqueVendors = useMemo(() => Array.from(new Set(products.map(p => p.vendor_id).filter(Boolean))), [products]);
 
+  // Vendor map for O(1) vendor name lookup
+  const vendorMap = useMemo(() => new Map(vendors.map(v => [v.vendor_id, v.vendor_name])), [vendors]);
+
   // Helper func to get vendor name
   const getVendorName = (vid: string) => {
-     const v = vendors.find(v => v.vendor_id === vid);
-     return v ? v.vendor_name : vid;
+     return vendorMap.get(vid) || vid;
   };
 
-  // Grouping the products by product_id
+  // Grouping the products by product_id with O(1) map lookup
   const groupedProducts = useMemo(() => {
      const groups: Record<string, { 
        product: any, 
@@ -83,9 +92,11 @@ export default function Products() {
         }
      });
 
-     // 2. Map stock entries to these groups
+     // 2. Map stock entries using productMap O(1) lookup
+     const productMap = new Map(products.map(prod => [prod.product_id, prod]));
+
      stock.forEach(s => {
-        const p = products.find(prod => prod.product_id === s.product_id);
+        const p = productMap.get(s.product_id);
         if (p) {
             const key = p.product_id;
             if (groups[key]) {
@@ -127,7 +138,7 @@ export default function Products() {
      });
 
      // Apply Sorting
-     const sorted = [...filtered].sort((a, b) => {
+     return filtered.sort((a, b) => {
         switch (sortOrder) {
           case 'name_asc':
             return a.product.name.localeCompare(b.product.name, 'zh-HK');
@@ -143,9 +154,13 @@ export default function Products() {
             return 0;
         }
      });
+  }, [products, stock, expiryThreshold, searchTerm, filterBrand, filterCategory, filterVendor, sortOrder]);
 
-     return sorted.slice(0, 100);
-  }, [products, stock, searchTerm, filterBrand, filterCategory, filterVendor, sortOrder]);
+  const totalPages = Math.ceil(groupedProducts.length / PAGE_SIZE) || 1;
+  const paginatedProducts = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return groupedProducts.slice(start, start + PAGE_SIZE);
+  }, [groupedProducts, currentPage]);
 
   const executeDelete = async (pid: string) => {
     try {
@@ -244,13 +259,13 @@ export default function Products() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3 md:grid md:grid-cols-2 lg:grid-cols-3 md:gap-4 md:space-y-0">
-        {groupedProducts.length === 0 ? (
-          <div className="flex flex-col items-center justify-center text-[var(--color-text-dim)] py-12">
+        {paginatedProducts.length === 0 ? (
+          <div className="flex flex-col items-center justify-center text-[var(--color-text-dim)] py-12 md:col-span-2 lg:col-span-3">
             <PackageOpen className="w-12 h-12 mb-3 opacity-50" />
             <p className="text-sm font-medium">找不到符合的商品</p>
           </div>
         ) : (
-          groupedProducts.map(group => {
+          paginatedProducts.map(group => {
             const p = group.product;
             const groupId = p.product_id;
             const isGroupExpanded = expandedId === groupId;
@@ -398,6 +413,37 @@ export default function Products() {
           })
         )}
       </div>
+
+      {/* Pagination Footer */}
+      {groupedProducts.length > 0 && (
+        <div className="glass-panel border-x-0 border-b-0 px-4 py-3 flex items-center justify-between text-xs text-[var(--color-text-dim)] shrink-0 sticky bottom-0 z-10 bg-[#0f172a]/90 backdrop-blur-md">
+          <div className="font-mono">
+            共 <span className="text-white font-bold">{groupedProducts.length}</span> 項商品
+            {totalPages > 1 && ` (第 ${currentPage} / ${totalPages} 頁)`}
+          </div>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 rounded-lg glass-panel hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent text-white font-medium transition-all"
+              >
+                上一頁
+              </button>
+              <span className="font-mono font-bold text-white px-1">
+                {currentPage}
+              </span>
+              <button
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1.5 rounded-lg glass-panel hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent text-white font-medium transition-all"
+              >
+                下一頁
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

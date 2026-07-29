@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useStore } from '../store/useStore';
 import { 
   Package, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, 
@@ -63,11 +63,33 @@ export default function Home() {
     }
   };
 
-  // Helper for specs and price checking
+  const productMap = useMemo(() => new Map(products.map(p => [p.product_id, p])), [products]);
+
   const getProductSpecification = (pid: string) => {
-    const p = products.find(prod => prod.product_id === pid);
+    const p = productMap.get(pid);
     return p ? p.specification : '';
   };
+
+  const productTotalStockMap = useMemo(() => {
+    const map = new Map<string, number>();
+    stock.forEach(s => {
+      map.set(s.product_id, (map.get(s.product_id) || 0) + s.quantity);
+    });
+    return map;
+  }, [stock]);
+
+  const lowStockProducts = useMemo(() => {
+    return products.filter(p => {
+      const pStock = productTotalStockMap.get(p.product_id) || 0;
+      const rawMin = p.min_stock;
+      const alertThreshold = (typeof rawMin === 'number' && !isNaN(rawMin)) 
+        ? rawMin 
+        : (rawMin !== undefined && rawMin !== null && (rawMin as any) !== '' && !isNaN(Number(rawMin)))
+          ? Number(rawMin)
+          : 5;
+      return pStock <= alertThreshold;
+    });
+  }, [products, productTotalStockMap]);
 
   // If onlineOrders is empty, fallback to mock orders so testing is easy immediately
   const displayOrders = onlineOrders.length > 0 ? onlineOrders.filter(o => o.status !== '已刪除') : [
@@ -503,26 +525,14 @@ export default function Home() {
               </Link>
             </div>
 
-            {(() => {
-              const lowStockProducts = products.filter(p => {
-                const pStock = stock.filter(s => s.product_id === p.product_id).reduce((acc, curr) => acc + curr.quantity, 0);
-                const rawMin = p.min_stock;
-                const alertThreshold = (typeof rawMin === 'number' && !isNaN(rawMin)) ? rawMin : (rawMin !== undefined && rawMin !== null && (rawMin as any) !== '' && !isNaN(Number(rawMin))) ? Number(rawMin) : 5;
-                return pStock <= alertThreshold;
-              });
-
-              if (lowStockProducts.length === 0) {
-                return (
-                  <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-center text-xs text-emerald-300">
-                    👍 太棒了！目前沒有存量過低的商品。
-                  </div>
-                );
-              }
-
-              return (
-                <div className="space-y-2 max-h-56 overflow-y-auto pr-1 custom-scrollbar">
-                  {lowStockProducts.slice(0, 6).map(p => {
-                    const currentQty = stock.filter(s => s.product_id === p.product_id).reduce((acc, curr) => acc + curr.quantity, 0);
+            {lowStockProducts.length === 0 ? (
+              <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-center text-xs text-emerald-300">
+                👍 太棒了！目前沒有存量過低的商品。
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-56 overflow-y-auto pr-1 custom-scrollbar">
+                {lowStockProducts.slice(0, 6).map(p => {
+                  const currentQty = productTotalStockMap.get(p.product_id) || 0;
                     return (
                       <div key={p.product_id} className="p-2.5 bg-black/30 border border-amber-500/20 rounded-xl flex items-center justify-between text-xs">
                         <div className="min-w-0 pr-2">
@@ -544,8 +554,7 @@ export default function Home() {
                     );
                   })}
                 </div>
-              );
-            })()}
+            )}
           </div>
         </div>
 

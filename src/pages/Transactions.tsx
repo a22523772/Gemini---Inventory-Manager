@@ -76,92 +76,96 @@ export default function Transactions() {
     }
   }, [gasApiUrl]); // Fetch on mount or when API URL changes
 
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 30;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterType, searchTerm, startDate, endDate, filterLocation, filterVendor]);
+
+  const productMap = useMemo(() => new Map(products.map(p => [p.product_id, p])), [products]);
+  const vendorMap = useMemo(() => new Map(vendors.map(v => [v.vendor_id, v.vendor_name])), [vendors]);
+
   const locations = useMemo(() => Array.from(new Set(transactions.map(t => t.location).filter(Boolean))), [transactions]);
 
-  const filteredTransactions = transactions.filter(t => {
-    // Type Filter
-    if (filterType && t.type !== filterType) return false;
+  const filteredTransactions = useMemo(() => {
+    return transactions.filter(t => {
+      // Type Filter
+      if (filterType && t.type !== filterType) return false;
 
-    // Date Range Filter
-    if (startDate && endDate) {
-      try {
-        if (!t.date) return true; // Default to showing records without date
-        
-        // Handle common formats like "2026/04/30 17:10:36", "2026-04-30", etc.
-        let dStr = String(t.date);
-        // Replace dashes with slashes for Safari compatibility if it doesn't have T
-        if (!dStr.includes('T')) {
-           dStr = dStr.replace(/-/g, '/');
+      // Date Range Filter
+      if (startDate && endDate) {
+        try {
+          if (!t.date) return true; // Default to showing records without date
+          
+          let dStr = String(t.date);
+          if (!dStr.includes('T')) {
+             dStr = dStr.replace(/-/g, '/');
+          }
+          let tDate = new Date(dStr);
+          
+          if (!isNaN(tDate.getTime())) {
+            const start = startOfDay(new Date(startDate.replace(/-/g, '/')));
+            const end = endOfDay(new Date(endDate.replace(/-/g, '/')));
+            if (tDate < start || tDate > end) return false;
+          }
+        } catch (e) {
+          console.warn("Date parsing error for record:", t, e);
         }
-        let tDate = new Date(dStr);
+      }
+
+      // Search Filter (Product Name, ID, or Operator)
+      if (searchTerm) {
+        const s = searchTerm.toLowerCase();
+        const product = productMap.get(t.product_id);
+        const productName = product?.name.toLowerCase() || '';
+        const pid = String(t.product_id || '').toLowerCase();
+        const op = String(t.operator || '').toLowerCase();
         
-        if (!isNaN(tDate.getTime())) {
-          const start = startOfDay(new Date(startDate.replace(/-/g, '/')));
-          const end = endOfDay(new Date(endDate.replace(/-/g, '/')));
-          if (tDate < start || tDate > end) return false;
+        if (!productName.includes(s) && !pid.includes(s) && !op.includes(s)) {
+          return false;
         }
-      } catch (e) {
-        console.warn("Date parsing error for record:", t, e);
-        // In case of error, show it anyway to be safe
       }
-    }
 
-    // Search Filter (Product Name, ID, or Operator)
-    if (searchTerm) {
-      const s = searchTerm.toLowerCase();
-      const product = products.find(p => p.product_id === t.product_id);
-      const productName = product?.name.toLowerCase() || '';
-      const pid = String(t.product_id || '').toLowerCase();
-      const op = String(t.operator || '').toLowerCase();
-      
-      if (!productName.includes(s) && !pid.includes(s) && !op.includes(s)) {
-        return false;
-      }
-    }
+      // Location Filter
+      if (filterLocation && t.location !== filterLocation) return false;
 
-    // Location Filter
-    if (filterLocation && t.location !== filterLocation) return false;
+      // Vendor Filter
+      if (filterVendor && t.vendor_id !== filterVendor) return false;
 
-    // Vendor Filter
-    if (filterVendor && t.vendor_id !== filterVendor) return false;
-
-    return true;
-  });
+      return true;
+    });
+  }, [transactions, filterType, startDate, endDate, searchTerm, filterLocation, filterVendor, productMap]);
 
   const groupedTransactions = useMemo(() => {
     const result: (typeof filteredTransactions)[] = [];
+    const txGroupMap = new Map<string, typeof filteredTransactions>();
     
     filteredTransactions.forEach(t => {
       if (t.type === 'stock_out') {
-        // Find if there is an existing group in result that this transaction can be added to
-        const matchedGroup = result.find(group => {
-          const first = group[0];
-          if (first.type !== 'stock_out') return false;
-          
-          // If transaction_id matches and is valid, group them!
-          if (t.transaction_id && first.transaction_id && t.transaction_id === first.transaction_id) {
-            return true;
-          }
-          
-          // Fallback grouping: same operator, same note, and close timestamps (within 12 seconds)
-          if (t.operator === first.operator && (t.note || '') === (first.note || '')) {
-            try {
-              const d1 = new Date(t.date).getTime();
-              const d2 = new Date(first.date).getTime();
-              if (!isNaN(d1) && !isNaN(d2) && Math.abs(d1 - d2) <= 12000) {
-                return true;
-              }
-            } catch (e) {
-              // Ignore parsing errors
-            }
-          }
-          return false;
-        });
+        let matchedGroup: typeof filteredTransactions | undefined;
+        
+        if (t.transaction_id) {
+          matchedGroup = txGroupMap.get(`txid_${t.transaction_id}`);
+        }
+
+        if (!matchedGroup && t.operator && t.date) {
+          const roundedTime = Math.floor(new Date(t.date).getTime() / 12000);
+          matchedGroup = txGroupMap.get(`key_${t.operator}_${t.note || ''}_${roundedTime}`);
+        }
 
         if (matchedGroup) {
           matchedGroup.push(t);
         } else {
-          result.push([t]);
+          const newGroup = [t];
+          result.push(newGroup);
+          if (t.transaction_id) {
+            txGroupMap.set(`txid_${t.transaction_id}`, newGroup);
+          }
+          if (t.operator && t.date) {
+            const roundedTime = Math.floor(new Date(t.date).getTime() / 12000);
+            txGroupMap.set(`key_${t.operator}_${t.note || ''}_${roundedTime}`, newGroup);
+          }
         }
       } else {
         result.push([t]);
@@ -170,25 +174,30 @@ export default function Transactions() {
     return result;
   }, [filteredTransactions]);
 
+  const totalPages = Math.ceil(groupedTransactions.length / PAGE_SIZE) || 1;
+  const paginatedGroupedTransactions = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return groupedTransactions.slice(start, start + PAGE_SIZE);
+  }, [groupedTransactions, currentPage]);
+
   const getProductName = (pid: string) => {
-    const p = products.find(prod => prod.product_id === pid);
+    const p = productMap.get(pid);
     return p ? p.name : pid;
   };
 
   const getProductCostPrice = (pid: string) => {
-    const p = products.find(prod => prod.product_id === pid);
+    const p = productMap.get(pid);
     return p ? p.cost_price : 0;
   };
 
   const getProductSpecification = (pid: string) => {
-    const p = products.find(prod => prod.product_id === pid);
+    const p = productMap.get(pid);
     return p ? p.specification : '';
   };
 
   const getVendorName = (vid?: string) => {
     if (!vid) return '';
-    const v = vendors.find(ven => ven.vendor_id === vid);
-    return v ? v.vendor_name : vid;
+    return vendorMap.get(vid) || vid;
   };
 
   const getIcon = (type: string) => {
@@ -372,7 +381,7 @@ export default function Transactions() {
           )}
         </div>
         {filteredTransactions.length === 0 ? (
-          <div className="flex flex-col items-center justify-center text-[var(--color-text-dim)] py-12">
+          <div className="flex flex-col items-center justify-center text-[var(--color-text-dim)] py-12 md:col-span-2 xl:col-span-3">
             <RefreshCcw className="w-12 h-12 mb-3 opacity-50" />
             <p className="text-sm font-medium">
               {transactions.length > 0 ? '目前的篩選條件下找不到紀錄' : '試算表中尚未有操作紀錄'}
@@ -387,7 +396,7 @@ export default function Transactions() {
             )}
           </div>
         ) : (
-          groupedTransactions.map((group, idx) => {
+          paginatedGroupedTransactions.map((group, idx) => {
             if (group.length === 1) {
               const t = group[0];
               return (
@@ -564,6 +573,37 @@ export default function Transactions() {
           })
         )}
       </div>
+
+      {/* Pagination Footer */}
+      {groupedTransactions.length > 0 && (
+        <div className="glass-panel border-x-0 border-b-0 px-4 py-3 flex items-center justify-between text-xs text-[var(--color-text-dim)] shrink-0 sticky bottom-0 z-10 bg-[#0f172a]/90 backdrop-blur-md">
+          <div className="font-mono">
+            共 <span className="text-white font-bold">{groupedTransactions.length}</span> 組紀錄 ({filteredTransactions.length} 筆)
+            {totalPages > 1 && ` (第 ${currentPage} / ${totalPages} 頁)`}
+          </div>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 rounded-lg glass-panel hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent text-white font-medium transition-all"
+              >
+                上一頁
+              </button>
+              <span className="font-mono font-bold text-white px-1">
+                {currentPage}
+              </span>
+              <button
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1.5 rounded-lg glass-panel hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent text-white font-medium transition-all"
+              >
+                下一頁
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 查看詳情 Modal */}
       {selectedTxForView && (

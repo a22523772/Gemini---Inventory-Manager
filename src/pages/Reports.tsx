@@ -44,6 +44,10 @@ export default function Reports() {
     const soonToExpireList: any[] = [];
     const lowStockByVendor: Record<string, any[]> = {};
     
+    // Pre-build O(1) maps
+    const productMap = new Map(products.map(p => [p.product_id, p]));
+    const vendorMap = new Map(vendors.map(v => [v.vendor_id, v.vendor_name]));
+
     const productTotalStock: Record<string, number> = {};
     stock.forEach(s => {
       productTotalStock[s.product_id] = (productTotalStock[s.product_id] || 0) + s.quantity;
@@ -51,7 +55,7 @@ export default function Reports() {
 
     // Process Stock Details
     stock.forEach(s => {
-      const product = products.find(p => p.product_id === s.product_id);
+      const product = productMap.get(s.product_id);
       if (!product) return;
 
       const value = (product.cost_price || 0) * s.quantity;
@@ -71,11 +75,9 @@ export default function Reports() {
       }
     });
 
-    // Low Stock Check (evaluate ALL products, including out-of-stock items with 0 stock)
+    // Low Stock Check (evaluate ALL products using productTotalStock map)
     products.forEach(product => {
-      const totalQty = stock
-        .filter(s => s.product_id === product.product_id)
-        .reduce((acc, curr) => acc + (Number(curr.quantity) || 0), 0);
+      const totalQty = productTotalStock[product.product_id] || 0;
 
       const rawMin = product.min_stock;
       const safeStock = (typeof rawMin === 'number' && !isNaN(rawMin)) 
@@ -97,7 +99,7 @@ export default function Reports() {
 
     // Group Low Stock by Vendor names
     const lowStockGrouped = Object.keys(lowStockByVendor).map(vid => {
-      const vendorName = vendors.find(v => v.vendor_id === vid)?.vendor_name || '未指定供應商';
+      const vendorName = vendorMap.get(vid) || '未指定供應商';
       return {
         vendorName,
         items: lowStockByVendor[vid]
@@ -107,7 +109,7 @@ export default function Reports() {
     // Analyze Transactions for Hot/Stagnant Items (last 30 days)
     const thirtyDaysAgo = subDays(now, 30);
     const recentOuts = transactions.filter(t => 
-      t.type === 'stock_out' && new Date(t.date) >= thirtyDaysAgo
+      t.type === 'stock_out' && t.date && new Date(t.date) >= thirtyDaysAgo
     );
 
     const productSales: Record<string, number> = {};
@@ -117,7 +119,7 @@ export default function Reports() {
 
     const hotItems = Object.keys(productSales)
       .map(pid => ({
-        product: products.find(p => p.product_id === pid),
+        product: productMap.get(pid),
         sales: productSales[pid]
       }))
       .filter(item => item.product)
@@ -125,12 +127,10 @@ export default function Reports() {
       .slice(0, 10);
 
     // Stagnant: Items in stock that have NO sales in last 30 days
-    // We already computed productTotalStock above
-
     const stagnantItems = Object.keys(productTotalStock)
       .filter(pid => productTotalStock[pid] > 0 && !productSales[pid])
       .map(pid => ({
-        product: products.find(p => p.product_id === pid),
+        product: productMap.get(pid),
         stock: productTotalStock[pid]
       }))
       .filter(item => item.product)
