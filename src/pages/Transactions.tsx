@@ -6,7 +6,7 @@ import { useSearchParams, Link } from 'react-router-dom';
 import QuantityInput from '../components/QuantityInput';
 
 export default function Transactions() {
-  const { transactions, products, vendors, transactionsPageState, setTransactionsPageState, deleteTransaction, editTransaction } = useStore();
+  const { transactions, products, vendors, transactionsPageState, setTransactionsPageState, deleteTransaction, deleteTransactionGroup, editTransaction } = useStore();
   const [searchParams] = useSearchParams();
   const [filterType, setFilterType] = useState(transactionsPageState.filterType);
   const [searchTerm, setSearchTerm] = useState(transactionsPageState.searchTerm || searchParams.get('pid') || '');
@@ -21,6 +21,7 @@ export default function Transactions() {
   const [selectedTxForView, setSelectedTxForView] = useState<any | null>(null);
   const [selectedTxForEdit, setSelectedTxForEdit] = useState<any | null>(null);
   const [txToDelete, setTxToDelete] = useState<any | null>(null);
+  const [groupToDelete, setGroupToDelete] = useState<string | null>(null);
 
   // Edit form states
   const [editQty, setEditQty] = useState('');
@@ -504,7 +505,19 @@ export default function Transactions() {
                         <p className="text-xs font-bold text-[var(--color-text-main)]">出貨</p>
                       </div>
                     </div>
-                    <p className="text-xs text-[var(--color-text-dim)] font-mono mt-1">包含 {group.length} 項商品</p>
+                    <div className="flex items-center justify-between mt-1">
+                      <p className="text-xs text-[var(--color-text-dim)] font-mono">包含 {group.length} 項商品</p>
+                      {group.length > 1 && (
+                        <button
+                          onClick={() => setGroupToDelete(first.transaction_id)}
+                          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/20 text-[10px] font-bold text-red-400 hover:bg-red-500/20 active:scale-95 transition-all cursor-pointer"
+                          title="刪除整批訂單紀錄"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          刪除整批
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -873,11 +886,11 @@ export default function Transactions() {
         </div>
       )}
 
-      {/* 刪除確認 Modal */}
+      {/* 刪除單項確認 Modal */}
       {txToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
           <div className="glass-panel border border-red-500/25 rounded-2xl w-full max-w-xs p-5 space-y-4 shadow-2xl">
-            <h2 className="text-md font-bold text-red-400 flex items-center gap-1.5">🚨 刪除確認</h2>
+            <h2 className="text-md font-bold text-red-400 flex items-center gap-1.5">🚨 刪除單項紀錄確認</h2>
             <div className="space-y-2 text-xs leading-relaxed text-white/85">
               <p>確定要刪除此筆 <strong>{getTypeLabel(txToDelete.type)}</strong> 紀錄嗎？</p>
               <div className="p-2.5 bg-red-950/20 border border-red-500/10 rounded-xl mt-1 space-y-1 text-red-200">
@@ -886,7 +899,7 @@ export default function Transactions() {
                 <p><strong>位置：</strong>{txToDelete.location}-{txToDelete.floor}-{txToDelete.area}</p>
               </div>
               <p className="text-amber-400 font-bold mt-2 leading-snug">
-                ⚠️ 注意：此操作將會自動還原或扣除對應的本地庫存，並自動覆蓋同步雲端試算表工作表。請認真核對！
+                ⚠️ 注意：此操作僅會刪除此單一品項紀錄並還原/扣除其庫存數量（+{txToDelete.quantity}），保留同一訂單中的其他品項。
               </p>
             </div>
 
@@ -899,12 +912,48 @@ export default function Transactions() {
               </button>
               <button
                 onClick={async () => {
-                  await deleteTransaction(txToDelete.transaction_id);
+                  await deleteTransaction(txToDelete.id || txToDelete.transaction_id);
                   setTxToDelete(null);
                 }}
                 className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
-                確定刪除
+                確定刪除品項
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 刪除整批確認 Modal */}
+      {groupToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+          <div className="glass-panel border border-red-500/25 rounded-2xl w-full max-w-xs p-5 space-y-4 shadow-2xl">
+            <h2 className="text-md font-bold text-red-400 flex items-center gap-1.5">🚨 刪除整批出貨確認</h2>
+            <div className="space-y-2 text-xs leading-relaxed text-white/85">
+              <p>確定要刪除此整批出貨紀錄嗎？</p>
+              <div className="p-2.5 bg-red-950/20 border border-red-500/10 rounded-xl mt-1 space-y-1 text-red-200 font-mono">
+                <p><strong>批次號：</strong>{groupToDelete}</p>
+              </div>
+              <p className="text-amber-400 font-bold mt-2 leading-snug">
+                ⚠️ 注意：這將會還原此批次內所有商品項目的庫存數量，並移除該筆訂單的所有交易紀錄。
+              </p>
+            </div>
+
+            <div className="pt-1.5 flex justify-end gap-2">
+              <button
+                onClick={() => setGroupToDelete(null)}
+                className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                onClick={async () => {
+                  await deleteTransactionGroup(groupToDelete);
+                  setGroupToDelete(null);
+                }}
+                className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                確定刪除整批
               </button>
             </div>
           </div>

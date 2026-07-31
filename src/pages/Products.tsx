@@ -1,8 +1,9 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter, AlertCircle, Clock, ArrowUpDown } from 'lucide-react';
+import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter, AlertCircle, Clock, ArrowUpDown, SlidersHorizontal, X } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { differenceInDays } from 'date-fns';
+import QuantityInput from '../components/QuantityInput';
 
 type SortType = 'name_asc' | 'name_desc' | 'newest' | 'stock_low' | 'stock_high';
 
@@ -21,6 +22,77 @@ export default function Products() {
 
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 24;
+
+  // Adjust stock modal state
+  const [adjustGroup, setAdjustGroup] = useState<any | null>(null);
+  const [selectedStockId, setSelectedStockId] = useState<string>('');
+  const [targetQty, setTargetQty] = useState<string>('0');
+  const [adjustNote, setAdjustNote] = useState<string>('盤點校正');
+  const [isSubmittingAdjust, setIsSubmittingAdjust] = useState<boolean>(false);
+
+  const openAdjustModal = (group: any, stockEntry?: any) => {
+    setAdjustGroup(group);
+    if (stockEntry) {
+      setSelectedStockId(stockEntry.stock_id);
+      setTargetQty(String(stockEntry.quantity));
+    } else if (group.stockEntries && group.stockEntries.length > 0) {
+      setSelectedStockId(group.stockEntries[0].stock_id);
+      setTargetQty(String(group.stockEntries[0].quantity));
+    } else {
+      setSelectedStockId('');
+      setTargetQty('0');
+    }
+    setAdjustNote('盤點校正');
+  };
+
+  const handleStockEntryChange = (stockId: string) => {
+    setSelectedStockId(stockId);
+    if (adjustGroup) {
+      const entry = adjustGroup.stockEntries.find((s: any) => s.stock_id === stockId);
+      if (entry) {
+        setTargetQty(String(entry.quantity));
+      }
+    }
+  };
+
+  const handleConfirmAdjust = async () => {
+    if (!adjustGroup || isSubmittingAdjust) return;
+    const p = adjustGroup.product;
+    const parsedQty = Number(targetQty);
+    if (isNaN(parsedQty) || parsedQty < 0) {
+      showToast('❌ 請輸入有效的庫存數量（不可為負數）！');
+      return;
+    }
+
+    setIsSubmittingAdjust(true);
+    try {
+      const currentEntry = adjustGroup.stockEntries.find((s: any) => s.stock_id === selectedStockId) || adjustGroup.stockEntries[0];
+
+      const payload = {
+        stock_id: currentEntry?.stock_id,
+        product_id: p.product_id,
+        quantity: parsedQty,
+        location: currentEntry?.location || '倉庫',
+        floor: currentEntry?.floor || '1F',
+        area: currentEntry?.area || 'A區',
+        specification: currentEntry?.specification || '',
+        note: adjustNote.trim() || '盤點校正',
+        operator: useStore.getState().operator
+      };
+
+      await useStore.getState().enqueueAction('adjustStock', payload);
+      let successMsg = '✅ 庫存已成功調整！(離線緩存中)';
+      if (navigator.onLine) {
+        successMsg = '✅ 庫存已成功調整！';
+      }
+      showToast(successMsg);
+      setAdjustGroup(null);
+    } catch (err: any) {
+      showToast('❌ 調整失敗: ' + (err.message || '未知錯誤'));
+    } finally {
+      setIsSubmittingAdjust(false);
+    }
+  };
 
   const now = new Date();
 
@@ -378,8 +450,18 @@ export default function Products() {
                                 </div>
                                 <p className="text-[10px] text-[var(--color-text-dim)]">最後異動: {entry.last_update}</p>
                               </div>
-                              <div className="text-right">
-                                <span className="text-sm font-bold text-white">{entry.quantity} {p.unit}</span>
+                              <div className="flex items-center gap-2">
+                                <div className="text-right">
+                                  <span className="text-sm font-bold text-white">{entry.quantity} {p.unit}</span>
+                                </div>
+                                <button
+                                  onClick={() => openAdjustModal(group, entry)}
+                                  className="px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-300 rounded-md text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 shrink-0"
+                                  title="調整此批次庫存"
+                                >
+                                  <SlidersHorizontal className="w-3 h-3" />
+                                  調整
+                                </button>
                               </div>
                             </div>
                           </div>
@@ -394,18 +476,33 @@ export default function Products() {
                       <Link to={`/manage?type=stock_out&pid=${p.product_id}`} className="flex-1 py-2.5 glass-panel text-white text-xs font-bold rounded-xl text-center">
                         出貨在此
                       </Link>
+                      <button
+                        onClick={() => openAdjustModal(group)}
+                        className="flex-1 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-bold rounded-xl text-center transition-all flex items-center justify-center gap-1 cursor-pointer shadow-lg shadow-amber-500/5"
+                      >
+                        <SlidersHorizontal className="w-4 h-4" />
+                        調整庫存
+                      </button>
                     </div>
                   </div>
                 )}
 
                 {!isGroupExpanded && (
-                  <div className="mt-3 flex gap-2">
+                  <div className="mt-3 flex gap-1.5">
                     <Link to={`/manage?type=stock_in&pid=${p.product_id}`} className="flex-1 py-2 glass-panel hover:bg-white/10 text-[var(--color-text-main)] text-xs font-semibold rounded-lg text-center transition-colors">
                       快速進貨
                     </Link>
                     <Link to={`/manage?type=stock_out&pid=${p.product_id}`} className="flex-1 py-2 glass-panel hover:bg-white/10 text-[var(--color-text-main)] text-xs font-semibold rounded-lg text-center transition-colors">
                       快速出貨
                     </Link>
+                    <button
+                      onClick={() => openAdjustModal(group)}
+                      className="px-3 py-2 bg-amber-500/15 border border-amber-500/30 hover:bg-amber-500/25 text-amber-300 text-xs font-bold rounded-lg text-center transition-all flex items-center justify-center gap-1 cursor-pointer shrink-0"
+                      title="調整庫存"
+                    >
+                      <SlidersHorizontal className="w-3.5 h-3.5" />
+                      調整
+                    </button>
                   </div>
                 )}
               </div>
@@ -442,6 +539,180 @@ export default function Products() {
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* 快速調整庫存 Modal */}
+      {adjustGroup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
+          <div className="glass-panel border border-amber-500/30 rounded-2xl w-full max-w-md p-6 space-y-5 shadow-2xl bg-[#0f172a]/95 text-left">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <h2 className="text-base font-bold text-amber-300 flex items-center gap-2">
+                <SlidersHorizontal className="w-5 h-5 text-amber-400" />
+                調整商品庫存
+              </h2>
+              <button 
+                onClick={() => setAdjustGroup(null)}
+                className="p-1 text-white/50 hover:text-white rounded-lg transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Product Summary */}
+            <div className="p-3 bg-white/5 border border-white/10 rounded-xl space-y-1">
+              <div className="flex justify-between items-start">
+                <h3 className="font-bold text-white text-sm">{adjustGroup.product.name}</h3>
+                <span className="text-xs px-2 py-0.5 bg-amber-500/20 text-amber-300 font-bold rounded-md border border-amber-500/30">
+                  總庫存: {adjustGroup.totalStock} {adjustGroup.product.unit || '個'}
+                </span>
+              </div>
+              <p className="text-xs text-[var(--color-text-dim)] font-mono">
+                編號: {adjustGroup.product.product_id}
+                {adjustGroup.product.brand && ` | 品牌: ${adjustGroup.product.brand}`}
+              </p>
+            </div>
+
+            {/* Select Stock Batch if multiple exist */}
+            {adjustGroup.stockEntries && adjustGroup.stockEntries.length > 0 ? (
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-white/80 block">
+                  選擇要調整的庫存批次位置
+                </label>
+                <select
+                  value={selectedStockId}
+                  onChange={(e) => handleStockEntryChange(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 cursor-pointer"
+                >
+                  {adjustGroup.stockEntries.map((entry: any) => (
+                    <option key={entry.stock_id} value={entry.stock_id} className="bg-slate-900 text-white">
+                      {entry.location}-{entry.floor}-{entry.area} {entry.specification ? `(${entry.specification})` : ''} - 現有 {entry.quantity} {adjustGroup.product.unit || '個'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-200">
+                ⚠️ 此商品目前無庫存批次紀錄，提交調整將自動於【倉庫-1F-A區】建立第一筆庫存紀錄。
+              </div>
+            )}
+
+            {/* Target Quantity Input */}
+            <div className="space-y-2">
+              <div className="flex justify-between items-center text-xs">
+                <label className="font-bold text-white/80">調整後目標庫存數量</label>
+                {(() => {
+                  const selectedEntry = (adjustGroup.stockEntries || []).find((s: any) => s.stock_id === selectedStockId) || (adjustGroup.stockEntries || [])[0];
+                  const currentQty = selectedEntry ? selectedEntry.quantity : 0;
+                  const diff = Number(targetQty) - currentQty;
+                  if (isNaN(diff)) return null;
+                  return (
+                    <span className={`font-mono font-bold ${diff > 0 ? 'text-emerald-400' : diff < 0 ? 'text-red-400' : 'text-gray-400'}`}>
+                      現有: {currentQty} ➔ 變動: {diff > 0 ? `+${diff}` : diff}
+                    </span>
+                  );
+                })()}
+              </div>
+
+              <QuantityInput
+                value={targetQty}
+                onChange={setTargetQty}
+                min={0}
+                className="w-full"
+              />
+
+              {/* Quick adjustment buttons */}
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setTargetQty('0')}
+                  className="px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/20 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                >
+                  歸零 (0)
+                </button>
+                {(() => {
+                  const selectedEntry = (adjustGroup.stockEntries || []).find((s: any) => s.stock_id === selectedStockId) || (adjustGroup.stockEntries || [])[0];
+                  const currentQty = selectedEntry ? selectedEntry.quantity : 0;
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => setTargetQty(String(currentQty))}
+                      className="px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-bold transition-all cursor-pointer"
+                    >
+                      還原 (現有 {currentQty})
+                    </button>
+                  );
+                })()}
+                {[+1, +5, +10, -1, -5].map((delta) => (
+                  <button
+                    key={delta}
+                    type="button"
+                    onClick={() => setTargetQty(String(Math.max(0, (Number(targetQty) || 0) + delta)))}
+                    className="px-2.5 py-1 bg-white/5 hover:bg-white/15 border border-white/10 text-amber-200 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                  >
+                    {delta > 0 ? `+${delta}` : delta}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Reason / Note */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-white/80 block">調整原因與備註</label>
+              <div className="flex flex-wrap gap-1.5 mb-1.5">
+                {['盤點校正', '破損報廢', '盤盈歸庫', '樣品領用', '數據修正'].map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => setAdjustNote(tag)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                      adjustNote === tag
+                        ? 'bg-amber-500 text-slate-950 font-bold shadow-md'
+                        : 'bg-white/5 hover:bg-white/10 text-white/70 border border-white/10'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="text"
+                value={adjustNote}
+                onChange={(e) => setAdjustNote(e.target.value)}
+                placeholder="輸入調整原因..."
+                className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="pt-2 flex items-center justify-between gap-3">
+              <Link
+                to={`/manage?type=adjust&pid=${adjustGroup.product.product_id}`}
+                onClick={() => setAdjustGroup(null)}
+                className="text-xs text-amber-400 hover:underline flex items-center gap-1 font-medium"
+              >
+                完整調整頁面 ↗
+              </Link>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAdjustGroup(null)}
+                  className="px-4 py-2 bg-white/10 hover:bg-white/15 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  disabled={isSubmittingAdjust}
+                  onClick={handleConfirmAdjust}
+                  className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-xs font-bold transition-all shadow-lg shadow-amber-500/20 disabled:opacity-50 cursor-pointer flex items-center gap-1.5 font-bold"
+                >
+                  {isSubmittingAdjust ? '處理中...' : '確定調整'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

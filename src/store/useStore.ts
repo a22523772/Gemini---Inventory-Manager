@@ -113,6 +113,7 @@ interface AppState {
   overwriteCloudTransactions: () => Promise<boolean>;
   editTransaction: (transactionId: string, updatedFields: Partial<Transaction>) => Promise<void>;
   deleteTransaction: (transactionId: string) => Promise<void>;
+  deleteTransactionGroup: (groupId: string) => Promise<void>;
   toastMessage: string | null;
   showToast: (msg: string) => void;
   lowStockAlertEnabled: boolean;
@@ -404,7 +405,7 @@ export const useStore = create<AppState>((set, get) => ({
         };
 
         const updatedTx = [newTx, ...transactions];
-        await dbTransactions.setItem(newTx.transaction_id, newTx);
+        await dbTransactions.setItem(newTx.id, newTx);
         
         set({ stock: updatedStock, transactions: updatedTx });
     } else if (action === 'stockOut') {
@@ -447,7 +448,7 @@ export const useStore = create<AppState>((set, get) => ({
         };
 
         const updatedTx = [newTx, ...transactions];
-        await dbTransactions.setItem(newTx.transaction_id, newTx);
+        await dbTransactions.setItem(newTx.id, newTx);
 
         set({ stock: updatedStock, transactions: updatedTx });
     } else if (action === 'adjustStock') {
@@ -462,6 +463,19 @@ export const useStore = create<AppState>((set, get) => ({
                 last_update: new Date().toISOString()
             };
             await dbStock.setItem(updatedStock[existingIdx].stock_id, updatedStock[existingIdx]);
+        } else {
+            const newS: Stock = {
+                stock_id: `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
+                product_id: updatedPayload.product_id,
+                location: updatedPayload.location || '倉庫',
+                floor: updatedPayload.floor || '1F',
+                area: updatedPayload.area || 'A區',
+                quantity: Number(updatedPayload.quantity),
+                specification: updatedPayload.specification || '',
+                last_update: new Date().toISOString()
+            };
+            updatedStock.push(newS);
+            await dbStock.setItem(newS.stock_id, newS);
         }
 
         const newTx: Transaction = {
@@ -482,7 +496,7 @@ export const useStore = create<AppState>((set, get) => ({
         };
 
         const updatedTx = [newTx, ...transactions];
-        await dbTransactions.setItem(newTx.transaction_id, newTx);
+        await dbTransactions.setItem(newTx.id, newTx);
 
         set({ stock: updatedStock, transactions: updatedTx });
     }
@@ -638,18 +652,22 @@ export const useStore = create<AppState>((set, get) => ({
       const rT = await fetch(`${gasApiUrl}?action=getTransactions`);
       if (rT.ok) {
         const dT = await rT.json();
-        const validT = (dT || []).map((item: any) => normalizeKeys(item))
-          .filter((t: any) => t && t.transaction_id)
-          .map((t: any) => ({
-            ...t,
-            transaction_id: String(t.transaction_id).trim(),
-            product_id: t.product_id ? String(t.product_id).trim() : '',
-            quantity: Number(t.quantity) || 0,
-            cost_price: Number(t.cost_price) || 0
-          }));
+        const validT = (dT || []).map((item: any, idx: number) => {
+          const norm = normalizeKeys(item);
+          const txId = norm.transaction_id ? String(norm.transaction_id).trim() : `TX_${Date.now()}_${idx}`;
+          const id = norm.id ? String(norm.id).trim() : `${txId}_${norm.product_id || ''}_${idx}`;
+          return {
+            ...norm,
+            id,
+            transaction_id: txId,
+            product_id: norm.product_id ? String(norm.product_id).trim() : '',
+            quantity: Number(norm.quantity) || 0,
+            cost_price: Number(norm.cost_price) || 0
+          };
+        });
         await dbTransactions.clear();
         for (const t of validT) {
-          await dbTransactions.setItem(t.transaction_id, t);
+          await dbTransactions.setItem(t.id, t);
         }
         set({ transactions: validT.sort((a: any, b: any) => String(b.date || '').localeCompare(String(a.date || ''))) });
       }
@@ -921,9 +939,10 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  deleteTransaction: async (transactionId: string) => {
+  deleteTransaction: async (targetId: string) => {
     const { stock, transactions } = get();
-    const tx = transactions.find(t => t.transaction_id === transactionId);
+    // Match by item unique ID first, or fall back to transaction_id
+    const tx = transactions.find(t => t.id === targetId) || transactions.find(t => t.transaction_id === targetId);
     if (!tx) return;
 
     let updatedStock = [...stock];
@@ -931,9 +950,9 @@ export const useStore = create<AppState>((set, get) => ({
     if (tx.type === 'stock_in') {
       const idx = updatedStock.findIndex(s =>
         s.product_id === tx.product_id &&
-        s.location === tx.location &&
-        s.floor === tx.floor &&
-        s.area === tx.area &&
+        (s.location || '') === (tx.location || '') &&
+        (s.floor || '') === (tx.floor || '') &&
+        (s.area || '') === (tx.area || '') &&
         (s.specification || '') === (tx.specification || '')
       );
       if (idx !== -1) {
@@ -954,9 +973,9 @@ export const useStore = create<AppState>((set, get) => ({
     } else if (tx.type === 'stock_out') {
       const idx = updatedStock.findIndex(s =>
         s.product_id === tx.product_id &&
-        s.location === tx.location &&
-        s.floor === tx.floor &&
-        s.area === tx.area &&
+        (s.location || '') === (tx.location || '') &&
+        (s.floor || '') === (tx.floor || '') &&
+        (s.area || '') === (tx.area || '') &&
         (s.specification || '') === (tx.specification || '')
       );
       if (idx !== -1) {
@@ -970,9 +989,9 @@ export const useStore = create<AppState>((set, get) => ({
         const newS: Stock = {
           stock_id: `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
           product_id: tx.product_id,
-          location: tx.location,
-          floor: tx.floor,
-          area: tx.area,
+          location: tx.location || '倉庫',
+          floor: tx.floor || '1F',
+          area: tx.area || 'A區',
           quantity: Number(tx.quantity),
           specification: tx.specification || '',
           last_update: new Date().toISOString()
@@ -982,11 +1001,16 @@ export const useStore = create<AppState>((set, get) => ({
       }
     }
 
-    const updatedTx = transactions.filter(t => t.transaction_id !== transactionId);
-    await dbTransactions.removeItem(transactionId);
+    // Filter out ONLY the single matched item
+    const updatedTx = transactions.filter(t => t.id ? t.id !== tx.id : t.transaction_id !== targetId);
+    if (tx.id) {
+      await dbTransactions.removeItem(tx.id);
+    } else {
+      await dbTransactions.removeItem(tx.transaction_id);
+    }
 
     set({ stock: updatedStock, transactions: updatedTx });
-    get().showToast('✅ 已成功刪除紀錄，並已更新本地庫存！');
+    get().showToast('✅ 已成功刪除該品項交易紀錄，並已更新庫存！');
 
     // Sync to cloud spreadsheet if configured
     if (get().gasApiUrl) {
@@ -995,9 +1019,87 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  editTransaction: async (transactionId: string, updatedFields: Partial<Transaction>) => {
+  deleteTransactionGroup: async (groupId: string) => {
     const { stock, transactions } = get();
-    const oldTx = transactions.find(t => t.transaction_id === transactionId);
+    const groupTxs = transactions.filter(t => t.transaction_id === groupId);
+    if (groupTxs.length === 0) return;
+
+    let updatedStock = [...stock];
+
+    for (const tx of groupTxs) {
+      if (tx.type === 'stock_in') {
+        const idx = updatedStock.findIndex(s =>
+          s.product_id === tx.product_id &&
+          (s.location || '') === (tx.location || '') &&
+          (s.floor || '') === (tx.floor || '') &&
+          (s.area || '') === (tx.area || '') &&
+          (s.specification || '') === (tx.specification || '')
+        );
+        if (idx !== -1) {
+          const newQty = updatedStock[idx].quantity - Number(tx.quantity);
+          if (newQty <= 0) {
+            const removedStockId = updatedStock[idx].stock_id;
+            updatedStock.splice(idx, 1);
+            await dbStock.removeItem(removedStockId);
+          } else {
+            updatedStock[idx] = {
+              ...updatedStock[idx],
+              quantity: newQty,
+              last_update: new Date().toISOString()
+            };
+            await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
+          }
+        }
+      } else if (tx.type === 'stock_out') {
+        const idx = updatedStock.findIndex(s =>
+          s.product_id === tx.product_id &&
+          (s.location || '') === (tx.location || '') &&
+          (s.floor || '') === (tx.floor || '') &&
+          (s.area || '') === (tx.area || '') &&
+          (s.specification || '') === (tx.specification || '')
+        );
+        if (idx !== -1) {
+          updatedStock[idx] = {
+            ...updatedStock[idx],
+            quantity: updatedStock[idx].quantity + Number(tx.quantity),
+            last_update: new Date().toISOString()
+          };
+          await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
+        } else {
+          const newS: Stock = {
+            stock_id: `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
+            product_id: tx.product_id,
+            location: tx.location || '倉庫',
+            floor: tx.floor || '1F',
+            area: tx.area || 'A區',
+            quantity: Number(tx.quantity),
+            specification: tx.specification || '',
+            last_update: new Date().toISOString()
+          };
+          updatedStock.push(newS);
+          await dbStock.setItem(newS.stock_id, newS);
+        }
+      }
+      if (tx.id) {
+        await dbTransactions.removeItem(tx.id);
+      }
+    }
+
+    const updatedTx = transactions.filter(t => t.transaction_id !== groupId);
+    await dbTransactions.removeItem(groupId);
+
+    set({ stock: updatedStock, transactions: updatedTx });
+    get().showToast('✅ 已成功刪除整批交易紀錄，並已還原對應庫存！');
+
+    if (get().gasApiUrl) {
+      await get().overwriteCloudTransactions();
+      await get().overwriteCloudStock();
+    }
+  },
+
+  editTransaction: async (targetId: string, updatedFields: Partial<Transaction>) => {
+    const { stock, transactions } = get();
+    const oldTx = transactions.find(t => t.id === targetId) || transactions.find(t => t.transaction_id === targetId);
     if (!oldTx) return;
 
     const newTx = { ...oldTx, ...updatedFields } as Transaction;
@@ -1157,8 +1259,8 @@ export const useStore = create<AppState>((set, get) => ({
       }
     }
 
-    const updatedTx = transactions.map(t => t.transaction_id === transactionId ? newTx : t);
-    await dbTransactions.setItem(transactionId, newTx);
+    const updatedTx = transactions.map(t => (t.id ? t.id === oldTx.id : t.transaction_id === targetId) ? newTx : t);
+    await dbTransactions.setItem(newTx.id || newTx.transaction_id, newTx);
 
     set({ stock: updatedStock, transactions: updatedTx });
     get().showToast('✅ 紀錄已成功更新，並已對應調整本地庫存！');
