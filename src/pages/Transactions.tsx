@@ -115,15 +115,18 @@ export default function Transactions() {
         }
       }
 
-      // Search Filter (Product Name, ID, or Operator)
+      // Search Filter (Product Name, ID, Operator, Note, Transaction ID, Specification)
       if (searchTerm) {
         const s = searchTerm.toLowerCase();
         const product = productMap.get(t.product_id);
         const productName = product?.name.toLowerCase() || '';
         const pid = String(t.product_id || '').toLowerCase();
         const op = String(t.operator || '').toLowerCase();
+        const note = String(t.note || '').toLowerCase();
+        const txid = String(t.transaction_id || '').toLowerCase();
+        const spec = String(t.specification || '').toLowerCase();
         
-        if (!productName.includes(s) && !pid.includes(s) && !op.includes(s)) {
+        if (!productName.includes(s) && !pid.includes(s) && !op.includes(s) && !note.includes(s) && !txid.includes(s) && !spec.includes(s)) {
           return false;
         }
       }
@@ -497,7 +500,16 @@ export default function Transactions() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-start gap-2">
-                      <h3 className="font-bold text-[var(--color-text-main)] text-base break-words flex-1 min-w-0">批次出貨</h3>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-bold text-[var(--color-text-main)] text-base break-words">
+                          {first.note && first.note.includes('網路訂單出貨') ? '🌐 網路訂單出貨' : '批次出貨'}
+                        </h3>
+                        {first.note && (
+                          <p className="text-xs text-sky-300 font-medium mt-0.5 break-words bg-white/5 p-1.5 rounded-lg border border-white/5">
+                            {first.note}
+                          </p>
+                        )}
+                      </div>
                       <div className="text-right shrink-0">
                         <span className="text-xs text-[var(--color-text-dim)] font-mono">
                           {first.date.includes('T') ? new Date(first.date).toLocaleString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(/\//g, '-') : first.date}

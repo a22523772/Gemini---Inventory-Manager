@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useStore } from '../store/useStore';
+import { useStore, calculateOrderStatus } from '../store/useStore';
 import { 
   Package, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, 
-  AlertTriangle, BarChart2, Globe, Truck, Trash2, X, PlusCircle, User, Calendar, CheckCircle, Flame, Search, ArrowRight, FileText
+  AlertTriangle, BarChart2, Globe, Truck, Trash2, X, PlusCircle, User, Calendar, CheckCircle, Flame, Search, ArrowRight, FileText,
+  ArrowUpDown, Edit2, Clock, Check
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -26,41 +27,73 @@ export default function Home() {
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const [orderErrors, setOrderErrors] = useState<string[]>([]);
   const [orderSearchQuery, setOrderSearchQuery] = useState('');
+  
+  // Sorting state for online orders board
+  const [orderSortType, setOrderSortType] = useState<
+    'deadline_asc' | 'deadline_desc' | 'status' | 'amount_desc' | 'amount_asc' | 'created_desc' | 'created_asc'
+  >('deadline_asc');
 
-  // status 是指 訂單的最晚出貨時間。
-  // 訂單狀態 要讀取 status 欄位，重新檢查每一筆訂單的狀態，修正狀態並顯示提醒。
-  const getDeadlineStatus = (statusStr: string) => {
-    if (!statusStr) return { type: 'normal', text: '正常', color: 'text-zinc-300 border border-zinc-700 bg-zinc-800/60 px-3 py-1 font-bold rounded-lg' };
-    
-    // Check if statusStr is a date or just text like "待處理"
-    const deadline = new Date(statusStr);
-    if (isNaN(deadline.getTime())) {
-      return { type: 'normal', text: statusStr, color: 'text-zinc-300 border border-zinc-700 bg-zinc-800/60 px-3 py-1 font-bold rounded-lg' };
-    }
+  // Manual status override state
+  const [editingStatusOrder, setEditingStatusOrder] = useState<any | null>(null);
+  const [customStatusInput, setCustomStatusInput] = useState('');
 
-    const now = new Date();
-    const diffMs = deadline.getTime() - now.getTime();
-    const diffHours = diffMs / (1000 * 60 * 60);
+  // Stock issue force shipment confirmation modal
+  const [confirmShipOrderModal, setConfirmShipOrderModal] = useState<{ order: any; errors: string[] } | null>(null);
 
-    if (diffHours < 0) {
-      return { 
-        type: 'overdue', 
-        text: `⚠️ 已逾期 (最晚出貨: ${statusStr})`, 
-        color: 'text-white border-2 border-red-500 bg-gradient-to-r from-red-600 to-red-500 font-extrabold px-3 py-1.5 rounded-lg shadow-[0_0_12px_rgba(239,68,68,0.55)] scale-105 transition-all' 
-      };
-    } else if (diffHours <= 24) {
-      return { 
-        type: 'duesoon', 
-        text: `⏰ 即將到期 (最晚出貨: ${statusStr})`, 
-        color: 'text-white border-2 border-amber-500 bg-gradient-to-r from-amber-600 to-amber-500 font-extrabold px-3 py-1.5 rounded-lg shadow-[0_0_12px_rgba(245,158,11,0.55)] animate-pulse scale-105 transition-all' 
-      };
-    } else {
-      return { 
-        type: 'normal', 
-        text: `📅 最晚出貨: ${statusStr}`, 
-        color: 'text-emerald-100 border border-emerald-500 bg-gradient-to-r from-emerald-600/40 to-teal-600/40 font-bold px-3 py-1 rounded-lg shadow-sm' 
+  const getStatusBadgeStyle = (statusText: string) => {
+    if (!statusText) {
+      return {
+        text: '✅ 待出貨',
+        color: 'text-emerald-100 border border-emerald-500/50 bg-emerald-600/30 font-bold'
       };
     }
+
+    if (statusText.includes('逾期')) {
+      return {
+        text: statusText.startsWith('⚠️') ? statusText : `⚠️ ${statusText}`,
+        color: 'text-white border-2 border-red-500 bg-gradient-to-r from-red-600 to-red-500 font-extrabold shadow-[0_0_12px_rgba(239,68,68,0.55)]'
+      };
+    }
+
+    if (statusText.includes('即將到期')) {
+      return {
+        text: statusText.startsWith('⏰') ? statusText : `⏰ ${statusText}`,
+        color: 'text-white border-2 border-amber-500 bg-gradient-to-r from-amber-600 to-amber-500 font-extrabold shadow-[0_0_12px_rgba(245,158,11,0.55)] animate-pulse'
+      };
+    }
+
+    if (statusText.includes('待出貨') || statusText === '正常') {
+      return {
+        text: statusText.startsWith('✅') ? statusText : `✅ ${statusText}`,
+        color: 'text-emerald-100 border border-emerald-500/50 bg-emerald-600/30 font-bold'
+      };
+    }
+
+    if (statusText.includes('已包裝')) {
+      return {
+        text: statusText.startsWith('📦') ? statusText : `📦 ${statusText}`,
+        color: 'text-indigo-100 border border-indigo-500/50 bg-indigo-600/30 font-bold'
+      };
+    }
+
+    if (statusText.includes('處理中')) {
+      return {
+        text: statusText.startsWith('⏳') ? statusText : `⏳ ${statusText}`,
+        color: 'text-sky-100 border border-sky-500/50 bg-sky-600/30 font-bold'
+      };
+    }
+
+    if (statusText.includes('暫緩')) {
+      return {
+        text: statusText.startsWith('⏸️') ? statusText : `⏸️ ${statusText}`,
+        color: 'text-purple-100 border border-purple-500/50 bg-purple-600/30 font-bold'
+      };
+    }
+
+    return {
+      text: statusText,
+      color: 'text-zinc-200 border border-zinc-700 bg-zinc-800/80 font-bold'
+    };
   };
 
   const productMap = useMemo(() => new Map(products.map(p => [p.product_id, p])), [products]);
@@ -91,11 +124,11 @@ export default function Home() {
     });
   }, [products, productTotalStockMap]);
 
-  // If onlineOrders is empty, fallback to mock orders so testing is easy immediately
-  const displayOrders = onlineOrders.length > 0 ? onlineOrders.filter(o => o.status !== '已刪除') : [
-    { order_id: 'SHP-992381', platform: '蝦皮購物', product_id: 'P1001', product_name: '陶瓷馬克杯 (350ml)', quantity: 2, price: 300, customer_name: '陳大同', status: '2026-07-08 12:00:00', created_at: '2026-07-07 10:00:00', specification: '白色款', shipping_method: '7-11 夾寄' },
-    { order_id: 'MOMO-183921', platform: 'MOMO購物網', product_id: 'P1002', product_name: '不鏽鋼保溫瓶 (500ml)', quantity: 1, price: 450, customer_name: '林智慧', status: '2026-07-15 15:30:00', created_at: '2026-07-08 14:20:00', specification: '磨砂黑', shipping_method: '黑貓宅急便' },
-    { order_id: 'LINE-772910', platform: 'LINE口袋商店', product_id: 'P1003', product_name: '環保玻璃吸管組', quantity: 5, price: 150, customer_name: '張小玲', status: '2026-07-09 20:00:00', created_at: '2026-07-08 16:50:00', specification: '粉色粗吸管', shipping_method: '全家超取' }
+  // If onlineOrders is empty, fallback to mock orders for immediate testing
+  const displayOrders = onlineOrders.length > 0 ? onlineOrders.filter(o => o.status !== '已刪除' && o.order_status !== '已刪除') : [
+    { order_id: 'SHP-992381', platform: '蝦皮購物', product_id: 'P1001', product_name: '陶瓷馬克杯 (350ml)', quantity: 2, price: 300, customer_name: '陳大同', shipping_deadline: '2026-08-11 12:00:00', status: '2026-08-11 12:00:00', order_status: '⚠️ 已逾期', created_at: '2026-08-07 10:00:00', specification: '白色款', shipping_method: '7-11 夾寄' },
+    { order_id: 'MOMO-183921', platform: 'MOMO購物網', product_id: 'P1002', product_name: '不鏽鋼保溫瓶 (500ml)', quantity: 1, price: 450, customer_name: '林智慧', shipping_deadline: '2026-08-12 18:30:00', status: '2026-08-12 18:30:00', order_status: '⏰ 即將到期', created_at: '2026-08-08 14:20:00', specification: '磨砂黑', shipping_method: '黑貓宅急便' },
+    { order_id: 'LINE-772910', platform: 'LINE口袋商店', product_id: 'P1003', product_name: '環保玻璃吸管組', quantity: 5, price: 150, customer_name: '張小玲', shipping_deadline: '2026-08-20 20:00:00', status: '2026-08-20 20:00:00', order_status: '✅ 待出貨', created_at: '2026-08-08 16:50:00', specification: '粉色粗吸管', shipping_method: '全家超取' }
   ];
 
   // Group displayOrders by order_id
@@ -103,11 +136,16 @@ export default function Home() {
   displayOrders.forEach(o => {
     const oid = o.order_id;
     if (!groupedOrdersMap[oid]) {
+      const deadlineStr = o.shipping_deadline || o.status || '';
+      const calcStatus = calculateOrderStatus(deadlineStr, o.order_status);
+
       groupedOrdersMap[oid] = {
         order_id: oid,
         platform: o.platform || '蝦皮購物',
         customer_name: o.customer_name || '顧客',
-        status: o.status || '待處理',
+        shipping_deadline: deadlineStr,
+        order_status: calcStatus,
+        raw_order_status: o.order_status || '',
         created_at: o.created_at || '',
         shipping_method: o.shipping_method || '',
         items: []
@@ -118,23 +156,22 @@ export default function Home() {
   
   const groupedOrders = Object.values(groupedOrdersMap);
 
-  // Calculate counts based on deadline status
+  // Calculate counts
   const pendingOrdersCount = groupedOrders.length;
-  const overdueOrdersCount = groupedOrders.filter(o => getDeadlineStatus(o.status).type === 'overdue').length;
-  const shippedOrdersCount = overdueOrdersCount; // Replaced mock indicator with overdue highlight for warning
+  const overdueOrdersCount = groupedOrders.filter(o => o.order_status.includes('逾期')).length;
+  const shippedOrdersCount = overdueOrdersCount;
 
   // Filter groupedOrders based on orderSearchQuery
   const filteredGroupedOrders = groupedOrders.filter(order => {
     if (!orderSearchQuery.trim()) return true;
     const q = orderSearchQuery.toLowerCase();
     
-    // Search in order id, customer name, platform, shipping method
     if (order.order_id.toLowerCase().includes(q)) return true;
     if (order.customer_name.toLowerCase().includes(q)) return true;
     if (order.platform.toLowerCase().includes(q)) return true;
     if (order.shipping_method && order.shipping_method.toLowerCase().includes(q)) return true;
+    if (order.order_status && order.order_status.toLowerCase().includes(q)) return true;
 
-    // Search in items (product_name, specification)
     const matchesItem = order.items.some((item: any) => {
       const pName = (item.product_name || '').toLowerCase();
       const spec = (item.specification || '').toLowerCase();
@@ -143,6 +180,55 @@ export default function Home() {
     
     return matchesItem;
   });
+
+  // Sort grouped orders
+  const sortedGroupedOrders = useMemo(() => {
+    const list = [...filteredGroupedOrders];
+
+    list.sort((a, b) => {
+      if (orderSortType === 'deadline_asc') {
+        const dA = a.shipping_deadline ? new Date(a.shipping_deadline).getTime() : Infinity;
+        const dB = b.shipping_deadline ? new Date(b.shipping_deadline).getTime() : Infinity;
+        return dA - dB;
+      }
+      if (orderSortType === 'deadline_desc') {
+        const dA = a.shipping_deadline ? new Date(a.shipping_deadline).getTime() : 0;
+        const dB = b.shipping_deadline ? new Date(b.shipping_deadline).getTime() : 0;
+        return dB - dA;
+      }
+      if (orderSortType === 'status') {
+        const getRank = (st: string) => {
+          if (st.includes('逾期')) return 1;
+          if (st.includes('即將到期')) return 2;
+          if (st.includes('待出貨')) return 3;
+          if (st.includes('處理中')) return 4;
+          if (st.includes('已包裝')) return 5;
+          if (st.includes('暫緩')) return 6;
+          return 7;
+        };
+        return getRank(a.order_status) - getRank(b.order_status);
+      }
+      if (orderSortType === 'amount_desc') {
+        const priceA = Number(a.items[0]?.price) || 0;
+        const priceB = Number(b.items[0]?.price) || 0;
+        return priceB - priceA;
+      }
+      if (orderSortType === 'amount_asc') {
+        const priceA = Number(a.items[0]?.price) || 0;
+        const priceB = Number(b.items[0]?.price) || 0;
+        return priceA - priceB;
+      }
+      if (orderSortType === 'created_desc') {
+        return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+      }
+      if (orderSortType === 'created_asc') {
+        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+      }
+      return 0;
+    });
+
+    return list;
+  }, [filteredGroupedOrders, orderSortType]);
 
   const totalStock = stock.reduce((acc, curr) => acc + curr.quantity, 0);
 
@@ -200,12 +286,12 @@ export default function Home() {
     return { ok: errors.length === 0, errors };
   };
 
-  const handleShipOrder = async (order: any) => {
+  const handleShipOrder = async (order: any, isForced: boolean = false) => {
     const health = checkOrderHealth(order);
 
-    if (!health.ok) {
-      setOrderErrors(health.errors);
-      showToast("❌ 訂單出貨阻擋：請檢查異常原因！");
+    if (!health.ok && !isForced) {
+      setConfirmShipOrderModal({ order, errors: health.errors });
+      showToast("⚠️ 此訂單包含庫存問題，已自動擋住執行，請確認是否強行繼續！");
       return;
     }
 
@@ -235,6 +321,7 @@ export default function Home() {
           const deductQty = Math.min(entry.quantity, remainingNeeded);
 
           await enqueueAction('stockOut', {
+            batch_tx_id: order.order_id,
             stock_id: entry.stock_id,
             product_id: item.product_id,
             quantity: deductQty,
@@ -242,19 +329,35 @@ export default function Home() {
             floor: entry.floor,
             area: entry.area,
             expiry_date: entry.expiry_date,
-            specification: entry.specification,
-            note: `網路訂單出貨: ${order.order_id}`,
+            specification: item.specification || entry.specification || '',
+            note: `${isForced ? '[強行出貨] ' : ''}網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${order.platform} | 買家: ${order.customer_name} | 物流: ${order.shipping_method || '未指定'}`,
           });
 
           remainingNeeded -= deductQty;
+        }
+
+        // If stock was insufficient/missing or remainingNeeded > 0, log transaction for remaining quantity
+        if (remainingNeeded > 0) {
+          const p = products.find(prod => prod.product_id === item.product_id);
+          await enqueueAction('stockOut', {
+            batch_tx_id: order.order_id,
+            product_id: item.product_id,
+            quantity: remainingNeeded,
+            location: '倉庫',
+            floor: '1F',
+            area: 'A區',
+            specification: item.specification || p?.specification || '',
+            note: `[強行出貨-缺貨紀錄] 網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${order.platform} | 買家: ${order.customer_name} | 物流: ${order.shipping_method || '未指定'}`,
+          });
         }
       }
 
       // 當使用者按出貨後，自動刪除 網路訂單管理看板的紀錄、試算表的紀錄；然後自動執行app的出貨功能。
       await deleteOnlineOrder(order.order_id);
-      showToast(`✅ 訂單 ${order.order_id} 出貨成功！已刪除網路訂單與試算表紀錄，並自動扣除庫存。`);
+      showToast(`✅ 訂單 ${order.order_id} ${isForced ? '(強行)' : ''}出貨成功！已刪除網路訂單與試算表紀錄，並自動扣除庫存及寫入交易歷史。`);
       setOrderErrors([]);
       setSelectedOrder(null);
+      setConfirmShipOrderModal(null);
     } catch (e: any) {
       showToast(`❌ 出貨失敗: ${e.message}`);
     }
@@ -533,27 +636,27 @@ export default function Home() {
               <div className="space-y-2 max-h-56 overflow-y-auto pr-1 custom-scrollbar">
                 {lowStockProducts.slice(0, 6).map(p => {
                   const currentQty = productTotalStockMap.get(p.product_id) || 0;
-                    return (
-                      <div key={p.product_id} className="p-2.5 bg-black/30 border border-amber-500/20 rounded-xl flex items-center justify-between text-xs">
-                        <div className="min-w-0 pr-2">
-                          <p className="font-bold text-white truncate">{p.name}</p>
-                          <p className="text-[10px] text-slate-400 font-mono">ID: {p.product_id}</p>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="font-black text-amber-400 font-mono px-2 py-0.5 bg-amber-500/10 rounded border border-amber-500/30">
-                            剩 {currentQty} {p.unit || '個'}
-                          </span>
-                          <Link 
-                            to={`/manage?type=stock_in&pid=${p.product_id}`}
-                            className="px-2 py-1 bg-sky-500 text-slate-950 font-extrabold rounded text-[10px] hover:bg-sky-400"
-                          >
-                            補貨
-                          </Link>
-                        </div>
+                  return (
+                    <div key={p.product_id} className="p-2.5 bg-black/30 border border-amber-500/20 rounded-xl flex items-center justify-between text-xs">
+                      <div className="min-w-0 pr-2">
+                        <p className="font-bold text-white truncate">{p.name}</p>
+                        <p className="text-[10px] text-slate-400 font-mono">ID: {p.product_id}</p>
                       </div>
-                    );
-                  })}
-                </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="font-black text-amber-400 font-mono px-2 py-0.5 bg-amber-500/10 rounded border border-amber-500/30">
+                          剩 {currentQty} {p.unit || '個'}
+                        </span>
+                        <Link 
+                          to={`/manage?type=stock_in&pid=${p.product_id}`}
+                          className="px-2 py-1 bg-sky-500 text-slate-950 font-extrabold rounded text-[10px] hover:bg-sky-400"
+                        >
+                          補貨
+                        </Link>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         </div>
@@ -578,7 +681,7 @@ export default function Home() {
                       共 {groupedOrders.length} 筆
                     </span>
                   </h3>
-                  <p className="text-xs text-slate-400 hidden sm:block">各平台訂單即時看板，支援一鍵出貨自動扣庫存與同步作業</p>
+                  <p className="text-xs text-slate-400 hidden sm:block">各平台訂單即時看板，自動更新狀態，支援人工修改與排序</p>
                 </div>
               </div>
 
@@ -616,24 +719,47 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Search Input Bar */}
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="搜尋訂單編號、收件人、商品名稱、規格、物流方式..."
-                  value={orderSearchQuery}
-                  onChange={(e) => setOrderSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-9 py-2.5 text-xs sm:text-sm bg-black/40 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500/50"
-                />
-                {orderSearchQuery && (
-                  <button
-                    onClick={() => setOrderSearchQuery('')}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+              {/* Search & Sort Controls Bar */}
+              <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between bg-black/30 p-2.5 rounded-xl border border-white/5">
+                {/* Search Input Bar */}
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="搜尋訂單編號、收件人、商品、規格、狀態..."
+                    value={orderSearchQuery}
+                    onChange={(e) => setOrderSearchQuery(e.target.value)}
+                    className="w-full pl-10 pr-9 py-2 text-xs sm:text-sm bg-black/40 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500/50"
+                  />
+                  {orderSearchQuery && (
+                    <button
+                      onClick={() => setOrderSearchQuery('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Sort Selector */}
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-slate-400 font-bold flex items-center gap-1">
+                    <ArrowUpDown className="w-3.5 h-3.5 text-indigo-400" /> 排序:
+                  </span>
+                  <select
+                    value={orderSortType}
+                    onChange={(e) => setOrderSortType(e.target.value as any)}
+                    className="bg-slate-800 border border-white/10 rounded-xl text-xs font-medium text-white px-3 py-2 outline-none focus:border-indigo-500 cursor-pointer"
                   >
-                    <X className="w-4 h-4" />
-                  </button>
-                )}
+                    <option value="deadline_asc">⏰ 最晚出貨期限：近 ➔ 遠 (優先)</option>
+                    <option value="deadline_desc">⏰ 最晚出貨期限：遠 ➔ 近</option>
+                    <option value="status">🚨 訂單狀態 (緊急/逾期優先)</option>
+                    <option value="created_desc">📅 下單時間：最新 ➔ 最舊</option>
+                    <option value="created_asc">📅 下單時間：最舊 ➔ 最新</option>
+                    <option value="amount_desc">💰 訂單金額：高 ➔ 低</option>
+                    <option value="amount_asc">💰 訂單金額：低 ➔ 高</option>
+                  </select>
+                </div>
               </div>
 
               {/* Orders Cards Grid */}
@@ -643,17 +769,17 @@ export default function Home() {
                     <Flame className="w-12 h-12 text-slate-600 mx-auto" />
                     <p className="text-sm font-medium text-slate-400">目前尚無任何待處理的網路訂單</p>
                   </div>
-                ) : filteredGroupedOrders.length === 0 ? (
+                ) : sortedGroupedOrders.length === 0 ? (
                   <div className="text-center py-16 space-y-2 bg-black/20 rounded-2xl border border-white/5">
                     <Search className="w-12 h-12 text-slate-500 mx-auto animate-pulse" />
                     <p className="text-sm text-slate-400">找不到符合「{orderSearchQuery}」的訂單</p>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {filteredGroupedOrders.map((order) => {
+                    {sortedGroupedOrders.map((order) => {
                       const isShopee = order.platform === '蝦皮購物';
                       const isMomo = order.platform === 'MOMO購物網';
-                      const deadlineInfo = getDeadlineStatus(order.status);
+                      const statusStyle = getStatusBadgeStyle(order.order_status);
                       const orderPrice = order.items[0]?.price || 0;
 
                       return (
@@ -661,7 +787,7 @@ export default function Home() {
                           key={order.order_id} 
                           className="glass-panel p-4 rounded-xl flex flex-col justify-between space-y-3 relative overflow-hidden transition-all duration-200 hover:border-indigo-500/50 border-white/10 bg-slate-900/80"
                         >
-                          {/* Top Header */}
+                          {/* Top Header: SWAPPED Position 1 -> 訂單狀態 (Order Status) */}
                           <div className="flex items-center justify-between gap-2">
                             <div className="flex items-center space-x-2 min-w-0">
                               <span className={`text-[10px] uppercase font-black px-2 py-0.5 rounded-full shrink-0 ${
@@ -673,9 +799,24 @@ export default function Home() {
                               </span>
                               <span className="text-xs font-mono font-bold text-white truncate">{order.order_id}</span>
                             </div>
-                            <span className={`text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-lg shrink-0 ${deadlineInfo.color}`}>
-                              {deadlineInfo.text}
-                            </span>
+
+                            {/* 訂單狀態 Badge + Manual Edit Button */}
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className={`text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-lg flex items-center gap-1 ${statusStyle.color}`}>
+                                {statusStyle.text}
+                              </span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingStatusOrder(order);
+                                  setCustomStatusInput(order.raw_order_status || order.order_status);
+                                }}
+                                className="p-1 text-slate-400 hover:text-indigo-300 hover:bg-white/10 rounded-lg border border-white/5 transition-all"
+                                title="人工修改訂單狀態"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                              </button>
+                            </div>
                           </div>
 
                           {/* Items list */}
@@ -708,11 +849,13 @@ export default function Home() {
                             })}
                           </div>
 
-                          {/* Footer Controls */}
+                          {/* Footer Controls: SWAPPED Position 2 -> 最晚出貨期限 (Shipping Deadline) */}
                           <div className="flex items-center justify-between pt-2 border-t border-white/5">
-                            <div className="flex flex-col text-[10px] text-slate-400 space-y-0.5">
-                              <span className="flex items-center gap-1"><User className="w-3 h-3" /> {order.customer_name}</span>
-                              <span className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {order.created_at}</span>
+                            <div className="flex flex-col text-[10px] text-slate-300 space-y-0.5">
+                              <span className="flex items-center gap-1 text-slate-400"><User className="w-3 h-3" /> {order.customer_name}</span>
+                              <span className="flex items-center gap-1 font-bold text-amber-300" title="最晚出貨期限">
+                                <Clock className="w-3 h-3 text-amber-400" /> 最晚出貨: {order.shipping_deadline || '未設定'}
+                              </span>
                             </div>
 
                             <div className="flex items-center gap-2">
@@ -790,21 +933,41 @@ export default function Home() {
                   <span className="font-bold text-white">{selectedOrder.platform}</span>
                 </div>
                 <div>
-                  <span className="text-zinc-400 block mb-0.5">最晚出貨期限</span>
-                  <span className={`inline-block px-2 py-0.5 rounded font-bold ${getDeadlineStatus(selectedOrder.status).color}`}>
-                    {getDeadlineStatus(selectedOrder.status).text}
-                  </span>
+                  <span className="text-zinc-400 block mb-0.5">訂單狀態 (可人工修改)</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`inline-block px-2 py-0.5 rounded font-bold ${getStatusBadgeStyle(selectedOrder.order_status).color}`}>
+                      {getStatusBadgeStyle(selectedOrder.order_status).text}
+                    </span>
+                    <button
+                      onClick={() => {
+                        setEditingStatusOrder(selectedOrder);
+                        setCustomStatusInput(selectedOrder.raw_order_status || selectedOrder.order_status);
+                      }}
+                      className="px-2 py-0.5 bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-300 text-[10px] rounded font-bold flex items-center gap-1 transition-all"
+                    >
+                      <Edit2 className="w-3 h-3" /> 修改
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <span className="text-zinc-400 block mb-0.5">收件人</span>
                   <span className="font-bold text-white">{selectedOrder.customer_name}</span>
                 </div>
                 <div>
-                  <span className="text-zinc-400 block mb-0.5">下單日期</span>
-                  <span className="font-mono text-white">{selectedOrder.created_at}</span>
+                  <span className="text-zinc-400 block mb-0.5">最晚出貨期限</span>
+                  <span className="font-mono font-bold text-amber-300 flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5 text-amber-400" />
+                    {selectedOrder.shipping_deadline || selectedOrder.status || '未設定'}
+                  </span>
                 </div>
+                {selectedOrder.created_at && (
+                  <div>
+                    <span className="text-zinc-400 block mb-0.5">下單日期</span>
+                    <span className="font-mono text-zinc-300">{selectedOrder.created_at}</span>
+                  </div>
+                )}
                 {selectedOrder.shipping_method && (
-                  <div className="col-span-2">
+                  <div>
                     <span className="text-zinc-400 block mb-0.5">物流方式</span>
                     <span className="font-bold text-teal-300">{selectedOrder.shipping_method}</span>
                   </div>
@@ -875,7 +1038,156 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {/* Manual Status Override Modal Dialog */}
+      {editingStatusOrder && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[80] flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-slate-900 border border-indigo-500/40 rounded-2xl shadow-2xl p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-indigo-400" />
+                人工修改訂單狀態 (訂單編號: {editingStatusOrder.order_id})
+              </h3>
+              <button 
+                onClick={() => setEditingStatusOrder(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300">
+              您可以點擊以下快速預設狀態，或手動自訂輸入狀態名稱：
+            </p>
+
+            {/* Presets */}
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                '✅ 待出貨',
+                '⏳ 處理中',
+                '📦 已包裝',
+                '⏸️ 暫緩出貨',
+                '⚠️ 已逾期',
+                '⏰ 即將到期'
+              ].map(st => (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() => setCustomStatusInput(st)}
+                  className={`px-3 py-2 text-xs font-bold rounded-xl border transition-all text-left flex items-center justify-between ${
+                    customStatusInput === st 
+                      ? 'bg-indigo-600 text-white border-indigo-400 shadow-md shadow-indigo-500/30' 
+                      : 'bg-white/5 hover:bg-white/10 text-slate-200 border-white/10'
+                  }`}
+                >
+                  <span>{st}</span>
+                  {customStatusInput === st && <Check className="w-3.5 h-3.5 text-white" />}
+                </button>
+              ))}
+            </div>
+
+            {/* Custom Input */}
+            <div className="space-y-1.5 pt-2">
+              <label className="text-[11px] font-bold text-slate-400">自訂狀態名稱：</label>
+              <input
+                type="text"
+                value={customStatusInput}
+                onChange={(e) => setCustomStatusInput(e.target.value)}
+                placeholder="輸入例如：已開立發票、買家請求修改規格..."
+                className="w-full px-3 py-2 bg-black/40 border border-white/15 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  await updateOnlineOrderStatus(editingStatusOrder.order_id, '');
+                  showToast(`🔄 已將訂單 ${editingStatusOrder.order_id} 重置為依照出貨期限自動計算狀態`);
+                  setEditingStatusOrder(null);
+                }}
+                className="px-3 py-1.5 text-[11px] bg-white/5 hover:bg-white/10 text-slate-400 hover:text-slate-200 rounded-xl transition-colors border border-white/5"
+              >
+                重置為自動計算
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingStatusOrder(null)}
+                  className="px-3 py-1.5 text-xs text-slate-400 hover:text-white"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const statusToSave = customStatusInput.trim();
+                    await updateOnlineOrderStatus(editingStatusOrder.order_id, statusToSave);
+                    showToast(`✨ 訂單 ${editingStatusOrder.order_id} 狀態更新為：「${statusToSave || '自動計算'}」`);
+                    setEditingStatusOrder(null);
+                  }}
+                  className="px-4 py-1.5 text-xs font-extrabold bg-indigo-500 hover:bg-indigo-400 text-slate-950 rounded-xl shadow-md transition-all"
+                >
+                  確定儲存
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stock Problem Blocking & Force Continuation Confirmation Modal */}
+      {confirmShipOrderModal && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[90] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-[#0e172a] border border-amber-500/40 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+            <div className="p-4 bg-gradient-to-r from-amber-500/20 via-red-500/10 to-transparent border-b border-amber-500/20 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-amber-400">
+                <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+                <h3 className="text-sm font-extrabold text-white">
+                  庫存異常安全擋：訂單 {confirmShipOrderModal.order.order_id}
+                </h3>
+              </div>
+              <button 
+                onClick={() => setConfirmShipOrderModal(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 text-xs text-amber-200">
+                <p className="font-bold mb-1">⚠️ 系統檢測出此訂單包含以下庫存異常/問題，已自動擋住執行：</p>
+                <ul className="list-disc pl-5 space-y-1 text-slate-300 mt-2">
+                  {confirmShipOrderModal.errors.map((err, idx) => (
+                    <li key={idx} className="text-red-300 font-medium">{err}</li>
+                  ))}
+                </ul>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                請問您要<strong>取消出貨</strong>（先進行補貨或校正），或是<strong>強行繼續執行出貨</strong>（系統仍會扣除現有庫存並記錄訂單出貨歷史以利報表統計）？
+              </p>
+            </div>
+
+            <div className="p-4 border-t border-white/10 bg-slate-900/80 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setConfirmShipOrderModal(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 rounded-xl transition-colors border border-white/10"
+              >
+                ❌ 取消 / 暫緩出貨
+              </button>
+              <button
+                onClick={() => handleShipOrder(confirmShipOrderModal.order, true)}
+                className="px-4 py-2 text-xs font-black text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl transition-all shadow-lg shadow-amber-500/20 flex items-center gap-1.5"
+              >
+                <Truck className="w-4 h-4" /> ⚠️ 強行繼續出貨 (扣存 & 記錄)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
-
 }

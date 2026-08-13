@@ -13,56 +13,29 @@ const normalizeKeys = (obj: any) => {
   return result;
 };
 
-const normalizeOnlineOrder = (rawItem: any): OnlineOrder | null => {
-  if (!rawItem || typeof rawItem !== 'object') return null;
-  
-  // Create lowercase & trimmed map
-  const map: Record<string, any> = {};
-  for (const k of Object.keys(rawItem)) {
-    const val = rawItem[k];
-    const cleanKey = k.trim().toLowerCase();
-    map[cleanKey] = typeof val === 'string' ? val.trim() : val;
-    map[k.trim()] = typeof val === 'string' ? val.trim() : val;
+export const calculateOrderStatus = (deadlineStr: string, manualStatus?: string): string => {
+  if (manualStatus && manualStatus.trim() && manualStatus.trim() !== 'AUTO') {
+    return manualStatus.trim();
   }
 
-  const getVal = (keys: string[]) => {
-    for (const key of keys) {
-      if (map[key.toLowerCase()] !== undefined) return map[key.toLowerCase()];
-      if (map[key] !== undefined) return map[key];
-    }
-    return '';
-  };
+  if (!deadlineStr) return '待出貨';
 
-  const order_id = String(getVal(['order_id', '訂單編號', '訂單編號', '訂單Id', 'id'])).trim();
-  if (!order_id) return null;
+  const deadline = new Date(deadlineStr);
+  if (isNaN(deadline.getTime())) {
+    return deadlineStr; // Return custom string if not a date
+  }
 
-  const platform = String(getVal(['platform', '來源平台', '平台']) || '蝦皮購物').trim();
-  const product_id = String(getVal(['product_id', '商品id', '商品編號', '產品編號', '產品id', '商品ID'])).trim();
-  const product_name = String(getVal(['product_name', '商品名稱', '產品名稱', '品名', '名稱'])).trim();
-  const quantity = Number(getVal(['quantity', '數量', '件數'])) || 0;
-  
-  // "price 是指 訂單總金額，不是商品單價，商品單價不顯示"
-  const price = Number(getVal(['price', '價格', '售價', '金額', '訂單金額', '訂單總金額'])) || 0;
-  
-  const customer_name = String(getVal(['customer_name', '收件人', '顧客姓名', '買家', '顧客'])).trim();
-  const status = String(getVal(['status', '最晚出貨時間', '出貨期限'])).trim();
-  const created_at = String(getVal(['created_at', '下單時間', '建立時間', '日期', '時間'])).trim();
-  const specification = String(getVal(['specification', '商品規格', '規格', '規格描述'])).trim();
-  const shipping_method = String(getVal(['shipping_method', '物流方式', '物流', '寄送方式', '物流管道'])).trim();
+  const now = new Date();
+  const diffMs = deadline.getTime() - now.getTime();
+  const diffHours = diffMs / (1000 * 60 * 60);
 
-  return {
-    order_id,
-    platform,
-    product_id,
-    product_name,
-    quantity,
-    price,
-    customer_name,
-    status, //的最晚出貨時間
-    created_at,
-    specification,
-    shipping_method
-  };
+  if (diffHours < 0) {
+    return '已逾期';
+  } else if (diffHours <= 24) {
+    return '即將到期';
+  } else {
+    return '待出貨';
+  }
 };
 
 const resolveBlankProductIds = (orders: OnlineOrder[], products: Product[]): OnlineOrder[] => {
@@ -79,6 +52,112 @@ const resolveBlankProductIds = (orders: OnlineOrder[], products: Product[]): Onl
     }
     return o;
   });
+};
+
+const normalizeAndFillOnlineOrders = (rawItems: any[], products: Product[]): OnlineOrder[] => {
+  if (!Array.isArray(rawItems)) return [];
+
+  let lastOrderHeader: {
+    order_id: string;
+    platform: string;
+    customer_name: string;
+    shipping_deadline: string;
+    order_status: string;
+    created_at: string;
+    shipping_method: string;
+    price: number;
+  } | null = null;
+
+  const result: OnlineOrder[] = [];
+
+  for (const rawItem of rawItems) {
+    if (!rawItem || typeof rawItem !== 'object') continue;
+
+    const map: Record<string, any> = {};
+    for (const k of Object.keys(rawItem)) {
+      const val = rawItem[k];
+      const cleanKey = k.trim().toLowerCase();
+      map[cleanKey] = typeof val === 'string' ? val.trim() : val;
+      map[k.trim()] = typeof val === 'string' ? val.trim() : val;
+    }
+
+    const getVal = (keys: string[]) => {
+      for (const key of keys) {
+        if (map[key.toLowerCase()] !== undefined && map[key.toLowerCase()] !== '') return map[key.toLowerCase()];
+        if (map[key] !== undefined && map[key] !== '') return map[key];
+      }
+      return '';
+    };
+
+    let order_id = String(getVal(['order_id', '訂單編號', '訂單id', 'id'])).trim();
+    let platform = String(getVal(['platform', '來源平台', '平台'])).trim();
+    let customer_name = String(getVal(['customer_name', '收件人', '顧客姓名', '買家', '顧客'])).trim();
+    let shipping_deadline = String(getVal(['shipping_deadline', '最晚出貨時間', '出貨期限', '最晚出貨期限', 'shipping_date', 'deadline'])).trim();
+    let order_status = String(getVal(['order_status', '訂單狀態', '狀態'])).trim();
+
+    let rawStatus = String(getVal(['status'])).trim();
+    if (!shipping_deadline && rawStatus) {
+      if (!isNaN(new Date(rawStatus).getTime())) {
+        shipping_deadline = rawStatus;
+      } else if (!order_status) {
+        order_status = rawStatus;
+      }
+    }
+
+    let created_at = String(getVal(['created_at', '下單時間', '下單日期', '建立時間', '日期', '時間'])).trim();
+    let shipping_method = String(getVal(['shipping_method', '物流方式', '物流', '寄送方式', '物流管道'])).trim();
+    let priceNum = Number(getVal(['price', '價格', '售價', '金額', '訂單金額', '訂單總金額'])) || 0;
+
+    // Fill-down for multi-item orders where spreadsheet only logs order_id on first row
+    if (!order_id && lastOrderHeader) {
+      order_id = lastOrderHeader.order_id;
+      if (!platform) platform = lastOrderHeader.platform;
+      if (!customer_name) customer_name = lastOrderHeader.customer_name;
+      if (!shipping_deadline) shipping_deadline = lastOrderHeader.shipping_deadline;
+      if (!order_status) order_status = lastOrderHeader.order_status;
+      if (!created_at) created_at = lastOrderHeader.created_at;
+      if (!shipping_method) shipping_method = lastOrderHeader.shipping_method;
+      if (!priceNum) priceNum = lastOrderHeader.price;
+    }
+
+    if (!order_id) continue;
+
+    lastOrderHeader = {
+      order_id,
+      platform: platform || '蝦皮購物',
+      customer_name: customer_name || '顧客',
+      shipping_deadline,
+      order_status,
+      created_at,
+      shipping_method,
+      price: priceNum
+    };
+
+    const product_id = String(getVal(['product_id', '商品id', '商品編號', '產品編號', '產品id', '商品ID'])).trim();
+    const product_name = String(getVal(['product_name', '商品名稱', '產品名稱', '品名', '名稱'])).trim();
+    const quantity = Number(getVal(['quantity', '數量', '件數'])) || 0;
+    const specification = String(getVal(['specification', '商品規格', '規格', '規格描述'])).trim();
+
+    const calcStatus = calculateOrderStatus(shipping_deadline, order_status);
+
+    result.push({
+      order_id,
+      platform: platform || '蝦皮購物',
+      product_id,
+      product_name,
+      quantity,
+      price: priceNum,
+      customer_name: customer_name || '顧客',
+      status: shipping_deadline || rawStatus || calcStatus,
+      shipping_deadline: shipping_deadline || rawStatus,
+      order_status: calcStatus,
+      created_at,
+      specification,
+      shipping_method
+    });
+  }
+
+  return resolveBlankProductIds(result, products);
 };
 
 interface AppState {
@@ -677,12 +756,8 @@ export const useStore = create<AppState>((set, get) => ({
         const rO = await fetch(`${gasApiUrl}?action=getOnlineOrders`);
         if (rO.ok) {
           const dO = await rO.json();
-          const validO = (dO || [])
-            .map((item: any) => normalizeOnlineOrder(item))
-            .filter((o: any): o is OnlineOrder => o !== null);
-          
           const currentProducts = get().products;
-          const resolvedO = resolveBlankProductIds(validO, currentProducts);
+          const resolvedO = normalizeAndFillOnlineOrders(dO || [], currentProducts);
 
           await dbOnlineOrders.clear();
           for (const o of resolvedO) {
@@ -713,12 +788,8 @@ export const useStore = create<AppState>((set, get) => ({
       const rO = await fetch(`${gasApiUrl}?action=getOnlineOrders`);
       if (rO.ok) {
         const dO = await rO.json();
-        const validO = (dO || [])
-          .map((item: any) => normalizeOnlineOrder(item))
-          .filter((o: any): o is OnlineOrder => o !== null);
-        
         const currentProducts = get().products;
-        const resolvedO = resolveBlankProductIds(validO, currentProducts);
+        const resolvedO = normalizeAndFillOnlineOrders(dO || [], currentProducts);
 
         await dbOnlineOrders.clear();
         for (const o of resolvedO) {
@@ -744,7 +815,7 @@ export const useStore = create<AppState>((set, get) => ({
       const matchOrder = o.order_id === orderId;
       const matchProduct = productId ? o.product_id === productId : true;
       if (matchOrder && matchProduct) {
-        return { ...o, status };
+        return { ...o, order_status: status, status: status };
       }
       return o;
     });
@@ -763,7 +834,7 @@ export const useStore = create<AppState>((set, get) => ({
       const response = await fetch(`${gasApiUrl}?action=updateOnlineOrder`, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ order_id: orderId, status, product_id: productId })
+        body: JSON.stringify({ order_id: orderId, status, order_status: status, product_id: productId })
       });
       if (response.ok) {
         return true;

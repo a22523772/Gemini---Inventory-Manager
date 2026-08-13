@@ -16,7 +16,9 @@ export type OnlineOrder = {
   quantity: number;
   price: number;
   customer_name: string;
-  status: string; // This is the latest shipment time (最晚出貨時間)
+  status: string; // Stored deadline string or raw status
+  shipping_deadline?: string; // 最晚出貨期限
+  order_status?: string; // 訂單狀態 (可手動修改或自動計算)
   created_at: string;
   specification?: string; // 商品規格
   shipping_method?: string; // 物流方式
