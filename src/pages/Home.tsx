@@ -3,7 +3,7 @@ import { useStore, calculateOrderStatus } from '../store/useStore';
 import { 
   Package, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, 
   AlertTriangle, BarChart2, Globe, Truck, Trash2, X, PlusCircle, User, Calendar, CheckCircle, Flame, Search, ArrowRight, FileText,
-  ArrowUpDown, Edit2, Clock, Check
+  ArrowUpDown, Edit2, Clock, Check, FileSpreadsheet, Download, Copy, Printer, ShoppingBag, Layers, Filter
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -11,6 +11,7 @@ export default function Home() {
   const { 
     products, 
     stock, 
+    vendors,
     syncQueue, 
     isLoading, 
     fetchRemoteData, 
@@ -39,6 +40,12 @@ export default function Home() {
 
   // Stock issue force shipment confirmation modal
   const [confirmShipOrderModal, setConfirmShipOrderModal] = useState<{ order: any; errors: string[] } | null>(null);
+
+  // Tab mode for online order dashboard
+  const [orderDashboardTab, setOrderDashboardTab] = useState<'orders' | 'items_summary'>('orders');
+  const [summarySearchQuery, setSummarySearchQuery] = useState('');
+  const [summaryOnlyShortfall, setSummaryOnlyShortfall] = useState(false);
+  const [summaryVendorFilter, setSummaryVendorFilter] = useState('ALL');
 
   const getStatusBadgeStyle = (statusText: string) => {
     if (!statusText) {
@@ -229,6 +236,162 @@ export default function Home() {
 
     return list;
   }, [filteredGroupedOrders, orderSortType]);
+
+  // Vendors map for supplier names
+  const vendorsMap = useMemo(() => new Map(vendors.map(v => [v.vendor_id, v.vendor_name])), [vendors]);
+
+  // Aggregate all items across all pending online orders
+  const consolidatedOrderItems = useMemo(() => {
+    const itemMap = new Map<string, {
+      product_id: string;
+      product_name: string;
+      specification: string;
+      unit: string;
+      vendor_name: string;
+      total_ordered_qty: number;
+      current_stock_qty: number;
+      shortfall_qty: number;
+      cost_price: number;
+      selling_price: number;
+      orders_count: number;
+      order_ids: string[];
+    }>();
+
+    displayOrders.forEach(o => {
+      const pid = o.product_id || 'UNKNOWN';
+      const p = productMap.get(pid);
+      const spec = o.specification || (p ? p.specification : '') || '預設規格';
+      const key = `${pid}___${spec}`;
+
+      const vendorName = p?.vendor_id ? (vendorsMap.get(p.vendor_id) || '未指定廠商') : '未指定廠商';
+      const unit = p?.unit || '個';
+      const costPrice = p?.cost_price || 0;
+      const currentStock = productTotalStockMap.get(pid) || 0;
+
+      if (!itemMap.has(key)) {
+        itemMap.set(key, {
+          product_id: pid,
+          product_name: o.product_name || p?.name || '未知商品',
+          specification: spec,
+          unit,
+          vendor_name: vendorName,
+          total_ordered_qty: 0,
+          current_stock_qty: currentStock,
+          shortfall_qty: 0,
+          cost_price: costPrice,
+          selling_price: o.price || p?.selling_price || 0,
+          orders_count: 0,
+          order_ids: []
+        });
+      }
+
+      const entry = itemMap.get(key)!;
+      entry.total_ordered_qty += Number(o.quantity) || 1;
+      if (!entry.order_ids.includes(o.order_id)) {
+        entry.order_ids.push(o.order_id);
+        entry.orders_count += 1;
+      }
+    });
+
+    const result = Array.from(itemMap.values()).map(item => {
+      const shortfall = Math.max(0, item.total_ordered_qty - item.current_stock_qty);
+      return {
+        ...item,
+        shortfall_qty: shortfall
+      };
+    });
+
+    return result;
+  }, [displayOrders, productMap, productTotalStockMap, vendorsMap]);
+
+  const filteredConsolidatedItems = useMemo(() => {
+    return consolidatedOrderItems.filter(item => {
+      if (summaryOnlyShortfall && item.shortfall_qty <= 0) return false;
+      if (summaryVendorFilter !== 'ALL' && item.vendor_name !== summaryVendorFilter) return false;
+
+      if (summarySearchQuery.trim()) {
+        const q = summarySearchQuery.toLowerCase().trim();
+        const pidMatch = (item.product_id || '').toLowerCase().includes(q);
+        const nameMatch = (item.product_name || '').toLowerCase().includes(q);
+        const specMatch = (item.specification || '').toLowerCase().includes(q);
+        const vendorMatch = (item.vendor_name || '').toLowerCase().includes(q);
+        const ordersMatch = item.order_ids.some(id => id.toLowerCase().includes(q));
+        if (!pidMatch && !nameMatch && !specMatch && !vendorMatch && !ordersMatch) return false;
+      }
+
+      return true;
+    });
+  }, [consolidatedOrderItems, summaryOnlyShortfall, summaryVendorFilter, summarySearchQuery]);
+
+  const summaryVendorOptions = useMemo(() => {
+    const set = new Set<string>();
+    consolidatedOrderItems.forEach(i => set.add(i.vendor_name));
+    return Array.from(set);
+  }, [consolidatedOrderItems]);
+
+  const exportSummaryToExcel = () => {
+    if (filteredConsolidatedItems.length === 0) {
+      showToast("⚠️ 目前沒有可匯出的商品資料");
+      return;
+    }
+
+    const headers = ['商品編號', '商品名稱', '規格', '供應商', '單位', '網路訂單需求總量', '目前現有庫存量', '建議訂購數量(缺貨)', '預估進價成本', '預估採購小計', '涉及訂單筆數', '訂單編號列表'];
+    const rows = filteredConsolidatedItems.map(item => [
+      `"${item.product_id || ''}"`,
+      `"${(item.product_name || '').replace(/"/g, '""')}"`,
+      `"${(item.specification || '').replace(/"/g, '""')}"`,
+      `"${(item.vendor_name || '').replace(/"/g, '""')}"`,
+      `"${(item.unit || '個').replace(/"/g, '""')}"`,
+      item.total_ordered_qty,
+      item.current_stock_qty,
+      item.shortfall_qty,
+      item.cost_price || 0,
+      (item.cost_price || 0) * item.shortfall_qty,
+      item.orders_count,
+      `"${item.order_ids.join('; ')}"`
+    ]);
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `網路訂單_全單商品訂貨彙整單_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast("✅ 已成功匯出 Excel CSV 檔！");
+  };
+
+  const copySummaryForExcel = () => {
+    if (filteredConsolidatedItems.length === 0) {
+      showToast("⚠️ 目前沒有可複製的商品資料");
+      return;
+    }
+
+    const headers = ['商品編號', '商品名稱', '規格', '供應商', '單位', '網路訂單需求總量', '目前現有庫存量', '建議訂購數量(缺貨)', '預估進價成本', '預估採購小計', '涉及訂單筆數', '訂單編號列表'];
+    const rows = filteredConsolidatedItems.map(item => [
+      item.product_id || '',
+      item.product_name || '',
+      item.specification || '',
+      item.vendor_name || '',
+      item.unit || '個',
+      item.total_ordered_qty,
+      item.current_stock_qty,
+      item.shortfall_qty,
+      item.cost_price || 0,
+      (item.cost_price || 0) * item.shortfall_qty,
+      item.orders_count,
+      item.order_ids.join('; ')
+    ]);
+
+    const tsvContent = [headers.join('\t'), ...rows.map(r => r.join('\t'))].join('\n');
+    navigator.clipboard.writeText(tsvContent).then(() => {
+      showToast("📋 已成功複製商品彙整內容！可直接在 Excel 中按 Ctrl+V 貼上");
+    }).catch(() => {
+      showToast("❌ 複製失敗，請使用匯出 Excel 功能");
+    });
+  };
 
   const totalStock = stock.reduce((acc, curr) => acc + curr.quantity, 0);
 
@@ -539,15 +702,27 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Big Action Entry Button */}
-            <div className="pt-1">
+            {/* Big Action Entry Buttons */}
+            <div className="pt-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
-                onClick={() => setIsOrderDashboardOpen(true)}
-                className="w-full py-3.5 px-4 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-400 hover:to-indigo-500 text-slate-950 font-black rounded-xl text-sm transition-all shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2 active:scale-[0.99]"
+                onClick={() => {
+                  setOrderDashboardTab('orders');
+                  setIsOrderDashboardOpen(true);
+                }}
+                className="py-3 px-3.5 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-400 hover:to-indigo-500 text-slate-950 font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-1.5 active:scale-[0.99]"
               >
                 <Globe className="w-4 h-4" />
-                <span>點擊開啟網路訂單管理看板 ({groupedOrders.length} 筆訂單)</span>
-                <ArrowRight className="w-4 h-4" />
+                <span>網路訂單看板 ({groupedOrders.length} 筆)</span>
+              </button>
+              <button
+                onClick={() => {
+                  setOrderDashboardTab('items_summary');
+                  setIsOrderDashboardOpen(true);
+                }}
+                className="py-3 px-3.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-1.5 active:scale-[0.99]"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>全單商品需求彙整 (製作訂貨單)</span>
               </button>
             </div>
           </div>
@@ -704,6 +879,37 @@ export default function Home() {
               </div>
             </div>
 
+            {/* Sub-tab Navigation */}
+            <div className="flex items-center gap-2 border-b border-white/10 px-4 py-2.5 bg-slate-900/50 shrink-0 overflow-x-auto">
+              <button
+                onClick={() => setOrderDashboardTab('orders')}
+                className={`px-3.5 py-1.5 text-xs font-extrabold rounded-xl flex items-center gap-2 transition-all shrink-0 ${
+                  orderDashboardTab === 'orders'
+                    ? 'bg-indigo-500 text-slate-950 shadow-md shadow-indigo-500/20'
+                    : 'text-slate-400 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                <Globe className="w-4 h-4" />
+                <span>按訂單卡片檢視 ({groupedOrders.length} 筆)</span>
+              </button>
+              <button
+                onClick={() => setOrderDashboardTab('items_summary')}
+                className={`px-3.5 py-1.5 text-xs font-extrabold rounded-xl flex items-center gap-2 transition-all shrink-0 ${
+                  orderDashboardTab === 'items_summary'
+                    ? 'bg-indigo-500 text-slate-950 shadow-md shadow-indigo-500/20'
+                    : 'text-slate-400 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>全單商品需求彙整 (製作採購訂貨單 Excel)</span>
+                {consolidatedOrderItems.some(i => i.shortfall_qty > 0) && (
+                  <span className="px-2 py-0.5 bg-red-500 text-white text-[10px] rounded-full font-black animate-pulse">
+                    {consolidatedOrderItems.filter(i => i.shortfall_qty > 0).length} 種缺貨
+                  </span>
+                )}
+              </button>
+            </div>
+
             {/* Modal Content Area */}
             <div className="p-4 sm:p-6 space-y-4 flex-1 overflow-y-auto custom-scrollbar">
               
@@ -719,180 +925,369 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Search & Sort Controls Bar */}
-              <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between bg-black/30 p-2.5 rounded-xl border border-white/5">
-                {/* Search Input Bar */}
-                <div className="relative flex-1">
-                  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="搜尋訂單編號、收件人、商品、規格、狀態..."
-                    value={orderSearchQuery}
-                    onChange={(e) => setOrderSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-9 py-2 text-xs sm:text-sm bg-black/40 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500/50"
-                  />
-                  {orderSearchQuery && (
-                    <button
-                      onClick={() => setOrderSearchQuery('')}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+              {/* TAB 1: Orders Cards Grid View */}
+              {orderDashboardTab === 'orders' && (
+                <div className="space-y-4">
+                  {/* Search & Sort Controls Bar */}
+                  <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between bg-black/30 p-2.5 rounded-xl border border-white/5">
+                    {/* Search Input Bar */}
+                    <div className="relative flex-1">
+                      <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="搜尋訂單編號、收件人、商品、規格、狀態..."
+                        value={orderSearchQuery}
+                        onChange={(e) => setOrderSearchQuery(e.target.value)}
+                        className="w-full pl-10 pr-9 py-2 text-xs sm:text-sm bg-black/40 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500/50"
+                      />
+                      {orderSearchQuery && (
+                        <button
+                          onClick={() => setOrderSearchQuery('')}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Sort Selector */}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-xs text-slate-400 font-bold flex items-center gap-1">
+                        <ArrowUpDown className="w-3.5 h-3.5 text-indigo-400" /> 排序:
+                      </span>
+                      <select
+                        value={orderSortType}
+                        onChange={(e) => setOrderSortType(e.target.value as any)}
+                        className="bg-slate-800 border border-white/10 rounded-xl text-xs font-medium text-white px-3 py-2 outline-none focus:border-indigo-500 cursor-pointer"
+                      >
+                        <option value="deadline_asc">⏰ 最晚出貨期限：近 ➔ 遠 (優先)</option>
+                        <option value="deadline_desc">⏰ 最晚出貨期限：遠 ➔ 近</option>
+                        <option value="status">🚨 訂單狀態 (緊急/逾期優先)</option>
+                        <option value="created_desc">📅 下單時間：最新 ➔ 最舊</option>
+                        <option value="created_asc">📅 下單時間：最舊 ➔ 最新</option>
+                        <option value="amount_desc">💰 訂單金額：高 ➔ 低</option>
+                        <option value="amount_asc">💰 訂單金額：低 ➔ 高</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Orders Cards Grid */}
+                  <div>
+                    {groupedOrders.length === 0 ? (
+                      <div className="text-center py-16 space-y-3 bg-black/20 rounded-2xl border border-white/5">
+                        <Flame className="w-12 h-12 text-slate-600 mx-auto" />
+                        <p className="text-sm font-medium text-slate-400">目前尚無任何待處理的網路訂單</p>
+                      </div>
+                    ) : sortedGroupedOrders.length === 0 ? (
+                      <div className="text-center py-16 space-y-2 bg-black/20 rounded-2xl border border-white/5">
+                        <Search className="w-12 h-12 text-slate-500 mx-auto animate-pulse" />
+                        <p className="text-sm text-slate-400">找不到符合「{orderSearchQuery}」的訂單</p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {sortedGroupedOrders.map((order) => {
+                          const isShopee = order.platform === '蝦皮購物';
+                          const isMomo = order.platform === 'MOMO購物網';
+                          const statusStyle = getStatusBadgeStyle(order.order_status);
+                          const orderPrice = order.items[0]?.price || 0;
+
+                          return (
+                            <div 
+                              key={order.order_id} 
+                              className="glass-panel p-4 rounded-xl flex flex-col justify-between space-y-3 relative overflow-hidden transition-all duration-200 hover:border-indigo-500/50 border-white/10 bg-slate-900/80"
+                            >
+                              {/* Top Header: SWAPPED Position 1 -> 訂單狀態 (Order Status) */}
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center space-x-2 min-w-0">
+                                  <span className={`text-[10px] uppercase font-black px-2 py-0.5 rounded-full shrink-0 ${
+                                    isShopee ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' :
+                                    isMomo ? 'bg-pink-500/20 text-pink-400 border border-pink-500/30' :
+                                    'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                  }`}>
+                                    {order.platform}
+                                  </span>
+                                  <span className="text-xs font-mono font-bold text-white truncate">{order.order_id}</span>
+                                </div>
+
+                                {/* 訂單狀態 Badge + Manual Edit Button */}
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <span className={`text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-lg flex items-center gap-1 ${statusStyle.color}`}>
+                                    {statusStyle.text}
+                                  </span>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingStatusOrder(order);
+                                      setCustomStatusInput(order.raw_order_status || order.order_status);
+                                    }}
+                                    className="p-1 text-slate-400 hover:text-indigo-300 hover:bg-white/10 rounded-lg border border-white/5 transition-all"
+                                    title="人工修改訂單狀態"
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Items list */}
+                              <div className="space-y-2 cursor-pointer" onClick={() => setSelectedOrder(order)}>
+                                {order.items.map((item: any, idx: number) => {
+                                  const spec = item.specification || getProductSpecification(item.product_id);
+                                  const shipMethod = item.shipping_method || order.shipping_method;
+                                  return (
+                                    <div key={idx} className="bg-white/5 rounded-lg p-2.5 flex items-start justify-between text-xs hover:bg-white/10 transition-colors">
+                                      <div className="flex-1 min-w-0 mr-2 space-y-1">
+                                        <p className="font-semibold text-white truncate">{item.product_name}</p>
+                                        <div className="flex flex-wrap gap-1">
+                                          {spec && (
+                                            <span className="inline-block bg-indigo-500/10 text-indigo-300 text-[10px] px-1.5 py-0.5 rounded border border-indigo-500/20 font-medium">
+                                              規格: {spec}
+                                            </span>
+                                          )}
+                                          {shipMethod && (
+                                            <span className="inline-block bg-teal-500/10 text-teal-300 text-[10px] px-1.5 py-0.5 rounded border border-teal-500/20 font-medium">
+                                              物流: {shipMethod}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <div className="text-right shrink-0">
+                                        <p className="text-slate-400 text-xs">數量: <strong className="text-white font-black">{item.quantity}</strong></p>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              {/* Footer Controls: SWAPPED Position 2 -> 最晚出貨期限 (Shipping Deadline) */}
+                              <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                                <div className="flex flex-col text-[10px] text-slate-300 space-y-0.5">
+                                  <span className="flex items-center gap-1 text-slate-400"><User className="w-3 h-3" /> {order.customer_name}</span>
+                                  <span className="flex items-center gap-1 font-bold text-amber-300" title="最晚出貨期限">
+                                    <Clock className="w-3 h-3 text-amber-400" /> 最晚出貨: {order.shipping_deadline || '未設定'}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  <div className="mr-1 text-right">
+                                    <span className="block text-[9px] text-slate-400">總金額</span>
+                                    <span className="text-xs font-bold text-indigo-400 font-mono">
+                                      {orderPrice > 0 ? `$${orderPrice}` : '無'}
+                                    </span>
+                                  </div>
+                                  <button 
+                                    onClick={() => setSelectedOrder(order)}
+                                    className="px-2 py-1 text-xs text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors border border-white/5"
+                                  >
+                                    詳情
+                                  </button>
+                                  <button 
+                                    onClick={() => handleShipOrder(order)}
+                                    className="px-2.5 py-1 text-xs font-bold bg-indigo-500 hover:bg-indigo-400 text-slate-950 rounded-lg flex items-center gap-1 transition-all shadow-md shadow-indigo-500/20"
+                                  >
+                                    <Truck className="w-3.5 h-3.5" /> 出貨
+                                  </button>
+                                  <button 
+                                    onClick={() => handleDeleteOrder(order.order_id)}
+                                    className="p-1 text-slate-400 hover:text-red-400 bg-white/5 hover:bg-red-500/10 rounded-lg border border-white/5 transition-all"
+                                    title="刪除單筆訂單"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: Consolidated Products Order Slip (Excel) View */}
+              {orderDashboardTab === 'items_summary' && (
+                <div className="space-y-4 animate-in fade-in duration-150">
+                  {/* KPI Summary Cards */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-black/40 border border-white/10 rounded-xl p-3.5 space-y-1">
+                      <span className="text-[11px] text-slate-400 font-medium block">需求商品品項數</span>
+                      <span className="text-xl font-black text-indigo-400 font-mono">
+                        {consolidatedOrderItems.length} <span className="text-xs font-normal text-slate-500">種</span>
+                      </span>
+                    </div>
+                    <div className="bg-black/40 border border-white/10 rounded-xl p-3.5 space-y-1">
+                      <span className="text-[11px] text-slate-400 font-medium block">網路訂單總需求件數</span>
+                      <span className="text-xl font-black text-sky-400 font-mono">
+                        {consolidatedOrderItems.reduce((a, c) => a + c.total_ordered_qty, 0)} <span className="text-xs font-normal text-slate-500">件</span>
+                      </span>
+                    </div>
+                    <div className="bg-black/40 border border-amber-500/30 rounded-xl p-3.5 space-y-1">
+                      <span className="text-[11px] text-amber-300 font-medium block">庫存不足需訂貨品項</span>
+                      <span className={`text-xl font-black font-mono ${consolidatedOrderItems.some(i => i.shortfall_qty > 0) ? 'text-amber-400 animate-pulse' : 'text-slate-400'}`}>
+                        {consolidatedOrderItems.filter(i => i.shortfall_qty > 0).length} <span className="text-xs font-normal text-slate-500">種缺貨</span>
+                      </span>
+                    </div>
+                    <div className="bg-black/40 border border-emerald-500/30 rounded-xl p-3.5 space-y-1">
+                      <span className="text-[11px] text-emerald-300 font-medium block">預估補貨採購總金額</span>
+                      <span className="text-xl font-black text-emerald-400 font-mono">
+                        ${consolidatedOrderItems.reduce((a, c) => a + (c.cost_price * c.shortfall_qty), 0).toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Toolbar Controls */}
+                  <div className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between bg-black/40 p-3 rounded-xl border border-white/10">
+                    {/* Search & Filters */}
+                    <div className="flex flex-col sm:flex-row gap-2 flex-1">
+                      <div className="relative flex-1">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="搜尋品名、編號、規格、供應商或訂單號..."
+                          value={summarySearchQuery}
+                          onChange={(e) => setSummarySearchQuery(e.target.value)}
+                          className="w-full pl-9 pr-8 py-2 text-xs bg-slate-900 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                        {summarySearchQuery && (
+                          <button onClick={() => setSummarySearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Vendor Selector */}
+                      <select
+                        value={summaryVendorFilter}
+                        onChange={(e) => setSummaryVendorFilter(e.target.value)}
+                        className="bg-slate-900 border border-white/10 rounded-xl text-xs font-medium text-white px-3 py-2 outline-none focus:border-indigo-500 cursor-pointer"
+                      >
+                        <option value="ALL">所有供應商 ({summaryVendorOptions.length})</option>
+                        {summaryVendorOptions.map(v => (
+                          <option key={v} value={v}>{v}</option>
+                        ))}
+                      </select>
+
+                      {/* Shortfall Only Filter Toggle */}
+                      <button
+                        onClick={() => setSummaryOnlyShortfall(!summaryOnlyShortfall)}
+                        className={`px-3 py-2 text-xs font-bold rounded-xl border flex items-center justify-center gap-1.5 transition-all shrink-0 ${
+                          summaryOnlyShortfall
+                            ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/20'
+                            : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
+                        }`}
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        <span>僅看缺貨品項 ({consolidatedOrderItems.filter(i => i.shortfall_qty > 0).length})</span>
+                      </button>
+                    </div>
+
+                    {/* Export Actions */}
+                    <div className="flex items-center gap-2 shrink-0 justify-end">
+                      <button
+                        onClick={copySummaryForExcel}
+                        className="px-3 py-2 text-xs font-extrabold bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 rounded-xl flex items-center gap-1.5 transition-all active:scale-95"
+                        title="複製 TSV 格式，開啟 Excel 直接按 Ctrl+V 貼上"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>複製至 Excel (Ctrl+V)</span>
+                      </button>
+                      <button
+                        onClick={exportSummaryToExcel}
+                        className="px-3.5 py-2 text-xs font-extrabold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/20 active:scale-95"
+                        title="下載包含全單商品的 Excel / CSV 檔"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5" />
+                        <span>下載 Excel (CSV)</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Summary Table */}
+                  {filteredConsolidatedItems.length === 0 ? (
+                    <div className="text-center py-16 space-y-2 bg-black/20 rounded-2xl border border-white/5">
+                      <ShoppingBag className="w-12 h-12 text-slate-600 mx-auto" />
+                      <p className="text-sm font-medium text-slate-400">目前沒有符合條件的彙整商品</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-white/10 custom-scrollbar">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-slate-900/90 text-slate-300 border-b border-white/10 font-bold">
+                            <th className="p-3">商品名稱 / 編號 / 規格</th>
+                            <th className="p-3">供應商</th>
+                            <th className="p-3 text-center">單位</th>
+                            <th className="p-3 text-right">訂單需求總量</th>
+                            <th className="p-3 text-right">目前現有庫存</th>
+                            <th className="p-3 text-center">建議訂購量 (缺貨差額)</th>
+                            <th className="p-3 text-right">預估進價成本</th>
+                            <th className="p-3 text-right">採購預算小計</th>
+                            <th className="p-3 text-center">涉及訂單筆數</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/5 bg-slate-950/60">
+                          {filteredConsolidatedItems.map((item, idx) => {
+                            const isShortfall = item.shortfall_qty > 0;
+                            const subtotal = (item.cost_price || 0) * item.shortfall_qty;
+
+                            return (
+                              <tr key={idx} className={`hover:bg-white/5 transition-colors ${isShortfall ? 'bg-amber-500/5' : ''}`}>
+                                <td className="p-3">
+                                  <p className="font-extrabold text-white text-sm">{item.product_name}</p>
+                                  <div className="flex items-center gap-2 mt-0.5 font-mono text-[11px]">
+                                    <span className="text-slate-400">ID: {item.product_id}</span>
+                                    <span className="text-indigo-300 bg-indigo-500/10 px-1.5 py-0.2 rounded border border-indigo-500/20">
+                                      {item.specification}
+                                    </span>
+                                  </div>
+                                </td>
+                                <td className="p-3">
+                                  <span className="text-slate-300 font-medium">{item.vendor_name}</span>
+                                </td>
+                                <td className="p-3 text-center">
+                                  <span className="text-slate-400 font-mono">{item.unit}</span>
+                                </td>
+                                <td className="p-3 text-right font-mono font-black text-sky-400 text-sm">
+                                  {item.total_ordered_qty} {item.unit}
+                                </td>
+                                <td className="p-3 text-right font-mono font-bold">
+                                  <span className={item.current_stock_qty >= item.total_ordered_qty ? 'text-emerald-400' : 'text-amber-400'}>
+                                    {item.current_stock_qty} {item.unit}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-center">
+                                  {isShortfall ? (
+                                    <span className="inline-flex items-center gap-1 font-black px-2.5 py-1 bg-red-500/20 text-red-300 border border-red-500/40 rounded-full font-mono text-xs animate-pulse">
+                                      <AlertTriangle className="w-3 h-3 text-red-400 shrink-0" />
+                                      需補貨 {item.shortfall_qty} {item.unit}
+                                    </span>
+                                  ) : (
+                                    <span className="inline-block px-2.5 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-[11px] font-bold">
+                                      ✅ 庫存充裕
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="p-3 text-right font-mono text-slate-300">
+                                  ${item.cost_price ? item.cost_price.toLocaleString() : '0'}
+                                </td>
+                                <td className="p-3 text-right font-mono font-bold text-emerald-400 text-sm">
+                                  ${subtotal.toLocaleString()}
+                                </td>
+                                <td className="p-3 text-center">
+                                  <span className="px-2 py-0.5 bg-white/10 text-slate-200 rounded font-mono text-xs font-bold" title={`涉及訂單: ${item.order_ids.join(', ')}`}>
+                                    {item.orders_count} 筆訂單
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
+              )}
 
-                {/* Sort Selector */}
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs text-slate-400 font-bold flex items-center gap-1">
-                    <ArrowUpDown className="w-3.5 h-3.5 text-indigo-400" /> 排序:
-                  </span>
-                  <select
-                    value={orderSortType}
-                    onChange={(e) => setOrderSortType(e.target.value as any)}
-                    className="bg-slate-800 border border-white/10 rounded-xl text-xs font-medium text-white px-3 py-2 outline-none focus:border-indigo-500 cursor-pointer"
-                  >
-                    <option value="deadline_asc">⏰ 最晚出貨期限：近 ➔ 遠 (優先)</option>
-                    <option value="deadline_desc">⏰ 最晚出貨期限：遠 ➔ 近</option>
-                    <option value="status">🚨 訂單狀態 (緊急/逾期優先)</option>
-                    <option value="created_desc">📅 下單時間：最新 ➔ 最舊</option>
-                    <option value="created_asc">📅 下單時間：最舊 ➔ 最新</option>
-                    <option value="amount_desc">💰 訂單金額：高 ➔ 低</option>
-                    <option value="amount_asc">💰 訂單金額：低 ➔ 高</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Orders Cards Grid */}
-              <div>
-                {groupedOrders.length === 0 ? (
-                  <div className="text-center py-16 space-y-3 bg-black/20 rounded-2xl border border-white/5">
-                    <Flame className="w-12 h-12 text-slate-600 mx-auto" />
-                    <p className="text-sm font-medium text-slate-400">目前尚無任何待處理的網路訂單</p>
-                  </div>
-                ) : sortedGroupedOrders.length === 0 ? (
-                  <div className="text-center py-16 space-y-2 bg-black/20 rounded-2xl border border-white/5">
-                    <Search className="w-12 h-12 text-slate-500 mx-auto animate-pulse" />
-                    <p className="text-sm text-slate-400">找不到符合「{orderSearchQuery}」的訂單</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {sortedGroupedOrders.map((order) => {
-                      const isShopee = order.platform === '蝦皮購物';
-                      const isMomo = order.platform === 'MOMO購物網';
-                      const statusStyle = getStatusBadgeStyle(order.order_status);
-                      const orderPrice = order.items[0]?.price || 0;
-
-                      return (
-                        <div 
-                          key={order.order_id} 
-                          className="glass-panel p-4 rounded-xl flex flex-col justify-between space-y-3 relative overflow-hidden transition-all duration-200 hover:border-indigo-500/50 border-white/10 bg-slate-900/80"
-                        >
-                          {/* Top Header: SWAPPED Position 1 -> 訂單狀態 (Order Status) */}
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center space-x-2 min-w-0">
-                              <span className={`text-[10px] uppercase font-black px-2 py-0.5 rounded-full shrink-0 ${
-                                isShopee ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' :
-                                isMomo ? 'bg-pink-500/20 text-pink-400 border border-pink-500/30' :
-                                'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                              }`}>
-                                {order.platform}
-                              </span>
-                              <span className="text-xs font-mono font-bold text-white truncate">{order.order_id}</span>
-                            </div>
-
-                            {/* 訂單狀態 Badge + Manual Edit Button */}
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <span className={`text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-lg flex items-center gap-1 ${statusStyle.color}`}>
-                                {statusStyle.text}
-                              </span>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setEditingStatusOrder(order);
-                                  setCustomStatusInput(order.raw_order_status || order.order_status);
-                                }}
-                                className="p-1 text-slate-400 hover:text-indigo-300 hover:bg-white/10 rounded-lg border border-white/5 transition-all"
-                                title="人工修改訂單狀態"
-                              >
-                                <Edit2 className="w-3 h-3" />
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Items list */}
-                          <div className="space-y-2 cursor-pointer" onClick={() => setSelectedOrder(order)}>
-                            {order.items.map((item: any, idx: number) => {
-                              const spec = item.specification || getProductSpecification(item.product_id);
-                              const shipMethod = item.shipping_method || order.shipping_method;
-                              return (
-                                <div key={idx} className="bg-white/5 rounded-lg p-2.5 flex items-start justify-between text-xs hover:bg-white/10 transition-colors">
-                                  <div className="flex-1 min-w-0 mr-2 space-y-1">
-                                    <p className="font-semibold text-white truncate">{item.product_name}</p>
-                                    <div className="flex flex-wrap gap-1">
-                                      {spec && (
-                                        <span className="inline-block bg-indigo-500/10 text-indigo-300 text-[10px] px-1.5 py-0.5 rounded border border-indigo-500/20 font-medium">
-                                          規格: {spec}
-                                        </span>
-                                      )}
-                                      {shipMethod && (
-                                        <span className="inline-block bg-teal-500/10 text-teal-300 text-[10px] px-1.5 py-0.5 rounded border border-teal-500/20 font-medium">
-                                          物流: {shipMethod}
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className="text-right shrink-0">
-                                    <p className="text-slate-400 text-xs">數量: <strong className="text-white font-black">{item.quantity}</strong></p>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-
-                          {/* Footer Controls: SWAPPED Position 2 -> 最晚出貨期限 (Shipping Deadline) */}
-                          <div className="flex items-center justify-between pt-2 border-t border-white/5">
-                            <div className="flex flex-col text-[10px] text-slate-300 space-y-0.5">
-                              <span className="flex items-center gap-1 text-slate-400"><User className="w-3 h-3" /> {order.customer_name}</span>
-                              <span className="flex items-center gap-1 font-bold text-amber-300" title="最晚出貨期限">
-                                <Clock className="w-3 h-3 text-amber-400" /> 最晚出貨: {order.shipping_deadline || '未設定'}
-                              </span>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <div className="mr-1 text-right">
-                                <span className="block text-[9px] text-slate-400">總金額</span>
-                                <span className="text-xs font-bold text-indigo-400 font-mono">
-                                  {orderPrice > 0 ? `$${orderPrice}` : '無'}
-                                </span>
-                              </div>
-                              <button 
-                                onClick={() => setSelectedOrder(order)}
-                                className="px-2 py-1 text-xs text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors border border-white/5"
-                              >
-                                詳情
-                              </button>
-                              <button 
-                                onClick={() => handleShipOrder(order)}
-                                className="px-2.5 py-1 text-xs font-bold bg-indigo-500 hover:bg-indigo-400 text-slate-950 rounded-lg flex items-center gap-1 transition-all shadow-md shadow-indigo-500/20"
-                              >
-                                <Truck className="w-3.5 h-3.5" /> 出貨
-                              </button>
-                              <button 
-                                onClick={() => handleDeleteOrder(order.order_id)}
-                                className="p-1 text-slate-400 hover:text-red-400 bg-white/5 hover:bg-red-500/10 rounded-lg border border-white/5 transition-all"
-                                title="刪除單筆訂單"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
             </div>
 
             {/* Modal Footer */}

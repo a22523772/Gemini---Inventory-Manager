@@ -253,7 +253,7 @@ export default function SetupGuide() {
                   <li><strong>vendors</strong> (供應商): vendor_id, vendor_name, contact, phone</li>
                   <li><strong>stock</strong> (庫存表): stock_id, product_id, name, location, floor, area, quantity, expiry_date, specification, last_update</li>
                   <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, name, type, quantity, location, floor, area, specification, cost_price, vendor_id, date, note, operator</li>
-                  <li><strong>網路訂單</strong> (網路訂單): order_id, platform, product_id, product_name, quantity, price, customer_name, status, created_at, specification, shipping_method</li>
+                  <li><strong>網路訂單</strong> (網路訂單): order_id (訂單編號), platform (來源平台), product_id (商品編號), product_name (商品名稱), quantity (數量), price (金額), customer_name (買家), 最晚出貨期限 (shipping_deadline), order_status (訂單狀態), created_at (下單時間), specification (規格), shipping_method (物流方式)</li>
                 </ul>
              </section>
 

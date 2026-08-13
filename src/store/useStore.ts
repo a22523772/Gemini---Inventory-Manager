@@ -20,19 +20,55 @@ export const calculateOrderStatus = (deadlineStr: string, manualStatus?: string)
 
   if (!deadlineStr) return '待出貨';
 
-  const deadline = new Date(deadlineStr);
+  const cleanStr = deadlineStr.replace(/\//g, '-').trim();
+  const deadline = new Date(cleanStr);
   if (isNaN(deadline.getTime())) {
     return deadlineStr; // Return custom string if not a date
   }
 
   const now = new Date();
+  
+  // Extract year, month, day components for strict calendar day comparison
+  const dYear = deadline.getFullYear();
+  const dMonth = deadline.getMonth();
+  const dDay = deadline.getDate();
+
+  const nYear = now.getFullYear();
+  const nMonth = now.getMonth();
+  const nDay = now.getDate();
+
+  // Date-only string handling (e.g. YYYY-MM-DD)
+  const dateOnlyMatch = cleanStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (dateOnlyMatch) {
+    const yr = parseInt(dateOnlyMatch[1], 10);
+    const mo = parseInt(dateOnlyMatch[2], 10) - 1;
+    const dy = parseInt(dateOnlyMatch[3], 10);
+
+    const targetDate = new Date(yr, mo, dy);
+    const todayDate = new Date(nYear, nMonth, nDay);
+
+    if (targetDate < todayDate) {
+      return '已逾期';
+    } else if (targetDate.getTime() === todayDate.getTime() || (targetDate.getTime() - todayDate.getTime()) <= 24 * 60 * 60 * 1000) {
+      return '即將到期';
+    } else {
+      return '待出貨';
+    }
+  }
+
   const diffMs = deadline.getTime() - now.getTime();
   const diffHours = diffMs / (1000 * 60 * 60);
 
-  if (diffHours < 0) {
+  const deadlineDate = new Date(dYear, dMonth, dDay);
+  const todayDate = new Date(nYear, nMonth, nDay);
+
+  // If deadline is strictly earlier calendar day than today and time has passed
+  if (deadlineDate < todayDate && diffHours < 0) {
     return '已逾期';
-  } else if (diffHours <= 24) {
+  } else if (deadlineDate.getTime() === todayDate.getTime() || (diffHours >= 0 && diffHours <= 24)) {
     return '即將到期';
+  } else if (diffHours < 0) {
+    return '已逾期';
   } else {
     return '待出貨';
   }
@@ -92,7 +128,7 @@ const normalizeAndFillOnlineOrders = (rawItems: any[], products: Product[]): Onl
     let order_id = String(getVal(['order_id', '訂單編號', '訂單id', 'id'])).trim();
     let platform = String(getVal(['platform', '來源平台', '平台'])).trim();
     let customer_name = String(getVal(['customer_name', '收件人', '顧客姓名', '買家', '顧客'])).trim();
-    let shipping_deadline = String(getVal(['shipping_deadline', '最晚出貨時間', '出貨期限', '最晚出貨期限', 'shipping_date', 'deadline'])).trim();
+    let shipping_deadline = String(getVal(['最晚出貨期限', 'shipping_deadline', '最晚出貨時間', '出貨期限', 'shipping_date', 'deadline'])).trim();
     let order_status = String(getVal(['order_status', '訂單狀態', '狀態'])).trim();
 
     let rawStatus = String(getVal(['status'])).trim();
