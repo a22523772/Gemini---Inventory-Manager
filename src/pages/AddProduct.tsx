@@ -89,9 +89,12 @@ export default function AddProduct() {
 
   useEffect(() => {
     const pid = searchParams.get('pid');
-    if (pid) {
-      setBarcode(pid);
-    }
+    const paramName = searchParams.get('name');
+    const paramSpec = searchParams.get('spec');
+
+    if (pid) setBarcode(pid);
+    if (paramName) setName(paramName);
+    if (paramSpec) setSpecification(paramSpec);
   }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {

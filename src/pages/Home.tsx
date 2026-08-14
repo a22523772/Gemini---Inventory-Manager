@@ -5,9 +5,28 @@ import {
   AlertTriangle, BarChart2, Globe, Truck, Trash2, X, PlusCircle, User, Calendar, CheckCircle, Flame, Search, ArrowRight, FileText,
   ArrowUpDown, Edit2, Clock, Check, FileSpreadsheet, Download, Copy, Printer, ShoppingBag, Layers, Filter
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+
+import { normalizePlatformName } from '../lib/platformUtils';
+
+export const getOrderPrice = (order: any): number => {
+  if (!order) return 0;
+  if (typeof order.price === 'number' && order.price > 0) return order.price;
+  if (typeof order.total_amount === 'number' && order.total_amount > 0) return order.total_amount;
+  if (Array.isArray(order.items) && order.items.length > 0) {
+    const prices = order.items.map((i: any) => Number(i?.price) || 0).filter((p: number) => p > 0);
+    if (prices.length > 0) {
+      if (prices.every((p: number) => p === prices[0])) {
+        return prices[0];
+      }
+      return prices.reduce((sum: number, p: number) => sum + p, 0);
+    }
+  }
+  return 0;
+};
 
 export default function Home() {
+  const navigate = useNavigate();
   const { 
     products, 
     stock, 
@@ -155,8 +174,11 @@ export default function Home() {
         raw_order_status: o.order_status || '',
         created_at: o.created_at || '',
         shipping_method: o.shipping_method || '',
+        price: Number(o.price) || 0,
         items: []
       };
+    } else if (!groupedOrdersMap[oid].price && Number(o.price) > 0) {
+      groupedOrdersMap[oid].price = Number(o.price);
     }
     groupedOrdersMap[oid].items.push(o);
   });
@@ -216,13 +238,13 @@ export default function Home() {
         return getRank(a.order_status) - getRank(b.order_status);
       }
       if (orderSortType === 'amount_desc') {
-        const priceA = Number(a.items[0]?.price) || 0;
-        const priceB = Number(b.items[0]?.price) || 0;
+        const priceA = getOrderPrice(a);
+        const priceB = getOrderPrice(b);
         return priceB - priceA;
       }
       if (orderSortType === 'amount_asc') {
-        const priceA = Number(a.items[0]?.price) || 0;
-        const priceB = Number(b.items[0]?.price) || 0;
+        const priceA = getOrderPrice(a);
+        const priceB = getOrderPrice(b);
         return priceA - priceB;
       }
       if (orderSortType === 'created_desc') {
@@ -369,27 +391,18 @@ export default function Home() {
       return;
     }
 
-    const headers = ['商品編號', '商品名稱', '規格', '供應商', '單位', '網路訂單需求總量', '目前現有庫存量', '建議訂購數量(缺貨)', '預估進價成本', '預估採購小計', '涉及訂單筆數', '訂單編號列表'];
+    const headers = ['商品名稱', '規格', '數量'];
     const rows = filteredConsolidatedItems.map(item => [
-      item.product_id || '',
       item.product_name || '',
       item.specification || '',
-      item.vendor_name || '',
-      item.unit || '個',
-      item.total_ordered_qty,
-      item.current_stock_qty,
-      item.shortfall_qty,
-      item.cost_price || 0,
-      (item.cost_price || 0) * item.shortfall_qty,
-      item.orders_count,
-      item.order_ids.join('; ')
+      item.shortfall_qty > 0 ? item.shortfall_qty : item.total_ordered_qty
     ]);
 
     const tsvContent = [headers.join('\t'), ...rows.map(r => r.join('\t'))].join('\n');
     navigator.clipboard.writeText(tsvContent).then(() => {
-      showToast("📋 已成功複製商品彙整內容！可直接在 Excel 中按 Ctrl+V 貼上");
+      showToast("📋 已成功複製商品名稱、規格、數量！可直接在 Excel 中貼上");
     }).catch(() => {
-      showToast("❌ 複製失敗，請使用匯出 Excel 功能");
+      showToast("❌ 複製失敗，請手動選取複製");
     });
   };
 
@@ -434,8 +447,8 @@ export default function Home() {
       return sum + cp * item.quantity;
     }, 0);
 
-    const orderTotalAmount = Number(order.items[0]?.price) || 0;
-    if (totalOrderCost > orderTotalAmount) {
+    const orderTotalAmount = getOrderPrice(order);
+    if (orderTotalAmount > 0 && totalOrderCost > orderTotalAmount) {
       errors.push(`整單商品進價成本 $${totalOrderCost} 大於訂單總金額 $${orderTotalAmount}（虧本出貨被安全阻擋）！`);
     }
 
@@ -459,9 +472,14 @@ export default function Home() {
     }
 
     try {
+      const normPlatform = normalizePlatformName(order.platform);
+      const txType = `stock_out ${normPlatform}`;
+
       for (const item of order.items) {
         let remainingNeeded = item.quantity;
-        const productStock = stock.filter(s => s.product_id === item.product_id);
+        const itemPrice = Number(item.price || 0);
+        const isProductInSystem = products.some(p => p.product_id && item.product_id && p.product_id === item.product_id);
+        const productStock = isProductInSystem ? stock.filter(s => s.product_id === item.product_id) : [];
         
         const isExpired = (expiryStr?: string) => {
           if (!expiryStr) return false;
@@ -479,45 +497,61 @@ export default function Home() {
           return a.expiry_date.localeCompare(b.expiry_date);
         });
 
-        for (const entry of sortedStock) {
-          if (remainingNeeded <= 0) break;
-          const deductQty = Math.min(entry.quantity, remainingNeeded);
+        if (isProductInSystem && sortedStock.length > 0) {
+          for (const entry of sortedStock) {
+            if (remainingNeeded <= 0) break;
+            const deductQty = Math.min(entry.quantity, remainingNeeded);
 
-          await enqueueAction('stockOut', {
-            batch_tx_id: order.order_id,
-            stock_id: entry.stock_id,
-            product_id: item.product_id,
-            quantity: deductQty,
-            location: entry.location,
-            floor: entry.floor,
-            area: entry.area,
-            expiry_date: entry.expiry_date,
-            specification: item.specification || entry.specification || '',
-            note: `${isForced ? '[強行出貨] ' : ''}網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${order.platform} | 買家: ${order.customer_name} | 物流: ${order.shipping_method || '未指定'}`,
-          });
+            await enqueueAction('stockOut', {
+              batch_tx_id: order.order_id,
+              online_order_id: order.order_id,
+              type: txType,
+              stock_id: entry.stock_id,
+              product_id: item.product_id || '',
+              product_name: item.product_name || '',
+              cost_price: itemPrice,
+              price: itemPrice,
+              quantity: deductQty,
+              location: entry.location || '',
+              floor: entry.floor || '',
+              area: entry.area || '',
+              expiry_date: entry.expiry_date,
+              specification: item.specification || entry.specification || '',
+              note: `${isForced ? '[強行出貨] ' : ''}網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${normPlatform} | 買家: ${order.customer_name || '未指定'} | 物流: ${order.shipping_method || '未指定'}`,
+            });
 
-          remainingNeeded -= deductQty;
+            remainingNeeded -= deductQty;
+          }
         }
 
-        // If stock was insufficient/missing or remainingNeeded > 0, log transaction for remaining quantity
+        // If item was not in system or stock was insufficient, log forced shipment for remaining qty with location/floor/area BLANK
         if (remainingNeeded > 0) {
           const p = products.find(prod => prod.product_id === item.product_id);
+          const forcedNote = !isProductInSystem 
+            ? `[強行出貨-非系統商品] 網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${normPlatform} | 買家: ${order.customer_name || '未指定'} | 物流: ${order.shipping_method || '未指定'}`
+            : `[強行出貨-缺貨紀錄] 網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${normPlatform} | 買家: ${order.customer_name || '未指定'} | 物流: ${order.shipping_method || '未指定'}`;
+
           await enqueueAction('stockOut', {
             batch_tx_id: order.order_id,
-            product_id: item.product_id,
+            online_order_id: order.order_id,
+            type: txType,
+            product_id: item.product_id || '',
+            product_name: item.product_name || '',
+            cost_price: itemPrice,
+            price: itemPrice,
             quantity: remainingNeeded,
-            location: '倉庫',
-            floor: '1F',
-            area: 'A區',
+            location: '',
+            floor: '',
+            area: '',
             specification: item.specification || p?.specification || '',
-            note: `[強行出貨-缺貨紀錄] 網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${order.platform} | 買家: ${order.customer_name} | 物流: ${order.shipping_method || '未指定'}`,
+            note: forcedNote,
           });
         }
       }
 
       // 當使用者按出貨後，自動刪除 網路訂單管理看板的紀錄、試算表的紀錄；然後自動執行app的出貨功能。
       await deleteOnlineOrder(order.order_id);
-      showToast(`✅ 訂單 ${order.order_id} ${isForced ? '(強行)' : ''}出貨成功！已刪除網路訂單與試算表紀錄，並自動扣除庫存及寫入交易歷史。`);
+      showToast(`✅ 訂單 ${order.order_id} ${isForced || !order.items.every((i: any) => products.some(p => p.product_id === i.product_id)) ? '(強行)' : ''}出貨成功！已刪除網路訂單與試算表紀錄，並自動扣除庫存及寫入交易歷史。`);
       setOrderErrors([]);
       setSelectedOrder(null);
       setConfirmShipOrderModal(null);
@@ -989,7 +1023,7 @@ export default function Home() {
                           const isShopee = order.platform === '蝦皮購物';
                           const isMomo = order.platform === 'MOMO購物網';
                           const statusStyle = getStatusBadgeStyle(order.order_status);
-                          const orderPrice = order.items[0]?.price || 0;
+                          const orderPrice = getOrderPrice(order);
 
                           return (
                             <div 
@@ -1071,7 +1105,7 @@ export default function Home() {
                                   <div className="mr-1 text-right">
                                     <span className="block text-[9px] text-slate-400">總金額</span>
                                     <span className="text-xs font-bold text-indigo-400 font-mono">
-                                      {orderPrice > 0 ? `$${orderPrice}` : '無'}
+                                      {orderPrice > 0 ? `$${orderPrice.toLocaleString()}` : '無'}
                                     </span>
                                   </div>
                                   <button 
@@ -1381,8 +1415,25 @@ export default function Home() {
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <p className="text-xs font-bold text-white">{item.product_name}</p>
-                            <div className="flex flex-wrap gap-1.5 mt-1">
-                              <span className="text-[10px] font-mono bg-white/10 text-zinc-300 px-1.5 py-0.5 rounded">商品ID: {item.product_id}</span>
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                              {item.product_id ? (
+                                <span className="text-[10px] font-mono bg-white/10 text-zinc-300 px-1.5 py-0.5 rounded">商品ID: {item.product_id}</span>
+                              ) : (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[10px] font-mono bg-amber-500/10 text-amber-300 border border-amber-500/20 px-1.5 py-0.5 rounded">
+                                    商品ID: 未對接 (非系統商品)
+                                  </span>
+                                  <button
+                                    onClick={() => {
+                                      navigate(`/add-product?name=${encodeURIComponent(item.product_name)}&spec=${encodeURIComponent(spec || '')}`);
+                                    }}
+                                    className="text-[10px] bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-0.5 rounded flex items-center gap-1 transition-all shrink-0"
+                                    title="點擊預填資料並快速新增此商品至系統"
+                                  >
+                                    <PlusCircle className="w-3 h-3" /> 新增商品
+                                  </button>
+                                </div>
+                              )}
                               {spec && <span className="text-[10px] bg-indigo-500/10 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-500/20">規格: {spec}</span>}
                             </div>
                           </div>
@@ -1410,7 +1461,7 @@ export default function Home() {
               <div className="flex justify-between items-center bg-white/5 p-3 rounded-xl border border-white/5 text-sm">
                 <span className="font-medium text-zinc-300">訂單總金額 (不顯示商品單價)</span>
                 <span className="font-mono font-black text-indigo-400 text-lg">
-                  {selectedOrder.items[0]?.price > 0 ? `$${selectedOrder.items[0].price}` : '無'}
+                  {getOrderPrice(selectedOrder) > 0 ? `$${getOrderPrice(selectedOrder).toLocaleString()}` : '無'}
                 </span>
               </div>
             </div>

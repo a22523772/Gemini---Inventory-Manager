@@ -64,9 +64,12 @@ export type Vendor = {
 export type Transaction = {
   id: string;
   transaction_id: string; // for GAS
+  online_order_id?: string; // 網路訂單編號
   product_id: string;
-  type: 'stock_in' | 'stock_out' | 'adjust';
+  product_name?: string; // 直接記錄商品名稱
+  type: string; // 'stock_in' | 'stock_out' | 'adjust' | 平台名稱 (例如 蝦皮購物)
   quantity: number;
+  price?: number; // 售價/金額
   location: string;
   floor: string;
   area: string;

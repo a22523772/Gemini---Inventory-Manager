@@ -74,19 +74,67 @@ export const calculateOrderStatus = (deadlineStr: string, manualStatus?: string)
   }
 };
 
+const stripKey = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]/g, '');
+
 const resolveBlankProductIds = (orders: OnlineOrder[], products: Product[]): OnlineOrder[] => {
+  if (!Array.isArray(orders)) return [];
   return orders.map(o => {
-    if (!o.product_id || o.product_id.trim() === '') {
-      const matchedProduct = products.find(p => p.name === o.product_name);
+    let pid = (o.product_id || '').trim();
+    let spec = (o.specification || '').trim();
+    const cleanOrderPName = (o.product_name || '').trim().toLowerCase();
+
+    if (!pid && cleanOrderPName) {
+      // 1. Exact match by product_id, barcode, or name
+      let matchedProduct = products.find(p => {
+        if (!p) return false;
+        const pName = (p.name || '').trim().toLowerCase();
+        const pId = (p.product_id || '').trim().toLowerCase();
+        const pBarcode = (p.barcode || '').trim().toLowerCase();
+        
+        if (pId && cleanOrderPName === pId) return true;
+        if (pBarcode && cleanOrderPName === pBarcode) return true;
+        if (pName && cleanOrderPName === pName) return true;
+        return false;
+      });
+
+      // 2. Substring match
+      if (!matchedProduct) {
+        matchedProduct = products.find(p => {
+          if (!p || !p.name) return false;
+          const pName = p.name.trim().toLowerCase();
+          if (!pName) return false;
+          return pName.includes(cleanOrderPName) || cleanOrderPName.includes(pName);
+        });
+      }
+
+      // 3. Model token match (e.g. KTC-SD1926-00)
+      if (!matchedProduct) {
+        const tokens = (o.product_name || '').match(/[A-Za-z0-9\-_]{3,}/g) || [];
+        for (const token of tokens) {
+          const tLower = token.toLowerCase();
+          if (['kolin', 'ktc', 'http', 'https', 'www', 'com', 'html', 'item', 'product'].includes(tLower)) continue;
+          matchedProduct = products.find(p => {
+            if (!p) return false;
+            if (p.product_id && p.product_id.toLowerCase() === tLower) return true;
+            if (p.barcode && p.barcode.toLowerCase() === tLower) return true;
+            if (p.name && p.name.toLowerCase().includes(tLower)) return true;
+            return false;
+          });
+          if (matchedProduct) break;
+        }
+      }
+
       if (matchedProduct) {
-        return {
-          ...o,
-          product_id: matchedProduct.product_id,
-          specification: o.specification || matchedProduct.specification || ''
-        };
+        pid = matchedProduct.product_id;
+        if (!spec) spec = matchedProduct.specification || '';
       }
     }
-    return o;
+
+    return {
+      ...o,
+      product_id: pid,
+      specification: spec
+    };
   });
 };
 
@@ -113,22 +161,34 @@ const normalizeAndFillOnlineOrders = (rawItems: any[], products: Product[]): Onl
     for (const k of Object.keys(rawItem)) {
       const val = rawItem[k];
       const cleanKey = k.trim().toLowerCase();
+      const stripped = stripKey(k);
       map[cleanKey] = typeof val === 'string' ? val.trim() : val;
       map[k.trim()] = typeof val === 'string' ? val.trim() : val;
+      if (stripped) map[stripped] = typeof val === 'string' ? val.trim() : val;
     }
 
     const getVal = (keys: string[]) => {
       for (const key of keys) {
-        if (map[key.toLowerCase()] !== undefined && map[key.toLowerCase()] !== '') return map[key.toLowerCase()];
         if (map[key] !== undefined && map[key] !== '') return map[key];
+        if (map[key.toLowerCase()] !== undefined && map[key.toLowerCase()] !== '') return map[key.toLowerCase()];
+        const targetStripped = stripKey(key);
+        if (map[targetStripped] !== undefined && map[targetStripped] !== '') return map[targetStripped];
+        
+        // Substring / prefix search on keys
+        for (const mk of Object.keys(map)) {
+          const strippedMk = stripKey(mk);
+          if (strippedMk && targetStripped && (strippedMk === targetStripped || strippedMk.includes(targetStripped) || targetStripped.includes(strippedMk))) {
+            if (map[mk] !== undefined && map[mk] !== '') return map[mk];
+          }
+        }
       }
       return '';
     };
 
     let order_id = String(getVal(['order_id', '訂單編號', '訂單id', 'id'])).trim();
     let platform = String(getVal(['platform', '來源平台', '平台'])).trim();
-    let customer_name = String(getVal(['customer_name', '收件人', '顧客姓名', '買家', '顧客'])).trim();
-    let shipping_deadline = String(getVal(['最晚出貨期限', 'shipping_deadline', '最晚出貨時間', '出貨期限', 'shipping_date', 'deadline'])).trim();
+    let customer_name = String(getVal(['customer_name', '收件人', '顧客姓名', '買家', '顧客', '姓名', '買家帳號', '會員名稱'])).trim();
+    let shipping_deadline = String(getVal(['最晚出貨期限', 'shipping_deadline', '最晚出貨時間', '出貨期限', 'shipping_date', 'deadline', '預計出貨日', '最晚發貨日'])).trim();
     let order_status = String(getVal(['order_status', '訂單狀態', '狀態'])).trim();
 
     let rawStatus = String(getVal(['status'])).trim();
@@ -140,13 +200,19 @@ const normalizeAndFillOnlineOrders = (rawItems: any[], products: Product[]): Onl
       }
     }
 
-    let created_at = String(getVal(['created_at', '下單時間', '下單日期', '建立時間', '日期', '時間'])).trim();
-    let shipping_method = String(getVal(['shipping_method', '物流方式', '物流', '寄送方式', '物流管道'])).trim();
-    let priceNum = Number(getVal(['price', '價格', '售價', '金額', '訂單金額', '訂單總金額'])) || 0;
+    let created_at = String(getVal(['created_at', '下單時間', '下單日期', '建立時間', '日期', '時間', '訂單成立時間'])).trim();
+    let shipping_method = String(getVal(['shipping_method', '物流方式', '物流', '寄送方式', '物流管道', '配送方式'])).trim();
+    
+    let rawPriceVal = getVal([
+      'price', 'totalprice', 'totalamount', 'orderamount', 'orderprice', 'amount', 'total', 'grandtotal', 'subtotal',
+      '價格', '售價', '金額', '訂單金額', '訂單總金額', '總金額', '總價', '買家支付金額', '實付金額', '結帳金額', '總計', '買家付費金額', '商品金額'
+    ]);
+    let cleanedPriceStr = typeof rawPriceVal === 'number' ? String(rawPriceVal) : String(rawPriceVal || '').replace(/[^0-9.]/g, '');
+    let priceNum = Number(cleanedPriceStr) || 0;
 
-    // Fill-down for multi-item orders where spreadsheet only logs order_id on first row
-    if (!order_id && lastOrderHeader) {
-      order_id = lastOrderHeader.order_id;
+    // Fill-down for multi-item orders where spreadsheet only logs order_id on first row or repeats order_id with empty header fields
+    if (lastOrderHeader && (!order_id || order_id === lastOrderHeader.order_id)) {
+      if (!order_id) order_id = lastOrderHeader.order_id;
       if (!platform) platform = lastOrderHeader.platform;
       if (!customer_name) customer_name = lastOrderHeader.customer_name;
       if (!shipping_deadline) shipping_deadline = lastOrderHeader.shipping_deadline;
@@ -166,13 +232,22 @@ const normalizeAndFillOnlineOrders = (rawItems: any[], products: Product[]): Onl
       order_status,
       created_at,
       shipping_method,
-      price: priceNum
+      price: priceNum || (lastOrderHeader?.order_id === order_id ? lastOrderHeader.price : 0)
     };
 
-    const product_id = String(getVal(['product_id', '商品id', '商品編號', '產品編號', '產品id', '商品ID'])).trim();
-    const product_name = String(getVal(['product_name', '商品名稱', '產品名稱', '品名', '名稱'])).trim();
-    const quantity = Number(getVal(['quantity', '數量', '件數'])) || 0;
-    const specification = String(getVal(['specification', '商品規格', '規格', '規格描述'])).trim();
+    const product_id = String(getVal([
+      'product_id', 'productid', 'productcode', 'sku', 'itemid', 'itemcode', 'barcode',
+      '商品id', '商品ID', '商品編號', '商品料號', '商品貨號', '商品條碼', '商品代碼',
+      '產品編號', '產品id', '產品ID', '產品料號', '代碼', '料號', '貨號', '條碼', 'SKU', 'SKU編號', '主商品貨號', '規格貨號'
+    ])).trim();
+
+    const product_name = String(getVal([
+      'product_name', 'productname', 'itemname', 'name', 'title',
+      '商品名稱', '產品名稱', '品名', '名稱', '商品', '產品'
+    ])).trim();
+
+    const quantity = Number(getVal(['quantity', 'qty', 'count', '數量', '件數', '個數', '買家購買數量'])) || 1;
+    const specification = String(getVal(['specification', 'spec', 'variant', '商品規格', '規格', '規格描述', '選項'])).trim();
 
     const calcStatus = calculateOrderStatus(shipping_deadline, order_status);
 
@@ -191,6 +266,20 @@ const normalizeAndFillOnlineOrders = (rawItems: any[], products: Product[]): Onl
       specification,
       shipping_method
     });
+  }
+
+  // Ensure every item under the same order has the non-zero order price if available anywhere in the order
+  const orderPriceMap = new Map<string, number>();
+  for (const item of result) {
+    if (item.price && item.price > 0) {
+      orderPriceMap.set(item.order_id, item.price);
+    }
+  }
+
+  for (const item of result) {
+    if (!item.price && orderPriceMap.has(item.order_id)) {
+      item.price = orderPriceMap.get(item.order_id)!;
+    }
   }
 
   return resolveBlankProductIds(result, products);
@@ -453,7 +542,9 @@ export const useStore = create<AppState>((set, get) => ({
     const { products } = get();
     const product = products.find(p => p.product_id === payload.product_id);
     const updatedPayload = { ...payload };
-    if (product && !updatedPayload.name) {
+    if (updatedPayload.product_name) {
+        updatedPayload.name = updatedPayload.product_name;
+    } else if (product && !updatedPayload.name) {
         updatedPayload.name = product.name;
     }
 
@@ -489,7 +580,7 @@ export const useStore = create<AppState>((set, get) => ({
             const newStock: Stock = {
                 stock_id: `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
                 product_id: updatedPayload.product_id,
-                name: product?.name || '',
+                name: updatedPayload.product_name || product?.name || '',
                 location: updatedPayload.location,
                 floor: updatedPayload.floor,
                 area: updatedPayload.area,
@@ -505,14 +596,17 @@ export const useStore = create<AppState>((set, get) => ({
         const newTx: Transaction = {
             id: uuidv4(),
             transaction_id: `TX_${Date.now()}`,
-            product_id: updatedPayload.product_id,
-            type: 'stock_in',
+            online_order_id: updatedPayload.online_order_id || updatedPayload.order_id || '',
+            product_id: updatedPayload.product_id || '',
+            product_name: updatedPayload.product_name || updatedPayload.name || product?.name || '',
+            type: updatedPayload.type || 'stock_in',
             quantity: Number(updatedPayload.quantity),
             location: updatedPayload.location,
             floor: updatedPayload.floor,
             area: updatedPayload.area,
             specification: updatedPayload.specification || '',
             cost_price: Number(updatedPayload.cost_price) || 0,
+            price: Number(updatedPayload.price) || 0,
             vendor_id: updatedPayload.vendor_id || '',
             date: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
             note: updatedPayload.note || '',
@@ -548,14 +642,17 @@ export const useStore = create<AppState>((set, get) => ({
         const newTx: Transaction = {
             id: uuidv4(),
             transaction_id: updatedPayload.batch_tx_id || `TX_${Date.now()}`,
-            product_id: updatedPayload.product_id,
-            type: 'stock_out',
+            online_order_id: updatedPayload.online_order_id || updatedPayload.order_id || '',
+            product_id: updatedPayload.product_id || '',
+            product_name: updatedPayload.product_name || updatedPayload.name || product?.name || '',
+            type: updatedPayload.type || 'stock_out',
             quantity: Number(updatedPayload.quantity),
             location: updatedPayload.location,
             floor: updatedPayload.floor,
             area: updatedPayload.area,
             specification: updatedPayload.specification || '',
             cost_price: product?.cost_price || 0,
+            price: Number(updatedPayload.price) || 0,
             vendor_id: product?.vendor_id || '',
             date: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
             note: updatedPayload.note || '',
@@ -596,14 +693,17 @@ export const useStore = create<AppState>((set, get) => ({
         const newTx: Transaction = {
             id: uuidv4(),
             transaction_id: `TX_${Date.now()}`,
-            product_id: updatedPayload.product_id,
-            type: 'adjust',
+            online_order_id: updatedPayload.online_order_id || updatedPayload.order_id || '',
+            product_id: updatedPayload.product_id || '',
+            product_name: updatedPayload.product_name || updatedPayload.name || product?.name || '',
+            type: updatedPayload.type || 'adjust',
             quantity: Number(updatedPayload.quantity),
             location: updatedPayload.location,
             floor: updatedPayload.floor,
             area: updatedPayload.area,
             specification: updatedPayload.specification || '',
             cost_price: product?.cost_price || 0,
+            price: Number(updatedPayload.price) || 0,
             vendor_id: product?.vendor_id || '',
             date: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
             note: updatedPayload.note || '',
@@ -668,12 +768,14 @@ export const useStore = create<AppState>((set, get) => ({
 
   fetchRemoteData: async () => {
     const { gasApiUrl } = get();
-    if (!gasApiUrl) return;
+    if (!gasApiUrl || !gasApiUrl.trim() || !gasApiUrl.trim().startsWith('http')) return;
 
-    set({ isLoading: true, error: null });
+    const cleanUrl = gasApiUrl.trim();
+
+    set({ isLoading: true });
     try {
       // Products
-      const rP = await fetch(`${gasApiUrl}?action=getProducts`);
+      const rP = await fetch(`${cleanUrl}?action=getProducts`);
       if (rP.ok) {
         const dP = await rP.json();
         
@@ -720,12 +822,10 @@ export const useStore = create<AppState>((set, get) => ({
           await dbProducts.setItem(p.product_id, p);
         }
         set({ products: normalizedProducts });
-      } else {
-         throw new Error(`商品資料獲取失敗狀態碼: ${rP.status}`);
       }
 
       // Stock
-      const rS = await fetch(`${gasApiUrl}?action=getStock`);
+      const rS = await fetch(`${cleanUrl}?action=getStock`);
       if (rS.ok) {
         const dS = await rS.json();
         const validS = (dS || []).map((item: any) => normalizeKeys(item))
@@ -740,12 +840,10 @@ export const useStore = create<AppState>((set, get) => ({
           await dbStock.setItem(s.stock_id, s);
         }
         set({ stock: validS });
-      } else {
-         throw new Error(`庫存資料獲取失敗狀態碼: ${rS.status}`);
       }
 
       // Vendors
-      const rV = await fetch(`${gasApiUrl}?action=getVendors`);
+      const rV = await fetch(`${cleanUrl}?action=getVendors`);
       if (rV.ok) {
         const dV = await rV.json();
         const validV = (dV || []).map((item: any) => normalizeKeys(item))
@@ -759,25 +857,31 @@ export const useStore = create<AppState>((set, get) => ({
           await dbVendors.setItem(v.vendor_id, v);
         }
         set({ vendors: validV });
-      } else {
-         throw new Error(`供應商資料獲取失敗狀態碼: ${rV.status}`);
       }
 
       // Transactions
-      const rT = await fetch(`${gasApiUrl}?action=getTransactions`);
+      const rT = await fetch(`${cleanUrl}?action=getTransactions`);
       if (rT.ok) {
         const dT = await rT.json();
         const validT = (dT || []).map((item: any, idx: number) => {
           const norm = normalizeKeys(item);
           const txId = norm.transaction_id ? String(norm.transaction_id).trim() : `TX_${Date.now()}_${idx}`;
           const id = norm.id ? String(norm.id).trim() : `${txId}_${norm.product_id || ''}_${idx}`;
+          const online_order_id = norm.online_order_id || norm['網路訂單編號'] || norm.order_id || '';
+          const product_name = norm.product_name || norm.name || norm['商品名稱'] || norm['名稱'] || '';
+          const priceVal = Number(norm.price || norm['金額'] || norm['售價']) || 0;
+
           return {
             ...norm,
             id,
             transaction_id: txId,
+            online_order_id: String(online_order_id).trim(),
             product_id: norm.product_id ? String(norm.product_id).trim() : '',
+            product_name: String(product_name).trim(),
+            type: norm.type ? String(norm.type).trim() : 'stock_out',
             quantity: Number(norm.quantity) || 0,
-            cost_price: Number(norm.cost_price) || 0
+            cost_price: Number(norm.cost_price) || 0,
+            price: priceVal
           };
         });
         await dbTransactions.clear();
@@ -789,15 +893,16 @@ export const useStore = create<AppState>((set, get) => ({
 
       // Online Orders
       try {
-        const rO = await fetch(`${gasApiUrl}?action=getOnlineOrders`);
+        const rO = await fetch(`${cleanUrl}?action=getOnlineOrders`);
         if (rO.ok) {
           const dO = await rO.json();
           const currentProducts = get().products;
           const resolvedO = normalizeAndFillOnlineOrders(dO || [], currentProducts);
 
           await dbOnlineOrders.clear();
-          for (const o of resolvedO) {
-            await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id}`, o);
+          for (let i = 0; i < resolvedO.length; i++) {
+            const o = resolvedO[i];
+            await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id || 'unlinked'}_${i}`, o);
           }
           set({ onlineOrders: resolvedO });
         }
@@ -806,8 +911,7 @@ export const useStore = create<AppState>((set, get) => ({
       }
 
     } catch (e: any) {
-      console.error("fetchRemoteData error:", e);
-      set({ error: `獲取遠端資料失敗 (${e.message})。目前為離線模式。`});
+      console.warn("fetchRemoteData failed:", e.message || e);
     } finally {
       set({ isLoading: false });
     }
@@ -828,8 +932,9 @@ export const useStore = create<AppState>((set, get) => ({
         const resolvedO = normalizeAndFillOnlineOrders(dO || [], currentProducts);
 
         await dbOnlineOrders.clear();
-        for (const o of resolvedO) {
-          await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id}`, o);
+        for (let i = 0; i < resolvedO.length; i++) {
+          const o = resolvedO[i];
+          await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id || 'unlinked'}_${i}`, o);
         }
         set({ onlineOrders: resolvedO });
         showToast(`✨ 成功讀取 ${resolvedO.length} 筆網路訂單資料！`);
@@ -924,7 +1029,9 @@ export const useStore = create<AppState>((set, get) => ({
     await dbProducts.setItem(newProduct.product_id, newProduct);
     set(state => {
       const filtered = state.products.filter(p => p.product_id !== id);
-      return { products: [...filtered, newProduct] };
+      const newProducts = [...filtered, newProduct];
+      const reResolvedOrders = resolveBlankProductIds(state.onlineOrders, newProducts);
+      return { products: newProducts, onlineOrders: reResolvedOrders };
     });
     
     // Queue the sync to Google Sheets (Original payload if it was empty id)

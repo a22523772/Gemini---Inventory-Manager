@@ -89,6 +89,11 @@ export default function Transactions() {
 
   const locations = useMemo(() => Array.from(new Set(transactions.map(t => t.location).filter(Boolean))), [transactions]);
 
+  const customTypes = useMemo(() => {
+    const set = new Set(transactions.map(t => t.type).filter(Boolean));
+    return Array.from(set).filter(t => t !== 'stock_in' && t !== 'stock_out' && t !== 'adjust');
+  }, [transactions]);
+
   const filteredTransactions = useMemo(() => {
     return transactions.filter(t => {
       // Type Filter
@@ -115,18 +120,20 @@ export default function Transactions() {
         }
       }
 
-      // Search Filter (Product Name, ID, Operator, Note, Transaction ID, Specification)
+      // Search Filter (Product Name, Online Order ID, Type, PID, Operator, Note, Transaction ID, Specification)
       if (searchTerm) {
         const s = searchTerm.toLowerCase();
         const product = productMap.get(t.product_id);
-        const productName = product?.name.toLowerCase() || '';
+        const productName = (t.product_name || product?.name || '').toLowerCase();
+        const onlineOrderId = String(t.online_order_id || '').toLowerCase();
+        const typeStr = String(t.type || '').toLowerCase();
         const pid = String(t.product_id || '').toLowerCase();
         const op = String(t.operator || '').toLowerCase();
         const note = String(t.note || '').toLowerCase();
         const txid = String(t.transaction_id || '').toLowerCase();
         const spec = String(t.specification || '').toLowerCase();
         
-        if (!productName.includes(s) && !pid.includes(s) && !op.includes(s) && !note.includes(s) && !txid.includes(s) && !spec.includes(s)) {
+        if (!productName.includes(s) && !onlineOrderId.includes(s) && !typeStr.includes(s) && !pid.includes(s) && !op.includes(s) && !note.includes(s) && !txid.includes(s) && !spec.includes(s)) {
           return false;
         }
       }
@@ -146,7 +153,7 @@ export default function Transactions() {
     const txGroupMap = new Map<string, typeof filteredTransactions>();
     
     filteredTransactions.forEach(t => {
-      if (t.type === 'stock_out') {
+      if (t.type !== 'stock_in' && t.type !== 'adjust') {
         let matchedGroup: typeof filteredTransactions | undefined;
         
         if (t.transaction_id) {
@@ -184,6 +191,34 @@ export default function Transactions() {
     return groupedTransactions.slice(start, start + PAGE_SIZE);
   }, [groupedTransactions, currentPage]);
 
+  const getTxPlatform = (t: any) => {
+    if (t.type && t.type.startsWith('stock_out ')) {
+      return t.type.replace(/^stock_out\s*/, '');
+    }
+    if (t.type && t.type !== 'stock_in' && t.type !== 'stock_out' && t.type !== 'adjust') {
+      return t.type;
+    }
+    if (t.note) {
+      const match = t.note.match(/平台:\s*([^\s|]+)/);
+      if (match) return match[1];
+    }
+    return '';
+  };
+
+  const isForcedTx = (t: any) => {
+    if (t.note && t.note.includes('強行出貨')) return true;
+    if (!t.product_id) return true;
+    if (products.length > 0 && !products.some(p => p.product_id === t.product_id)) return true;
+    return false;
+  };
+
+  const getTxProductName = (t: any) => {
+    if (t.product_name && t.product_name.trim()) return t.product_name;
+    const p = productMap.get(t.product_id);
+    if (p && p.name) return p.name;
+    return t.product_id ? t.product_id : '未命名商品';
+  };
+
   const getProductName = (pid: string) => {
     const p = productMap.get(pid);
     return p ? p.name : pid;
@@ -209,17 +244,18 @@ export default function Transactions() {
       case 'stock_in': return <ArrowDownToLine className="w-5 h-5 text-[var(--color-accent-blue)]" />;
       case 'stock_out': return <ArrowUpFromLine className="w-5 h-5 text-[#f87171]" />;
       case 'adjust': return <RefreshCcw className="w-5 h-5 text-[var(--color-accent-orange)]" />;
-      default: return <PackageOpen className="w-5 h-5 text-gray-400" />;
+      default: return <ArrowUpFromLine className="w-5 h-5 text-sky-400" />;
     }
   };
 
   const getTypeLabel = (type: string) => {
-    switch (type) {
-      case 'stock_in': return '進貨';
-      case 'stock_out': return '出貨';
-      case 'adjust': return '盤點調整';
-      default: return type;
+    if (type === 'stock_in') return '進貨';
+    if (type === 'stock_out') return '一般出貨';
+    if (type === 'adjust') return '盤點調整';
+    if (type && type.startsWith('stock_out ')) {
+      return `${type.replace(/^stock_out\s*/, '')}出貨`;
     }
+    return type;
   };
 
   return (
@@ -323,8 +359,11 @@ export default function Transactions() {
                   >
                     <option value="" className="bg-[#0f172a]">所有類型</option>
                     <option value="stock_in" className="bg-[#0f172a]">進貨</option>
-                    <option value="stock_out" className="bg-[#0f172a]">出貨</option>
+                    <option value="stock_out" className="bg-[#0f172a]">一般出貨</option>
                     <option value="adjust" className="bg-[#0f172a]">盤點調整</option>
+                    {customTypes.map(ct => (
+                      <option key={ct} value={ct} className="bg-[#0f172a]">{ct}</option>
+                    ))}
                   </select>
                 </div>
                 <div className="space-y-1">
@@ -411,7 +450,7 @@ export default function Transactions() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex justify-between items-start gap-2">
-                        <h3 className="font-bold text-[var(--color-text-main)] text-base break-words flex-1 min-w-0">{getProductName(t.product_id)}</h3>
+                        <h3 className="font-bold text-[var(--color-text-main)] text-base break-words flex-1 min-w-0">{getTxProductName(t)}</h3>
                         <div className="text-right shrink-0">
                           <span className="text-xs text-[var(--color-text-dim)] font-mono">
                             {t.date.includes('T') ? new Date(t.date).toLocaleString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(/\//g, '-') : t.date}
@@ -420,7 +459,24 @@ export default function Transactions() {
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2 mt-1">
-                        <span className="text-xs text-[var(--color-text-dim)] font-mono">PID: {t.product_id}</span>
+                        {isForcedTx(t) && (
+                          <span className="bg-red-500/20 text-red-300 border border-red-500/40 px-1.5 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
+                            ⚡ 強行出貨
+                          </span>
+                        )}
+                        {getTxPlatform(t) && (
+                          <span className="bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                            平台: {getTxPlatform(t)}
+                          </span>
+                        )}
+                        {t.online_order_id && (
+                          <span className="bg-sky-500/15 text-sky-300 border border-sky-500/30 px-1.5 py-0.5 rounded text-[10px] font-bold font-mono">
+                            訂單編號: #{t.online_order_id}
+                          </span>
+                        )}
+                        <span className="text-xs text-[var(--color-text-dim)] font-mono">
+                          PID: {t.product_id || '(不在系統中)'}
+                        </span>
                         {(t.specification || getProductSpecification(t.product_id)) && (
                           <span className="bg-white/5 px-1.5 py-0.5 rounded text-[10px] text-white/60">
                             規格: {t.specification || getProductSpecification(t.product_id)}
@@ -436,9 +492,11 @@ export default function Transactions() {
                       <p className="font-bold text-[var(--color-accent-blue)]">{t.quantity}</p>
                     </div>
                     <div>
-                      <p className="text-[10px] text-[var(--color-text-dim)] uppercase">進價</p>
+                      <p className="text-[10px] text-[var(--color-text-dim)] uppercase">
+                        {t.online_order_id || t.type.startsWith('stock_out') ? '金額 (售價/成本)' : '進價'}
+                      </p>
                       <p className="font-bold text-[var(--color-accent-green)]">
-                        ${t.cost_price || getProductCostPrice(t.product_id) || 0}
+                        ${t.cost_price || t.price || getProductCostPrice(t.product_id) || 0}
                       </p>
                     </div>
                     {t.type === 'stock_in' && t.vendor_id && (
@@ -540,18 +598,33 @@ export default function Transactions() {
                   </div>
                   <div className="col-span-2 flex flex-col gap-2 text-xs mt-2 bg-white/5 rounded-lg p-2">
                     {group.map((t, i) => {
-                      const costVal = t.cost_price || getProductCostPrice(t.product_id) || 0;
+                      const costVal = t.cost_price || t.price || getProductCostPrice(t.product_id) || 0;
                       return (
                         <div key={i} className="flex flex-col border-b border-white/5 pb-2 mb-2 last:border-0 last:mb-0 last:pb-0">
                           <div className="flex justify-between items-start">
                             <div className="min-w-0 flex-1">
-                              <span className="block truncate mr-2 text-white/80 font-bold">{getProductName(t.product_id)}</span>
+                              <span className="block truncate mr-2 text-white/80 font-bold">{getTxProductName(t)}</span>
                               <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 text-[10px] text-[var(--color-text-dim)]">
+                                {isForcedTx(t) && (
+                                  <span className="bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded font-bold border border-red-500/30">
+                                    ⚡ 強行出貨
+                                  </span>
+                                )}
+                                {getTxPlatform(t) && (
+                                  <span className="bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded font-bold border border-purple-500/30">
+                                    平台: {getTxPlatform(t)}
+                                  </span>
+                                )}
+                                {t.online_order_id && (
+                                  <span className="bg-sky-500/15 text-sky-300 px-1.5 py-0.5 rounded font-mono font-bold">
+                                    訂單號: #{t.online_order_id}
+                                  </span>
+                                )}
                                 <span className="bg-white/5 px-1.5 py-0.5 rounded font-mono">
-                                  PID: {t.product_id}
+                                  PID: {t.product_id || '(不在系統中)'}
                                 </span>
                                 <span className="bg-white/5 px-1.5 py-0.5 rounded">
-                                  進價: <span className="text-[var(--color-accent-green)] font-bold">${costVal}</span>
+                                  金額/進價: <span className="text-[var(--color-accent-green)] font-bold">${costVal}</span>
                                 </span>
                                 {t.specification && (
                                   <span className="bg-white/5 px-1.5 py-0.5 rounded max-w-[120px] truncate" title={t.specification}>
@@ -648,37 +721,47 @@ export default function Transactions() {
             </div>
 
             <div className="space-y-2.5 text-xs">
+              {isForcedTx(selectedTxForView) && (
+                <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                  <span className="text-[var(--color-text-dim)]">出貨狀態</span>
+                  <span className="col-span-2 text-red-400 font-bold flex items-center gap-1">⚡ 強行出貨 (缺貨 / 非系統商品)</span>
+                </div>
+              )}
+              {selectedTxForView.online_order_id && (
+                <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                  <span className="text-[var(--color-text-dim)]">網路訂單編號</span>
+                  <span className="col-span-2 font-mono text-sky-300 font-bold select-all">{selectedTxForView.online_order_id}</span>
+                </div>
+              )}
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                 <span className="text-[var(--color-text-dim)]">異動編號</span>
                 <span className="col-span-2 font-mono text-white select-all">{selectedTxForView.transaction_id}</span>
               </div>
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                 <span className="text-[var(--color-text-dim)]">商品 PID</span>
-                <span className="col-span-2 font-mono text-white select-all">{selectedTxForView.product_id}</span>
+                <span className="col-span-2 font-mono text-white select-all">{selectedTxForView.product_id || '(不在系統中)'}</span>
               </div>
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                 <span className="text-[var(--color-text-dim)]">商品名稱</span>
-                <span className="col-span-2 text-white font-bold">{getProductName(selectedTxForView.product_id)}</span>
+                <span className="col-span-2 text-white font-bold">{getTxProductName(selectedTxForView)}</span>
               </div>
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
-                <span className="text-[var(--color-text-dim)]">異動類型</span>
-                <span className="col-span-2 text-white">{getTypeLabel(selectedTxForView.type)}</span>
+                <span className="text-[var(--color-text-dim)]">平台 / 類型</span>
+                <span className="col-span-2 text-white font-bold">{getTypeLabel(selectedTxForView.type)}</span>
               </div>
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                 <span className="text-[var(--color-text-dim)]">異動數量</span>
                 <span className="col-span-2 text-[var(--color-accent-blue)] font-bold">{selectedTxForView.quantity}</span>
               </div>
-              {selectedTxForView.type === 'stock_in' && (
-                <>
-                  <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
-                    <span className="text-[var(--color-text-dim)]">進價成本</span>
-                    <span className="col-span-2 text-[var(--color-accent-green)] font-bold">${selectedTxForView.cost_price || 0}</span>
-                  </div>
-                  <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
-                    <span className="text-[var(--color-text-dim)]">供應商</span>
-                    <span className="col-span-2 text-white">{getVendorName(selectedTxForView.vendor_id)}</span>
-                  </div>
-                </>
+              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                <span className="text-[var(--color-text-dim)]">{selectedTxForView.price ? '售價 / 金額' : '進價成本'}</span>
+                <span className="col-span-2 text-[var(--color-accent-green)] font-bold">${selectedTxForView.price || selectedTxForView.cost_price || 0}</span>
+              </div>
+              {selectedTxForView.type === 'stock_in' && selectedTxForView.vendor_id && (
+                <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                  <span className="text-[var(--color-text-dim)]">供應商</span>
+                  <span className="col-span-2 text-white">{getVendorName(selectedTxForView.vendor_id)}</span>
+                </div>
               )}
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                 <span className="text-[var(--color-text-dim)]">批次規格</span>
