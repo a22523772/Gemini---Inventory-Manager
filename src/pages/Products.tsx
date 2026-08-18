@@ -1,15 +1,21 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter, AlertCircle, Clock, ArrowUpDown, SlidersHorizontal, X } from 'lucide-react';
+import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter, AlertCircle, Clock, ArrowUpDown, SlidersHorizontal, X, PauseCircle, PlayCircle, Layers, TableProperties, TrendingUp, ClipboardList } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { differenceInDays } from 'date-fns';
 import QuantityInput from '../components/QuantityInput';
+import ReplenishmentOverview from '../components/ReplenishmentOverview';
+import ProductCompactView from '../components/ProductCompactView';
 
 type SortType = 'name_asc' | 'name_desc' | 'newest' | 'stock_low' | 'stock_high';
 
 export default function Products() {
-  const { products, stock, deleteProduct, showToast, vendors, lowStockAlertEnabled, expiryThreshold, productsPageState, setProductsPageState } = useStore();
+  const { products, stock, deleteProduct, showToast, vendors, lowStockAlertEnabled, expiryThreshold, productsPageState, setProductsPageState, toggleDiscontinued } = useStore();
   const [searchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<'list' | 'compact' | 'replenishment'>(
+    (productsPageState.activeTab as any) || 
+    (searchParams.get('tab') === 'compact' ? 'compact' : searchParams.get('tab') === 'replenish' ? 'replenishment' : 'list')
+  );
   const [searchTerm, setSearchTerm] = useState(productsPageState.searchTerm || searchParams.get('pid') || '');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -17,6 +23,7 @@ export default function Products() {
   const [filterBrand, setFilterBrand] = useState(productsPageState.filterBrand);
   const [filterCategory, setFilterCategory] = useState(productsPageState.filterCategory);
   const [filterVendor, setFilterVendor] = useState(productsPageState.filterVendor);
+  const [filterDiscontinued, setFilterDiscontinued] = useState<'all' | 'active' | 'discontinued'>(productsPageState.filterDiscontinued || 'all');
   const [sortOrder, setSortOrder] = useState<SortType>((productsPageState.sortOrder as SortType) || 'name_asc');
   const navigate = useNavigate();
 
@@ -101,22 +108,28 @@ export default function Products() {
     if (pid) {
       setSearchTerm(pid);
     }
+    const tabParam = searchParams.get('tab');
+    if (tabParam === 'replenish') {
+      setActiveTab('replenishment');
+    }
   }, [searchParams]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, filterBrand, filterCategory, filterVendor, sortOrder]);
+  }, [searchTerm, filterBrand, filterCategory, filterVendor, filterDiscontinued, sortOrder]);
 
   useEffect(() => {
     setProductsPageState({
+      activeTab,
       searchTerm,
       filterBrand,
       filterCategory,
       filterVendor,
+      filterDiscontinued,
       sortOrder,
       showFilters
     });
-  }, [searchTerm, filterBrand, filterCategory, filterVendor, sortOrder, showFilters, setProductsPageState]);
+  }, [activeTab, searchTerm, filterBrand, filterCategory, filterVendor, filterDiscontinued, sortOrder, showFilters, setProductsPageState]);
 
   // Extract unique brands and categories for dropdowns
   const brands = useMemo(() => Array.from(new Set(products.map(p => p.brand).filter(Boolean))), [products]);
@@ -205,6 +218,8 @@ export default function Products() {
         if (filterBrand && p.brand !== filterBrand) return false;
         if (filterCategory && p.category !== filterCategory) return false;
         if (filterVendor && p.vendor_id !== filterVendor) return false;
+        if (filterDiscontinued === 'active' && p.is_discontinued) return false;
+        if (filterDiscontinued === 'discontinued' && !p.is_discontinued) return false;
         
         return true;
      });
@@ -226,7 +241,7 @@ export default function Products() {
             return 0;
         }
      });
-  }, [products, stock, expiryThreshold, searchTerm, filterBrand, filterCategory, filterVendor, sortOrder]);
+  }, [products, stock, expiryThreshold, searchTerm, filterBrand, filterCategory, filterVendor, filterDiscontinued, sortOrder]);
 
   const totalPages = Math.ceil(groupedProducts.length / PAGE_SIZE) || 1;
   const paginatedProducts = useMemo(() => {
@@ -247,38 +262,117 @@ export default function Products() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="glass-panel border-x-0 border-t-0 px-4 pt-6 pb-4 sticky top-0 z-10">
-        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-4">
-          <h1 className="text-xl sm:text-2xl font-black tracking-tight text-white shrink-0 whitespace-nowrap flex items-center gap-2">
-            商品列表
-            <span className="text-xs font-normal text-slate-400 font-mono">({groupedProducts.length})</span>
-          </h1>
-          <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap justify-end">
-            <div className="relative">
-              <select 
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value as SortType)}
-                className="appearance-none bg-white/5 border border-white/10 rounded-full pl-8 pr-4 py-1.5 text-xs font-bold text-white outline-none focus:border-sky-400 transition-all cursor-pointer hover:bg-white/10"
-              >
-                <option value="name_asc" className="bg-[#0f172a]">名稱 A-Z</option>
-                <option value="name_desc" className="bg-[#0f172a]">名稱 Z-A</option>
-                <option value="newest" className="bg-[#0f172a]">最新建立</option>
-                <option value="stock_low" className="bg-[#0f172a]">庫存: 低 → 高</option>
-                <option value="stock_high" className="bg-[#0f172a]">庫存: 高 → 低</option>
-              </select>
-              <ArrowUpDown className="w-3 h-3 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+      {/* Top Navigation Tabs */}
+      <div className="flex border-b border-white/10 bg-[#0f172a]/95 px-4 pt-3 gap-2 shrink-0 overflow-x-auto">
+        <button
+          onClick={() => setActiveTab('list')}
+          className={`pb-2.5 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'list'
+              ? 'border-sky-400 text-sky-300'
+              : 'border-transparent text-slate-400 hover:text-white'
+          }`}
+        >
+          <Layers className="w-4 h-4" />
+          商品圖書卡片 ({products.length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab('compact')}
+          className={`pb-2.5 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'compact'
+              ? 'border-sky-400 text-sky-300'
+              : 'border-transparent text-slate-400 hover:text-white'
+          }`}
+        >
+          <ClipboardList className="w-4 h-4 text-sky-400" />
+          商品庫存簡覽 (廠商訂貨模式)
+          <span className="px-1.5 py-0.2 bg-sky-500/20 text-sky-300 text-[10px] rounded-full font-mono">
+            叫貨推薦
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('replenishment')}
+          className={`pb-2.5 px-3 font-bold text-xs flex items-center gap-1.5 border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'replenishment'
+              ? 'border-emerald-400 text-emerald-300'
+              : 'border-transparent text-slate-400 hover:text-white'
+          }`}
+        >
+          <TableProperties className="w-4 h-4" />
+          補貨分析與建議
+        </button>
+      </div>
+
+      {activeTab === 'compact' ? (
+        <ProductCompactView onOpenAdjustModal={openAdjustModal} />
+      ) : activeTab === 'replenishment' ? (
+        <ReplenishmentOverview />
+      ) : (
+        <>
+          <div className="glass-panel border-x-0 border-t-0 px-4 pt-4 pb-4 sticky top-0 z-10">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-3">
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl sm:text-2xl font-black tracking-tight text-white shrink-0 whitespace-nowrap flex items-center gap-2">
+                  商品清單
+                  <span className="text-xs font-normal text-slate-400 font-mono">({groupedProducts.length})</span>
+                </h1>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap justify-end">
+                {/* Discontinued quick filter pill */}
+                <div className="flex bg-white/5 border border-white/10 rounded-full p-0.5 text-xs">
+                  <button
+                    onClick={() => setFilterDiscontinued('all')}
+                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all ${
+                      filterDiscontinued === 'all' ? 'bg-white/20 text-white' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    全部
+                  </button>
+                  <button
+                    onClick={() => setFilterDiscontinued('active')}
+                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all ${
+                      filterDiscontinued === 'active' ? 'bg-emerald-500/30 text-emerald-300' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    供應中
+                  </button>
+                  <button
+                    onClick={() => setFilterDiscontinued('discontinued')}
+                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all ${
+                      filterDiscontinued === 'discontinued' ? 'bg-amber-500/30 text-amber-300' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    暫時停產
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <select 
+                    value={sortOrder}
+                    onChange={(e) => setSortOrder(e.target.value as SortType)}
+                    className="appearance-none bg-white/5 border border-white/10 rounded-full pl-8 pr-4 py-1.5 text-xs font-bold text-white outline-none focus:border-sky-400 transition-all cursor-pointer hover:bg-white/10"
+                  >
+                    <option value="name_asc" className="bg-[#0f172a]">名稱 A-Z</option>
+                    <option value="name_desc" className="bg-[#0f172a]">名稱 Z-A</option>
+                    <option value="newest" className="bg-[#0f172a]">最新建立</option>
+                    <option value="stock_low" className="bg-[#0f172a]">庫存: 低 → 高</option>
+                    <option value="stock_high" className="bg-[#0f172a]">庫存: 高 → 低</option>
+                  </select>
+                  <ArrowUpDown className="w-3 h-3 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                </div>
+                <button 
+                  onClick={() => setShowFilters(!showFilters)} 
+                  className={`p-2 rounded-full transition-colors ${showFilters ? 'bg-white/20 text-white' : 'glass-panel text-slate-400 hover:text-white'}`}
+                >
+                  <Filter className="w-4 h-4" />
+                </button>
+                <Link to="/add-product" className="px-3.5 py-1.5 bg-sky-400 hover:bg-sky-300 text-slate-950 font-extrabold rounded-full transition-colors active:scale-95 text-xs shadow-md shadow-sky-400/20 whitespace-nowrap flex items-center gap-1">
+                  <span>+ 新增商品</span>
+                </Link>
+              </div>
             </div>
-            <button 
-              onClick={() => setShowFilters(!showFilters)} 
-              className={`p-2 rounded-full transition-colors ${showFilters ? 'bg-white/20 text-white' : 'glass-panel text-slate-400 hover:text-white'}`}
-            >
-              <Filter className="w-4 h-4" />
-            </button>
-            <Link to="/add-product" className="px-3.5 py-1.5 bg-sky-400 hover:bg-sky-300 text-slate-950 font-extrabold rounded-full transition-colors active:scale-95 text-xs shadow-md shadow-sky-400/20 whitespace-nowrap flex items-center gap-1">
-              <span>+ 新增商品</span>
-            </Link>
-          </div>
-        </div>
         
         <div className="flex flex-col gap-3">
           <div className="relative">
@@ -347,9 +441,10 @@ export default function Products() {
             const isLowStock = lowStockAlertEnabled && group.totalStock <= alertThreshold;
             const isExpired = group.isExpired;
             const isExpiringSoon = group.isExpiringSoon;
+            const isDiscontinued = !!p.is_discontinued;
 
             return (
-              <div key={groupId} className={`glass-panel border ${isExpired ? 'border-red-500/50 bg-red-500/5' : isExpiringSoon ? 'border-orange-500/50 bg-orange-500/5' : isLowStock ? 'border-amber-500/50 bg-amber-500/5' : 'border-[var(--color-glass-border)]'} rounded-xl p-4 transition-all shadow-sm`}>
+              <div key={groupId} className={`glass-panel border ${isDiscontinued ? 'border-amber-500/40 bg-amber-500/5' : isExpired ? 'border-red-500/50 bg-red-500/5' : isExpiringSoon ? 'border-orange-500/50 bg-orange-500/5' : isLowStock ? 'border-amber-500/50 bg-amber-500/5' : 'border-[var(--color-glass-border)]'} rounded-xl p-4 transition-all shadow-sm`}>
                 <div className="flex justify-between items-start mb-2">
                   <div className="flex-1 pr-2">
                     <h3 className="font-bold text-[var(--color-text-main)] text-base flex flex-wrap gap-1 items-center">
@@ -358,6 +453,12 @@ export default function Products() {
                       {p.specification && <span className="text-[10px] font-normal px-1.5 py-0.5 ml-1 bg-white/10 rounded-md text-[var(--color-accent-blue)]">{p.specification}</span>}
                     </h3>
                     <div className="flex flex-wrap gap-1.5 mt-2">
+                       {isDiscontinued && (
+                         <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-500/20 text-amber-300 rounded-md flex items-center gap-1 border border-amber-500/40 shadow-sm">
+                           <PauseCircle className="w-3 h-3 text-amber-400" />
+                           暫時停產 (廠商生產中)
+                         </span>
+                       )}
                        {isExpired && (
                          <span className="text-[10px] font-bold px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded flex items-center gap-1 border border-red-500/30">
                            <AlertCircle className="w-3 h-3" /> 已過期
@@ -368,7 +469,7 @@ export default function Products() {
                            <Clock className="w-3 h-3" /> 即將到期
                          </span>
                        )}
-                       {isLowStock && (
+                       {isLowStock && !isDiscontinued && (
                          <span className="text-[10px] font-bold px-1.5 py-0.5 bg-amber-500/20 text-amber-500 rounded flex items-center gap-1 border border-amber-500/30">
                            補貨警示
                          </span>
@@ -403,7 +504,19 @@ export default function Products() {
                         <div className="text-xs">
                            <span className="text-[var(--color-text-dim)]">分類:</span> <span className="text-white ml-1">{p.category || '未分類'}</span>
                         </div>
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 items-center">
+                           <button
+                             onClick={() => toggleDiscontinued(p.product_id)}
+                             className={`px-2 py-1 text-xs font-bold rounded-lg border flex items-center gap-1 transition-all ${
+                               isDiscontinued
+                                 ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/30'
+                                 : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border-amber-500/30'
+                             }`}
+                             title={isDiscontinued ? '恢復正常供應' : '設為暫時停產'}
+                           >
+                             {isDiscontinued ? <PlayCircle className="w-3.5 h-3.5 text-emerald-400" /> : <PauseCircle className="w-3.5 h-3.5 text-amber-400" />}
+                             {isDiscontinued ? '恢復供應' : '標記停產'}
+                           </button>
                            <button onClick={() => navigate(`/add-product?editId=${p.product_id}`)} className="p-2 glass-panel text-[var(--color-accent-blue)] rounded-lg">
                              <Pencil className="w-4 h-4" />
                            </button>
@@ -540,6 +653,8 @@ export default function Products() {
             </div>
           )}
         </div>
+      )}
+      </>
       )}
 
       {/* 快速調整庫存 Modal */}

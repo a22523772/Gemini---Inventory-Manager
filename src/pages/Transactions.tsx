@@ -9,6 +9,7 @@ export default function Transactions() {
   const { transactions, products, vendors, transactionsPageState, setTransactionsPageState, deleteTransaction, deleteTransactionGroup, editTransaction } = useStore();
   const [searchParams] = useSearchParams();
   const [filterType, setFilterType] = useState(transactionsPageState.filterType);
+  const [filterPlatform, setFilterPlatform] = useState(transactionsPageState.filterPlatform || '');
   const [searchTerm, setSearchTerm] = useState(transactionsPageState.searchTerm || searchParams.get('pid') || '');
   const [startDate, setStartDate] = useState(transactionsPageState.startDate !== undefined ? transactionsPageState.startDate : '');
   const [endDate, setEndDate] = useState(transactionsPageState.endDate !== undefined ? transactionsPageState.endDate : '');
@@ -60,6 +61,7 @@ export default function Transactions() {
   useEffect(() => {
     setTransactionsPageState({
       filterType,
+      filterPlatform,
       searchTerm,
       startDate,
       endDate,
@@ -67,42 +69,78 @@ export default function Transactions() {
       filterVendor,
       showFilters
     });
-  }, [filterType, searchTerm, startDate, endDate, filterLocation, filterVendor, showFilters, setTransactionsPageState]);
+  }, [filterType, filterPlatform, searchTerm, startDate, endDate, filterLocation, filterVendor, showFilters, setTransactionsPageState]);
   
   useEffect(() => {
-    // Always consider fetching remote data on mount to ensure we have the latest from the sheet,
-    // not just the optimistic local ones.
     if (gasApiUrl && !storeIsLoading) {
        fetchRemoteData();
     }
-  }, [gasApiUrl]); // Fetch on mount or when API URL changes
+  }, [gasApiUrl]);
 
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 30;
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [filterType, searchTerm, startDate, endDate, filterLocation, filterVendor]);
+  }, [filterType, filterPlatform, searchTerm, startDate, endDate, filterLocation, filterVendor]);
 
   const productMap = useMemo(() => new Map(products.map(p => [p.product_id, p])), [products]);
   const vendorMap = useMemo(() => new Map(vendors.map(v => [v.vendor_id, v.vendor_name])), [vendors]);
 
   const locations = useMemo(() => Array.from(new Set(transactions.map(t => t.location).filter(Boolean))), [transactions]);
 
+  const platforms = useMemo(() => {
+    const set = new Set<string>();
+    transactions.forEach(t => {
+      if (t.platform && String(t.platform).trim()) {
+        set.add(String(t.platform).trim());
+      } else if (t.type && t.type.startsWith('stock_out ') && t.type !== 'stock_out') {
+        set.add(t.type.replace(/^stock_out\s*/, '').trim());
+      } else if (t.note) {
+        const match = t.note.match(/平台:\s*([^\s|]+)/);
+        if (match) set.add(match[1].trim());
+      }
+    });
+    return Array.from(set).filter(Boolean);
+  }, [transactions]);
+
   const customTypes = useMemo(() => {
     const set = new Set(transactions.map(t => t.type).filter(Boolean));
     return Array.from(set).filter(t => t !== 'stock_in' && t !== 'stock_out' && t !== 'adjust');
   }, [transactions]);
+
+  const getTxPlatform = (t: any) => {
+    if (t.platform && String(t.platform).trim()) {
+      return String(t.platform).trim();
+    }
+    if (t.type && t.type.startsWith('stock_out ')) {
+      return t.type.replace(/^stock_out\s*/, '');
+    }
+    if (t.type && t.type !== 'stock_in' && t.type !== 'stock_out' && t.type !== 'adjust') {
+      return t.type;
+    }
+    if (t.note) {
+      const match = t.note.match(/平台:\s*([^\s|]+)/);
+      if (match) return match[1];
+    }
+    return '';
+  };
 
   const filteredTransactions = useMemo(() => {
     return transactions.filter(t => {
       // Type Filter
       if (filterType && t.type !== filterType) return false;
 
+      // Platform Filter
+      if (filterPlatform) {
+        const p = getTxPlatform(t);
+        if (!p || p.toLowerCase() !== filterPlatform.toLowerCase()) return false;
+      }
+
       // Date Range Filter
       if (startDate && endDate) {
         try {
-          if (!t.date) return true; // Default to showing records without date
+          if (!t.date) return true;
           
           let dStr = String(t.date);
           if (!dStr.includes('T')) {
@@ -120,12 +158,13 @@ export default function Transactions() {
         }
       }
 
-      // Search Filter (Product Name, Online Order ID, Type, PID, Operator, Note, Transaction ID, Specification)
+      // Search Filter (Product Name, Online Order ID, Platform, Type, PID, Operator, Note, Transaction ID, Specification)
       if (searchTerm) {
         const s = searchTerm.toLowerCase();
         const product = productMap.get(t.product_id);
         const productName = (t.product_name || product?.name || '').toLowerCase();
         const onlineOrderId = String(t.online_order_id || '').toLowerCase();
+        const platformStr = getTxPlatform(t).toLowerCase();
         const typeStr = String(t.type || '').toLowerCase();
         const pid = String(t.product_id || '').toLowerCase();
         const op = String(t.operator || '').toLowerCase();
@@ -133,7 +172,7 @@ export default function Transactions() {
         const txid = String(t.transaction_id || '').toLowerCase();
         const spec = String(t.specification || '').toLowerCase();
         
-        if (!productName.includes(s) && !onlineOrderId.includes(s) && !typeStr.includes(s) && !pid.includes(s) && !op.includes(s) && !note.includes(s) && !txid.includes(s) && !spec.includes(s)) {
+        if (!productName.includes(s) && !onlineOrderId.includes(s) && !platformStr.includes(s) && !typeStr.includes(s) && !pid.includes(s) && !op.includes(s) && !note.includes(s) && !txid.includes(s) && !spec.includes(s)) {
           return false;
         }
       }
@@ -146,7 +185,7 @@ export default function Transactions() {
 
       return true;
     });
-  }, [transactions, filterType, startDate, endDate, searchTerm, filterLocation, filterVendor, productMap]);
+  }, [transactions, filterType, filterPlatform, startDate, endDate, searchTerm, filterLocation, filterVendor, productMap]);
 
   const groupedTransactions = useMemo(() => {
     const result: (typeof filteredTransactions)[] = [];
@@ -190,20 +229,6 @@ export default function Transactions() {
     const start = (currentPage - 1) * PAGE_SIZE;
     return groupedTransactions.slice(start, start + PAGE_SIZE);
   }, [groupedTransactions, currentPage]);
-
-  const getTxPlatform = (t: any) => {
-    if (t.type && t.type.startsWith('stock_out ')) {
-      return t.type.replace(/^stock_out\s*/, '');
-    }
-    if (t.type && t.type !== 'stock_in' && t.type !== 'stock_out' && t.type !== 'adjust') {
-      return t.type;
-    }
-    if (t.note) {
-      const match = t.note.match(/平台:\s*([^\s|]+)/);
-      if (match) return match[1];
-    }
-    return '';
-  };
 
   const isForcedTx = (t: any) => {
     if (t.note && t.note.includes('強行出貨')) return true;
@@ -349,7 +374,7 @@ export default function Transactions() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">類別</label>
                   <select 
@@ -363,6 +388,19 @@ export default function Transactions() {
                     <option value="adjust" className="bg-[#0f172a]">盤點調整</option>
                     {customTypes.map(ct => (
                       <option key={ct} value={ct} className="bg-[#0f172a]">{ct}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">平台</label>
+                  <select 
+                    value={filterPlatform} 
+                    onChange={e => setFilterPlatform(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
+                  >
+                    <option value="" className="bg-[#0f172a]">所有平台</option>
+                    {platforms.map(plat => (
+                      <option key={plat} value={plat} className="bg-[#0f172a]">{plat}</option>
                     ))}
                   </select>
                 </div>
@@ -407,10 +445,11 @@ export default function Transactions() {
               <>系統共載入 <span className="text-[var(--color-accent-blue)] font-bold">{transactions.length}</span> 筆紀錄</>
             )}
           </p>
-          {(filterType || searchTerm || filterLocation || filterVendor || startDate || endDate) && (
+          {(filterType || filterPlatform || searchTerm || filterLocation || filterVendor || startDate || endDate) && (
             <button 
               onClick={() => {
                 setFilterType('');
+                setFilterPlatform('');
                 setSearchTerm('');
                 setFilterLocation('');
                 setFilterVendor('');

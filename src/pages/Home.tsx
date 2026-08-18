@@ -11,15 +11,30 @@ import { normalizePlatformName } from '../lib/platformUtils';
 
 export const getOrderPrice = (order: any): number => {
   if (!order) return 0;
-  if (typeof order.price === 'number' && order.price > 0) return order.price;
-  if (typeof order.total_amount === 'number' && order.total_amount > 0) return order.total_amount;
+  
+  const parseNum = (v: any) => {
+    if (typeof v === 'number' && !isNaN(v)) return v;
+    if (typeof v === 'string') {
+      const cleaned = v.replace(/[^0-9.]/g, '');
+      const parsed = parseFloat(cleaned);
+      return !isNaN(parsed) ? parsed : 0;
+    }
+    return 0;
+  };
+
+  const directPrice = parseNum(order.price) || parseNum(order.total_amount) || parseNum(order.order_amount) || parseNum(order.amount);
+  if (directPrice > 0) return directPrice;
+
   if (Array.isArray(order.items) && order.items.length > 0) {
-    const prices = order.items.map((i: any) => Number(i?.price) || 0).filter((p: number) => p > 0);
-    if (prices.length > 0) {
-      if (prices.every((p: number) => p === prices[0])) {
-        return prices[0];
+    const itemPrices = order.items
+      .map((i: any) => parseNum(i?.price) || parseNum(i?.total_amount) || parseNum(i?.amount))
+      .filter((p: number) => p > 0);
+
+    if (itemPrices.length > 0) {
+      if (itemPrices.every((p: number) => p === itemPrices[0]) && itemPrices.length > 1) {
+        return itemPrices[0];
       }
-      return prices.reduce((sum: number, p: number) => sum + p, 0);
+      return itemPrices.reduce((sum: number, p: number) => sum + p, 0);
     }
   }
   return 0;
@@ -497,19 +512,23 @@ export default function Home() {
           return a.expiry_date.localeCompare(b.expiry_date);
         });
 
+        const p = products.find(prod => prod.product_id === item.product_id);
+        const itemCostPrice = p ? (Number(p.cost_price) || 0) : 0;
+
         if (isProductInSystem && sortedStock.length > 0) {
           for (const entry of sortedStock) {
             if (remainingNeeded <= 0) break;
             const deductQty = Math.min(entry.quantity, remainingNeeded);
 
             await enqueueAction('stockOut', {
-              batch_tx_id: order.order_id,
+              transaction_id: `TX_${Date.now()}_${Math.random().toString(36).substring(2,6)}`,
               online_order_id: order.order_id,
+              platform: normPlatform,
               type: txType,
               stock_id: entry.stock_id,
               product_id: item.product_id || '',
               product_name: item.product_name || '',
-              cost_price: itemPrice,
+              cost_price: itemCostPrice,
               price: itemPrice,
               quantity: deductQty,
               location: entry.location || '',
@@ -526,18 +545,18 @@ export default function Home() {
 
         // If item was not in system or stock was insufficient, log forced shipment for remaining qty with location/floor/area BLANK
         if (remainingNeeded > 0) {
-          const p = products.find(prod => prod.product_id === item.product_id);
           const forcedNote = !isProductInSystem 
             ? `[強行出貨-非系統商品] 網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${normPlatform} | 買家: ${order.customer_name || '未指定'} | 物流: ${order.shipping_method || '未指定'}`
             : `[強行出貨-缺貨紀錄] 網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${normPlatform} | 買家: ${order.customer_name || '未指定'} | 物流: ${order.shipping_method || '未指定'}`;
 
           await enqueueAction('stockOut', {
-            batch_tx_id: order.order_id,
+            transaction_id: `TX_${Date.now()}_${Math.random().toString(36).substring(2,6)}`,
             online_order_id: order.order_id,
+            platform: normPlatform,
             type: txType,
             product_id: item.product_id || '',
             product_name: item.product_name || '',
-            cost_price: itemPrice,
+            cost_price: itemCostPrice,
             price: itemPrice,
             quantity: remainingNeeded,
             location: '',

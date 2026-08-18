@@ -39,6 +39,7 @@ export type Product = {
   expiry_date?: string;
   created_at: string;
   is_synced?: boolean;
+  is_discontinued?: boolean; // 暫時停產 (廠商生產中)
 };
 
 export type Stock = {
@@ -65,6 +66,7 @@ export type Transaction = {
   id: string;
   transaction_id: string; // for GAS
   online_order_id?: string; // 網路訂單編號
+  platform?: string; // 來源平台 (例如 蝦皮購物、MOMO購物網)
   product_id: string;
   product_name?: string; // 直接記錄商品名稱
   type: string; // 'stock_in' | 'stock_out' | 'adjust' | 平台名稱 (例如 蝦皮購物)

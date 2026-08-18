@@ -33,6 +33,7 @@ export default function AddProduct() {
   const [costPrice, setCostPrice] = useState('');
   const [vendorId, setVendorId] = useState('');
   const [hasExpiry, setHasExpiry] = useState(false);
+  const [isDiscontinued, setIsDiscontinued] = useState(false);
   const [minStock, setMinStock] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
 
@@ -51,6 +52,7 @@ export default function AddProduct() {
         setCostPrice(draft.costPrice || '');
         setVendorId(draft.vendorId || '');
         setHasExpiry(draft.hasExpiry || false);
+        setIsDiscontinued(draft.isDiscontinued || false);
         setMinStock(draft.minStock || '');
         if (draft.expiryDate) setExpiryDate(draft.expiryDate);
       } catch (e) {
@@ -83,6 +85,7 @@ export default function AddProduct() {
       setCostPrice(existingProduct.cost_price?.toString() || '');
       setVendorId(existingProduct.vendor_id || '');
       setHasExpiry(existingProduct.has_expiry || false);
+      setIsDiscontinued(existingProduct.is_discontinued || false);
       setMinStock(existingProduct.min_stock?.toString() || '');
     }
   }, [existingProduct]);
@@ -121,6 +124,7 @@ export default function AddProduct() {
       cost_price: Number(costPrice) || 0,
       vendor_id: actualVendorId,
       has_expiry: hasExpiry,
+      is_discontinued: isDiscontinued,
       min_stock: minStock !== '' ? Number(minStock) : undefined
     };
 
@@ -279,17 +283,33 @@ export default function AddProduct() {
             </datalist>
           </div>
 
-          <div className="flex items-center space-x-3 pt-2">
-            <input 
-              type="checkbox" 
-              id="has_expiry" 
-              checked={hasExpiry} 
-              onChange={(e) => setHasExpiry(e.target.checked)}
-              className="w-5 h-5 rounded min-w-5 border-white/20 bg-white/5 accent-[var(--color-accent-blue)]"
-            />
-            <label htmlFor="has_expiry" className="text-sm font-bold text-[var(--color-text-main)] uppercase tracking-wider text-[12px] select-none">
-              此商品包含有效期限 (例如：生鮮食品)
-            </label>
+          <div className="space-y-3 pt-2">
+            <div className="flex items-center space-x-3">
+              <input 
+                type="checkbox" 
+                id="has_expiry" 
+                checked={hasExpiry} 
+                onChange={(e) => setHasExpiry(e.target.checked)}
+                className="w-5 h-5 rounded min-w-5 border-white/20 bg-white/5 accent-[var(--color-accent-blue)]"
+              />
+              <label htmlFor="has_expiry" className="text-sm font-bold text-[var(--color-text-main)] uppercase tracking-wider text-[12px] select-none">
+                此商品包含有效期限 (例如：生鮮食品、藥品)
+              </label>
+            </div>
+
+            <div className="flex items-start space-x-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl">
+              <input 
+                type="checkbox" 
+                id="is_discontinued" 
+                checked={isDiscontinued} 
+                onChange={(e) => setIsDiscontinued(e.target.checked)}
+                className="w-5 h-5 rounded min-w-5 mt-0.5 border-amber-500/30 bg-white/5 accent-amber-500"
+              />
+              <label htmlFor="is_discontinued" className="text-xs font-bold text-amber-300 select-none cursor-pointer">
+                <div>⏸️ 暫時停產（廠商生產中）</div>
+                <div className="text-[10px] text-amber-200/70 font-normal mt-0.5">勾選後將在商品列表與補貨清單中特別標記為「暫時停產」，等廠商生產完畢後可隨時解除。</div>
+              </label>
+            </div>
           </div>
         </div>
 
