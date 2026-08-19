@@ -249,7 +249,7 @@ export default function SetupGuide() {
                 <h3 className="text-base font-bold text-[var(--color-text-main)]">1. Google Sheets 結構設定</h3>
                 <p className="text-[var(--color-text-dim)] mt-1">請建立一個新的 Google Sheet，並確保下方有這五個工作表 (區分大小寫)：</p>
                 <ul className="list-disc pl-5 mt-2 space-y-1 text-white/80 font-mono text-xs">
-                  <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, specification, min_stock, created_at</li>
+                  <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, specification, min_stock, is_discontinued, created_at</li>
                   <li><strong>vendors</strong> (供應商): vendor_id, vendor_name, contact, phone</li>
                   <li><strong>stock</strong> (庫存表): stock_id, product_id, name, location, floor, area, quantity, expiry_date, specification, last_update</li>
                   <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, name, type, quantity, location, floor, area, specification, cost_price, vendor_id, date, note, operator</li>
@@ -313,8 +313,13 @@ export default function SetupGuide() {
     var prodSheet = ss.getSheetByName('products');
     var prodCostMap = {};
     if (prodSheet && prodSheet.getLastRow() > 0) {
-       var headers = ['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at', 'brand', 'specification', 'min_stock'];
+       var headers = ['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at', 'brand', 'specification', 'min_stock', 'is_discontinued'];
        var existingHeaders = prodSheet.getRange(1, 1, 1, prodSheet.getLastColumn()).getValues()[0];
+       if (existingHeaders.indexOf('brand') === -1) { existingHeaders.push('brand'); prodSheet.getRange(1, existingHeaders.length).setValue('brand'); }
+       if (existingHeaders.indexOf('specification') === -1) { existingHeaders.push('specification'); prodSheet.getRange(1, existingHeaders.length).setValue('specification'); }
+       if (existingHeaders.indexOf('min_stock') === -1) { existingHeaders.push('min_stock'); prodSheet.getRange(1, existingHeaders.length).setValue('min_stock'); }
+       if (existingHeaders.indexOf('is_discontinued') === -1) { existingHeaders.push('is_discontinued'); prodSheet.getRange(1, existingHeaders.length).setValue('is_discontinued'); }
+       
        var values = prodSheet.getDataRange().getValues();
        var idIdx = existingHeaders.indexOf('product_id');
        var costIdx = existingHeaders.indexOf('cost_price');
@@ -383,6 +388,7 @@ export default function SetupGuide() {
       if (headers.indexOf('brand') === -1) { headers.push('brand'); prodSheet.getRange(1, headers.length).setValue('brand'); }
       if (headers.indexOf('specification') === -1) { headers.push('specification'); prodSheet.getRange(1, headers.length).setValue('specification'); }
       if (headers.indexOf('min_stock') === -1) { headers.push('min_stock'); prodSheet.getRange(1, headers.length).setValue('min_stock'); }
+      if (headers.indexOf('is_discontinued') === -1) { headers.push('is_discontinued'); prodSheet.getRange(1, headers.length).setValue('is_discontinued'); }
 
       var values = prodSheet.getDataRange().getValues();
       var idIndex = headers.indexOf('product_id');
@@ -392,6 +398,9 @@ export default function SetupGuide() {
           var rowData = [];
           for (var j = 0; j < headers.length; j++) {
             var val = data[headers[j]];
+            if (headers[j] === 'is_discontinued') {
+              val = (val === true || String(val).toUpperCase() === 'TRUE');
+            }
             rowData.push(val !== undefined ? val : values[i][j]);
           }
           prodSheet.getRange(i+1, 1, 1, headers.length).setValues([rowData]);
@@ -826,6 +835,7 @@ function doGet(e) {
       for(var j=0; j<keys.length; j++){ 
         var val = data[i][j];
         if (keys[j] === 'has_expiry') val = (String(val).toUpperCase() === 'TRUE');
+        if (keys[j] === 'is_discontinued') val = (String(val).toUpperCase() === 'TRUE');
         if (keys[j] === 'cost_price' || keys[j] === 'min_stock') val = Number(val) || 0;
         obj[keys[j]] = val; 
       }

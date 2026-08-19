@@ -727,10 +727,48 @@ export const useStore = create<AppState>((set, get) => ({
         
         const normalizedList = (dP || []).map((item: any) => normalizeKeys(item));
         
+        // Build maps of currently tracked states and pending sync items
+        const currentProducts = get().products;
+        const currentDiscontinuedMap = new Map<string, boolean>();
+        currentProducts.forEach(p => {
+          if (p.product_id && p.is_discontinued) {
+            currentDiscontinuedMap.set(p.product_id, true);
+          }
+        });
+
+        // Also check if there are pending editProduct actions in syncQueue
+        const pendingQueue = get().syncQueue || [];
+        const pendingDiscontinuedMap = new Map<string, boolean>();
+        pendingQueue.forEach(q => {
+          if (q.action === 'editProduct' && q.payload && q.payload.product_id) {
+            if (q.payload.is_discontinued !== undefined) {
+              pendingDiscontinuedMap.set(String(q.payload.product_id), Boolean(q.payload.is_discontinued));
+            }
+          }
+        });
+
         // If there are duplicate product_ids or multiple records, merge their specifications cleanly
         const productMap: Record<string, any> = {};
         normalizedList.filter((p: any) => p && p.product_id).forEach((p: any) => {
           const id = String(p.product_id).trim();
+
+          // Determine discontinued status with resilience:
+          // 1. Pending local sync queue has highest priority
+          // 2. Remote explicit TRUE / FALSE
+          // 3. Current local state if remote value is blank/undefined
+          let isDiscontinued = false;
+          if (pendingDiscontinuedMap.has(id)) {
+            isDiscontinued = pendingDiscontinuedMap.get(id)!;
+          } else {
+            const rawDisc = p.is_discontinued !== undefined ? p.is_discontinued : (p['停產'] !== undefined ? p['停產'] : p['暫時停產']);
+            if (rawDisc !== undefined && rawDisc !== null && String(rawDisc).trim() !== '') {
+              const strVal = String(rawDisc).trim().toUpperCase();
+              isDiscontinued = (strVal === 'TRUE' || strVal === '1' || strVal === 'YES' || rawDisc === true);
+            } else if (currentDiscontinuedMap.has(id)) {
+              isDiscontinued = true;
+            }
+          }
+
           const cleanP = {
             ...p,
             product_id: id,
@@ -741,7 +779,7 @@ export const useStore = create<AppState>((set, get) => ({
             unit: p.unit ? String(p.unit).trim() : '',
             specification: p.specification ? String(p.specification).trim() : '',
             has_expiry: String(p.has_expiry).toUpperCase() === 'TRUE',
-            is_discontinued: String(p.is_discontinued).toUpperCase() === 'TRUE' || String(p['停產'] || p['暫時停產'] || '').toUpperCase() === 'TRUE' || p.is_discontinued === true,
+            is_discontinued: isDiscontinued,
             cost_price: Number(p.cost_price) || 0,
             min_stock: (() => {
               const raw = p.min_stock ?? p['安全庫存'] ?? p['安全庫存量'] ?? p['最低庫存'] ?? p['最低庫存量'] ?? p['警示庫存'] ?? p.minstock;
