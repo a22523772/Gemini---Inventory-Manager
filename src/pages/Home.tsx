@@ -165,12 +165,7 @@ export default function Home() {
     });
   }, [products, productTotalStockMap]);
 
-  // If onlineOrders is empty, fallback to mock orders for immediate testing
-  const displayOrders = onlineOrders.length > 0 ? onlineOrders.filter(o => o.status !== '已刪除' && o.order_status !== '已刪除') : [
-    { order_id: 'SHP-992381', platform: '蝦皮購物', product_id: 'P1001', product_name: '陶瓷馬克杯 (350ml)', quantity: 2, price: 300, customer_name: '陳大同', shipping_deadline: '2026-08-11 12:00:00', status: '2026-08-11 12:00:00', order_status: '⚠️ 已逾期', created_at: '2026-08-07 10:00:00', specification: '白色款', shipping_method: '7-11 夾寄' },
-    { order_id: 'MOMO-183921', platform: 'MOMO購物網', product_id: 'P1002', product_name: '不鏽鋼保溫瓶 (500ml)', quantity: 1, price: 450, customer_name: '林智慧', shipping_deadline: '2026-08-12 18:30:00', status: '2026-08-12 18:30:00', order_status: '⏰ 即將到期', created_at: '2026-08-08 14:20:00', specification: '磨砂黑', shipping_method: '黑貓宅急便' },
-    { order_id: 'LINE-772910', platform: 'LINE口袋商店', product_id: 'P1003', product_name: '環保玻璃吸管組', quantity: 5, price: 150, customer_name: '張小玲', shipping_deadline: '2026-08-20 20:00:00', status: '2026-08-20 20:00:00', order_status: '✅ 待出貨', created_at: '2026-08-08 16:50:00', specification: '粉色粗吸管', shipping_method: '全家超取' }
-  ];
+  const displayOrders = onlineOrders.filter(o => o.status !== '已刪除' && o.order_status !== '已刪除');
 
   // Group displayOrders by order_id
   const groupedOrdersMap: Record<string, any> = {};
