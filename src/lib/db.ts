@@ -40,6 +40,8 @@ export type Product = {
   created_at: string;
   is_synced?: boolean;
   is_discontinued?: boolean; // 暫時停產 (廠商生產中)
+  is_out_of_stock?: boolean; // 暫時缺貨
+  status?: string; // 狀態 (例如: 正常、暫時缺貨、暫時停產)
 };
 
 export type Stock = {
@@ -66,11 +68,15 @@ export type Transaction = {
   id: string;
   transaction_id: string; // for GAS
   online_order_id?: string; // 網路訂單編號
+  batch_id?: string; // 批次出貨編號
+  batch_tx_id?: string; // 批次出貨關聯號
   platform?: string; // 來源平台 (例如 蝦皮購物、MOMO購物網)
   product_id: string;
   product_name?: string; // 直接記錄商品名稱
   type: string; // 'stock_in' | 'stock_out' | 'adjust' | 平台名稱 (例如 蝦皮購物)
   quantity: number;
+  delta?: number; // 盤點變化量 (如 +2 或 -3)
+  final_quantity?: number; // 盤點校正後最終數量
   price?: number; // 售價/金額
   location: string;
   floor: string;

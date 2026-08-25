@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useStore } from '../store/useStore';
-import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter, AlertCircle, Clock, ArrowUpDown, SlidersHorizontal, X, PauseCircle, PlayCircle, Layers, TableProperties, TrendingUp, ClipboardList } from 'lucide-react';
+import { useStore, getProductStatusInfo, ProductStatusInfo } from '../store/useStore';
+import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter, AlertCircle, Clock, ArrowUpDown, SlidersHorizontal, X, PauseCircle, PlayCircle, Layers, TableProperties, TrendingUp, ClipboardList, Ban } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { differenceInDays } from 'date-fns';
 import QuantityInput from '../components/QuantityInput';
@@ -10,7 +10,7 @@ import ProductCompactView from '../components/ProductCompactView';
 type SortType = 'name_asc' | 'name_desc' | 'newest' | 'stock_low' | 'stock_high';
 
 export default function Products() {
-  const { products, stock, deleteProduct, showToast, vendors, lowStockAlertEnabled, expiryThreshold, productsPageState, setProductsPageState, toggleDiscontinued } = useStore();
+  const { products, stock, deleteProduct, showToast, vendors, lowStockAlertEnabled, expiryThreshold, productsPageState, setProductsPageState, toggleDiscontinued, toggleOutOfStock, setProductAvailability } = useStore();
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<'list' | 'compact' | 'replenishment'>(
     (productsPageState.activeTab as any) || 
@@ -23,7 +23,9 @@ export default function Products() {
   const [filterBrand, setFilterBrand] = useState(productsPageState.filterBrand);
   const [filterCategory, setFilterCategory] = useState(productsPageState.filterCategory);
   const [filterVendor, setFilterVendor] = useState(productsPageState.filterVendor);
-  const [filterDiscontinued, setFilterDiscontinued] = useState<'all' | 'active' | 'discontinued'>(productsPageState.filterDiscontinued || 'all');
+  const [filterDiscontinued, setFilterDiscontinued] = useState<'all' | 'active' | 'out_of_stock' | 'discontinued' | 'paused'>(
+    (productsPageState.filterDiscontinued as any) || 'all'
+  );
   const [sortOrder, setSortOrder] = useState<SortType>((productsPageState.sortOrder as SortType) || 'name_asc');
   const navigate = useNavigate();
 
@@ -74,16 +76,22 @@ export default function Products() {
     setIsSubmittingAdjust(true);
     try {
       const currentEntry = adjustGroup.stockEntries.find((s: any) => s.stock_id === selectedStockId) || adjustGroup.stockEntries[0];
+      const prevQty = currentEntry ? Number(currentEntry.quantity) || 0 : 0;
+      const delta = parsedQty - prevQty;
+      const deltaStr = delta >= 0 ? `+${delta}` : `${delta}`;
+      const changeNote = `[${deltaStr}=${parsedQty}] ${adjustNote.trim() || '盤點校正'}`.trim();
 
       const payload = {
         stock_id: currentEntry?.stock_id,
         product_id: p.product_id,
         quantity: parsedQty,
+        delta: delta,
+        final_quantity: parsedQty,
         location: currentEntry?.location || '倉庫',
         floor: currentEntry?.floor || '1F',
         area: currentEntry?.area || 'A區',
         specification: currentEntry?.specification || '',
-        note: adjustNote.trim() || '盤點校正',
+        note: changeNote,
         operator: useStore.getState().operator
       };
 
@@ -218,8 +226,12 @@ export default function Products() {
         if (filterBrand && p.brand !== filterBrand) return false;
         if (filterCategory && p.category !== filterCategory) return false;
         if (filterVendor && p.vendor_id !== filterVendor) return false;
-        if (filterDiscontinued === 'active' && p.is_discontinued) return false;
-        if (filterDiscontinued === 'discontinued' && !p.is_discontinued) return false;
+        
+        const statusInfo = getProductStatusInfo(p);
+        if (filterDiscontinued === 'active' && statusInfo.isPaused) return false;
+        if (filterDiscontinued === 'out_of_stock' && statusInfo.status !== 'out_of_stock') return false;
+        if (filterDiscontinued === 'discontinued' && statusInfo.status !== 'discontinued') return false;
+        if (filterDiscontinued === 'paused' && !statusInfo.isPaused) return false;
         
         return true;
      });
@@ -320,11 +332,11 @@ export default function Products() {
               </div>
 
               <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap justify-end">
-                {/* Discontinued quick filter pill */}
-                <div className="flex bg-white/5 border border-white/10 rounded-full p-0.5 text-xs">
+                {/* Status quick filter pills */}
+                <div className="flex bg-white/5 border border-white/10 rounded-full p-0.5 text-xs overflow-x-auto max-w-full">
                   <button
                     onClick={() => setFilterDiscontinued('all')}
-                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all ${
+                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
                       filterDiscontinued === 'all' ? 'bg-white/20 text-white' : 'text-slate-400 hover:text-white'
                     }`}
                   >
@@ -332,19 +344,27 @@ export default function Products() {
                   </button>
                   <button
                     onClick={() => setFilterDiscontinued('active')}
-                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all ${
+                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
                       filterDiscontinued === 'active' ? 'bg-emerald-500/30 text-emerald-300' : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    供應中
+                    🟢 正常供應
+                  </button>
+                  <button
+                    onClick={() => setFilterDiscontinued('out_of_stock')}
+                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
+                      filterDiscontinued === 'out_of_stock' ? 'bg-amber-500/30 text-amber-300' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    🟡 暫時缺貨
                   </button>
                   <button
                     onClick={() => setFilterDiscontinued('discontinued')}
-                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all ${
-                      filterDiscontinued === 'discontinued' ? 'bg-amber-500/30 text-amber-300' : 'text-slate-400 hover:text-white'
+                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
+                      filterDiscontinued === 'discontinued' ? 'bg-purple-500/30 text-purple-300' : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    暫時停產
+                    🟣 暫時停產
                   </button>
                 </div>
 
@@ -441,10 +461,13 @@ export default function Products() {
             const isLowStock = lowStockAlertEnabled && group.totalStock <= alertThreshold;
             const isExpired = group.isExpired;
             const isExpiringSoon = group.isExpiringSoon;
-            const isDiscontinued = !!p.is_discontinued;
+            const statusInfo = getProductStatusInfo(p);
+            const isDiscontinued = statusInfo.status === 'discontinued';
+            const isOutOfStock = statusInfo.status === 'out_of_stock';
+            const isPaused = statusInfo.isPaused;
 
             return (
-              <div key={groupId} className={`glass-panel border ${isDiscontinued ? 'border-amber-500/40 bg-amber-500/5' : isExpired ? 'border-red-500/50 bg-red-500/5' : isExpiringSoon ? 'border-orange-500/50 bg-orange-500/5' : isLowStock ? 'border-amber-500/50 bg-amber-500/5' : 'border-[var(--color-glass-border)]'} rounded-xl p-4 transition-all shadow-sm`}>
+              <div key={groupId} className={`glass-panel border ${isDiscontinued ? 'border-purple-500/40 bg-purple-500/5' : isOutOfStock ? 'border-amber-500/40 bg-amber-500/5' : isExpired ? 'border-red-500/50 bg-red-500/5' : isExpiringSoon ? 'border-orange-500/50 bg-orange-500/5' : isLowStock ? 'border-amber-500/50 bg-amber-500/5' : 'border-[var(--color-glass-border)]'} rounded-xl p-4 transition-all shadow-sm`}>
                 <div className="flex justify-between items-start mb-2">
                   <div className="flex-1 pr-2">
                     <h3 className="font-bold text-[var(--color-text-main)] text-base flex flex-wrap gap-1 items-center">
@@ -454,9 +477,15 @@ export default function Products() {
                     </h3>
                     <div className="flex flex-wrap gap-1.5 mt-2">
                        {isDiscontinued && (
+                         <span className="text-[10px] font-bold px-2 py-0.5 bg-purple-500/20 text-purple-300 rounded-md flex items-center gap-1 border border-purple-500/40 shadow-sm">
+                           <PauseCircle className="w-3 h-3 text-purple-400" />
+                           🟣 暫時停產 (原廠生產中)
+                         </span>
+                       )}
+                       {isOutOfStock && (
                          <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-500/20 text-amber-300 rounded-md flex items-center gap-1 border border-amber-500/40 shadow-sm">
-                           <PauseCircle className="w-3 h-3 text-amber-400" />
-                           暫時停產 (廠商生產中)
+                           <Ban className="w-3 h-3 text-amber-400" />
+                           🟡 暫時缺貨 (待補貨)
                          </span>
                        )}
                        {isExpired && (
@@ -469,7 +498,7 @@ export default function Products() {
                            <Clock className="w-3 h-3" /> 即將到期
                          </span>
                        )}
-                       {isLowStock && !isDiscontinued && (
+                       {isLowStock && !isPaused && (
                          <span className="text-[10px] font-bold px-1.5 py-0.5 bg-amber-500/20 text-amber-500 rounded flex items-center gap-1 border border-amber-500/30">
                            補貨警示
                          </span>
@@ -500,27 +529,31 @@ export default function Products() {
                 {isGroupExpanded && (
                   <div className="mt-3 pt-3 border-t border-white/5 space-y-3 animate-in fade-in slide-in-from-top-2">
                     {/* Basic Info & Actions */}
-                    <div className="flex items-center justify-between p-2 bg-white/5 rounded-lg border border-white/5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between p-2 bg-white/5 rounded-lg border border-white/5 gap-2">
                         <div className="text-xs">
                            <span className="text-[var(--color-text-dim)]">分類:</span> <span className="text-white ml-1">{p.category || '未分類'}</span>
                         </div>
-                        <div className="flex gap-2 items-center">
-                           <button
-                             onClick={() => toggleDiscontinued(p.product_id)}
-                             className={`px-2 py-1 text-xs font-bold rounded-lg border flex items-center gap-1 transition-all ${
-                               isDiscontinued
-                                 ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/30'
-                                 : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border-amber-500/30'
+                        <div className="flex gap-1.5 items-center flex-wrap">
+                           {/* Status quick toggle dropdown / buttons */}
+                           <select
+                             value={statusInfo.status}
+                             onChange={(e) => setProductAvailability(p.product_id, e.target.value as any)}
+                             className={`px-2 py-1 text-xs font-bold rounded-lg border outline-none transition-all cursor-pointer ${
+                               statusInfo.status === 'discontinued'
+                                 ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+                                 : statusInfo.status === 'out_of_stock'
+                                 ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                 : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                              }`}
-                             title={isDiscontinued ? '恢復正常供應' : '設為暫時停產'}
                            >
-                             {isDiscontinued ? <PlayCircle className="w-3.5 h-3.5 text-emerald-400" /> : <PauseCircle className="w-3.5 h-3.5 text-amber-400" />}
-                             {isDiscontinued ? '恢復供應' : '標記停產'}
-                           </button>
-                           <button onClick={() => navigate(`/add-product?editId=${p.product_id}`)} className="p-2 glass-panel text-[var(--color-accent-blue)] rounded-lg">
+                             <option value="normal" className="bg-[#0f172a] text-emerald-300">🟢 正常供應</option>
+                             <option value="out_of_stock" className="bg-[#0f172a] text-amber-300">🟡 暫時缺貨</option>
+                             <option value="discontinued" className="bg-[#0f172a] text-purple-300">🟣 暫時停產</option>
+                           </select>
+                           <button onClick={() => navigate(`/add-product?editId=${p.product_id}`)} className="p-2 glass-panel text-[var(--color-accent-blue)] rounded-lg hover:bg-white/10" title="編輯商品">
                              <Pencil className="w-4 h-4" />
                            </button>
-                           <button onClick={() => setConfirmDeleteId(p.product_id)} className="p-2 glass-panel text-red-400 rounded-lg">
+                           <button onClick={() => setConfirmDeleteId(p.product_id)} className="p-2 glass-panel text-red-400 rounded-lg hover:bg-red-500/10" title="刪除商品">
                              <Trash2 className="w-4 h-4" />
                            </button>
                         </div>

@@ -296,7 +296,12 @@ export default function StockManage() {
       actionName = 'stockOut';
     } else {
       actionName = 'adjustStock';
-      payload.note = note;
+      const prevQty = selectedStock ? Number(selectedStock.quantity) || 0 : 0;
+      const delta = parsedQty - prevQty;
+      const deltaStr = delta >= 0 ? `+${delta}` : `${delta}`;
+      payload.delta = delta;
+      payload.final_quantity = parsedQty;
+      payload.note = `[${deltaStr}=${parsedQty}] ${note.trim() || '盤點校正'}`.trim();
     }
 
     try {

@@ -609,7 +609,7 @@ export default function SetupGuide() {
   if(action === 'stockOut') {
     var stockSheet = ss.getSheetByName('stock');
     var transSheet = ss.getSheetByName('transactions');
-    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
+    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
     var stockId = data.stock_id || [data.product_id, data.location, data.floor, data.area, data.expiry_date || '', data.specification || ''].join('_').replace(/_+$/, '');
 
     if(stockSheet && stockSheet.getLastRow() > 1) {
@@ -649,7 +649,7 @@ export default function SetupGuide() {
       transSheet.getRange(1, 3).setValue('name');
       transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
     }
-    data.transaction_id = data.batch_tx_id || data.transaction_id || Utilities.getUuid();
+    data.transaction_id = data.transaction_id || (data.batch_tx_id ? data.batch_tx_id + '_' + Utilities.getUuid().substring(0,6) : Utilities.getUuid());
     data.type = data.type || 'stock_out';
     data.date = data.date || now;
     data.note = data.note || '';
@@ -667,8 +667,13 @@ export default function SetupGuide() {
     var existingTxRow = -1;
     if (txIdIdx !== -1 && transSheet.getLastRow() > 1) {
       var tVals = transSheet.getDataRange().getValues();
+      var prodIdx = transHeaders.indexOf('product_id');
+      var specIdx = transHeaders.indexOf('specification');
       for (var tr = 1; tr < tVals.length; tr++) {
-        if (tVals[tr][txIdIdx] && String(tVals[tr][txIdIdx]).trim() === String(data.transaction_id).trim()) {
+        var txIdMatch = tVals[tr][txIdIdx] && String(tVals[tr][txIdIdx]).trim() === String(data.transaction_id).trim();
+        var prodMatch = (prodIdx === -1) || (String(tVals[tr][prodIdx] || '').trim() === String(data.product_id || '').trim());
+        var specMatch = (specIdx === -1) || (String(tVals[tr][specIdx] || '').trim() === String(data.specification || '').trim());
+        if (txIdMatch && prodMatch && specMatch) {
           existingTxRow = tr + 1;
           break;
         }
@@ -686,7 +691,7 @@ export default function SetupGuide() {
   if(action === 'adjustStock') {
     var stockSheet = ss.getSheetByName('stock');
     var transSheet = ss.getSheetByName('transactions');
-    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
+    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
     var stockId = data.stock_id || [data.product_id, data.location, data.floor, data.area, data.expiry_date || '', data.specification || ''].join('_').replace(/_+$/, '');
     
     if(stockSheet && stockSheet.getLastRow() > 1) {

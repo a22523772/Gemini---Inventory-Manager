@@ -33,7 +33,7 @@ export default function AddProduct() {
   const [costPrice, setCostPrice] = useState('');
   const [vendorId, setVendorId] = useState('');
   const [hasExpiry, setHasExpiry] = useState(false);
-  const [isDiscontinued, setIsDiscontinued] = useState(false);
+  const [productStatus, setProductStatus] = useState<'normal' | 'out_of_stock' | 'discontinued'>('normal');
   const [minStock, setMinStock] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
 
@@ -52,7 +52,7 @@ export default function AddProduct() {
         setCostPrice(draft.costPrice || '');
         setVendorId(draft.vendorId || '');
         setHasExpiry(draft.hasExpiry || false);
-        setIsDiscontinued(draft.isDiscontinued || false);
+        setProductStatus(draft.productStatus || (draft.isDiscontinued ? 'discontinued' : 'normal'));
         setMinStock(draft.minStock || '');
         if (draft.expiryDate) setExpiryDate(draft.expiryDate);
       } catch (e) {
@@ -85,7 +85,9 @@ export default function AddProduct() {
       setCostPrice(existingProduct.cost_price?.toString() || '');
       setVendorId(existingProduct.vendor_id || '');
       setHasExpiry(existingProduct.has_expiry || false);
-      setIsDiscontinued(existingProduct.is_discontinued || false);
+      
+      const st = existingProduct.status || (existingProduct.is_discontinued ? 'discontinued' : existingProduct.is_out_of_stock ? 'out_of_stock' : 'normal');
+      setProductStatus(st as any);
       setMinStock(existingProduct.min_stock?.toString() || '');
     }
   }, [existingProduct]);
@@ -113,6 +115,9 @@ export default function AddProduct() {
        if (existingVendor) actualVendorId = existingVendor.vendor_id;
     }
 
+    const isDiscontinuedVal = productStatus === 'discontinued';
+    const isOutOfStockVal = productStatus === 'out_of_stock';
+
     const productData = {
       product_id: productId,
       barcode,
@@ -124,7 +129,9 @@ export default function AddProduct() {
       cost_price: Number(costPrice) || 0,
       vendor_id: actualVendorId,
       has_expiry: hasExpiry,
-      is_discontinued: isDiscontinued,
+      status: productStatus,
+      is_discontinued: isDiscontinuedVal,
+      is_out_of_stock: isOutOfStockVal,
       min_stock: minStock !== '' ? Number(minStock) : undefined
     };
 
@@ -297,18 +304,61 @@ export default function AddProduct() {
               </label>
             </div>
 
-            <div className="flex items-start space-x-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl">
-              <input 
-                type="checkbox" 
-                id="is_discontinued" 
-                checked={isDiscontinued} 
-                onChange={(e) => setIsDiscontinued(e.target.checked)}
-                className="w-5 h-5 rounded min-w-5 mt-0.5 border-amber-500/30 bg-white/5 accent-amber-500"
-              />
-              <label htmlFor="is_discontinued" className="text-xs font-bold text-amber-300 select-none cursor-pointer">
-                <div>⏸️ 暫時停產（廠商生產中）</div>
-                <div className="text-[10px] text-amber-200/70 font-normal mt-0.5">勾選後將在商品列表與補貨清單中特別標記為「暫時停產」，等廠商生產完畢後可隨時解除。</div>
+            {/* 供應與生產狀態選擇 */}
+            <div className="pt-2 border-t border-white/5 space-y-2">
+              <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px]">
+                商品供應與生產狀態
               </label>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {/* 1. 正常供應 */}
+                <div 
+                  onClick={() => setProductStatus('normal')}
+                  className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                    productStatus === 'normal'
+                      ? 'border-emerald-500 bg-emerald-500/15 text-white shadow-sm'
+                      : 'border-white/10 bg-white/5 text-zinc-400 hover:border-white/20'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-xs">
+                    <span className="text-emerald-400">🟢</span>
+                    <span className={productStatus === 'normal' ? 'text-emerald-300' : 'text-zinc-300'}>正常供應</span>
+                  </div>
+                  <div className="text-[10px] text-zinc-400 mt-1 leading-tight">納入常規庫存與報表管理</div>
+                </div>
+
+                {/* 2. 暫時缺貨 */}
+                <div 
+                  onClick={() => setProductStatus('out_of_stock')}
+                  className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                    productStatus === 'out_of_stock'
+                      ? 'border-amber-500 bg-amber-500/15 text-white shadow-sm'
+                      : 'border-white/10 bg-white/5 text-zinc-400 hover:border-white/20'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-xs">
+                    <span className="text-amber-400">🟡</span>
+                    <span className={productStatus === 'out_of_stock' ? 'text-amber-300' : 'text-zinc-300'}>暫時缺貨</span>
+                  </div>
+                  <div className="text-[10px] text-zinc-400 mt-1 leading-tight">獨立於專報，待進貨回補</div>
+                </div>
+
+                {/* 3. 暫時停產 */}
+                <div 
+                  onClick={() => setProductStatus('discontinued')}
+                  className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                    productStatus === 'discontinued'
+                      ? 'border-purple-500 bg-purple-500/15 text-white shadow-sm'
+                      : 'border-white/10 bg-white/5 text-zinc-400 hover:border-white/20'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-xs">
+                    <span className="text-purple-400">🟣</span>
+                    <span className={productStatus === 'discontinued' ? 'text-purple-300' : 'text-zinc-300'}>暫時停產</span>
+                  </div>
+                  <div className="text-[10px] text-zinc-400 mt-1 leading-tight">原廠生產中，暫緩日常警示</div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

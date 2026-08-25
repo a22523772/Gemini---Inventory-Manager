@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useStore } from '../store/useStore';
+import { useStore, parseToDate, getTxTimestamp, normalizeDateToYMD, formatTxDate, formatAdjustQuantity } from '../store/useStore';
 import { 
   PackageOpen, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Calendar, 
   Search, Filter, X, Eye, Edit, Trash2, 
@@ -10,102 +10,7 @@ import { format, subDays, startOfMonth } from 'date-fns';
 import { useSearchParams, Link } from 'react-router-dom';
 import QuantityInput from '../components/QuantityInput';
 
-/**
- * Normalizes any transaction date representation to 'YYYY-MM-DD' in local timezone.
- */
-export const normalizeDateToYMD = (dateVal?: any): string => {
-  if (!dateVal) return '';
-  if (dateVal instanceof Date) {
-    return isNaN(dateVal.getTime()) ? '' : format(dateVal, 'yyyy-MM-dd');
-  }
-  const str = String(dateVal).trim();
-  if (!str) return '';
-
-  // 1. If ISO string containing T or ending in Z -> parse in local timezone
-  if (str.includes('T') || str.endsWith('Z')) {
-    try {
-      const d = new Date(str);
-      if (!isNaN(d.getTime())) {
-        return format(d, 'yyyy-MM-dd');
-      }
-    } catch {}
-  }
-
-  // 2. Match YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
-  const ymdMatch = str.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
-  if (ymdMatch) {
-    const y = ymdMatch[1];
-    const m = ymdMatch[2].padStart(2, '0');
-    const d = ymdMatch[3].padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }
-
-  // 3. Match MM/DD/YYYY
-  const mdyMatch = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
-  if (mdyMatch) {
-    const m = mdyMatch[1].padStart(2, '0');
-    const d = mdyMatch[2].padStart(2, '0');
-    const y = mdyMatch[3];
-    return `${y}-${m}-${d}`;
-  }
-
-  // 4. Any generic date parse fallback
-  try {
-    const d = new Date(str);
-    if (!isNaN(d.getTime())) {
-      return format(d, 'yyyy-MM-dd');
-    }
-  } catch {}
-
-  return '';
-};
-
-/**
- * Returns numeric milliseconds for accurate timestamp sorting.
- */
-export const getTxTimestamp = (dateVal?: any): number => {
-  if (!dateVal) return 0;
-  if (typeof dateVal === 'number') return isNaN(dateVal) ? 0 : dateVal;
-  if (dateVal instanceof Date) return isNaN(dateVal.getTime()) ? 0 : dateVal.getTime();
-  const str = String(dateVal).trim();
-  if (!str) return 0;
-
-  if (str.includes('T') || str.endsWith('Z')) {
-    try {
-      const d = new Date(str);
-      if (!isNaN(d.getTime())) return d.getTime();
-    } catch {}
-  }
-
-  const ymdMatch = str.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
-  if (ymdMatch) {
-    const y = parseInt(ymdMatch[1], 10);
-    const m = parseInt(ymdMatch[2], 10) - 1;
-    const d = parseInt(ymdMatch[3], 10);
-    const hh = ymdMatch[4] !== undefined ? parseInt(ymdMatch[4], 10) : 0;
-    const mm = ymdMatch[5] !== undefined ? parseInt(ymdMatch[5], 10) : 0;
-    const ss = ymdMatch[6] !== undefined ? parseInt(ymdMatch[6], 10) : 0;
-    return new Date(y, m, d, hh, mm, ss).getTime();
-  }
-
-  const mdyMatch = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
-  if (mdyMatch) {
-    const m = parseInt(mdyMatch[1], 10) - 1;
-    const d = parseInt(mdyMatch[2], 10);
-    const y = parseInt(mdyMatch[3], 10);
-    const hh = mdyMatch[4] !== undefined ? parseInt(mdyMatch[4], 10) : 0;
-    const mm = mdyMatch[5] !== undefined ? parseInt(mdyMatch[5], 10) : 0;
-    const ss = mdyMatch[6] !== undefined ? parseInt(mdyMatch[6], 10) : 0;
-    return new Date(y, m, d, hh, mm, ss).getTime();
-  }
-
-  try {
-    const d = new Date(str);
-    if (!isNaN(d.getTime())) return d.getTime();
-  } catch {}
-
-  return 0;
-};
+export { parseToDate, getTxTimestamp, normalizeDateToYMD, formatTxDate };
 
 export default function Transactions() {
   const { 
@@ -270,46 +175,6 @@ export default function Transactions() {
     return vendorMap.get(vid) || vid;
   };
 
-  const formatTxDate = (dateVal?: string) => {
-    if (!dateVal) return '-';
-    const str = String(dateVal).trim();
-    if (!str) return '-';
-    
-    // If ISO string with T or Z -> format in local time
-    if (str.includes('T') || str.endsWith('Z')) {
-      try {
-        const d = new Date(str);
-        if (!isNaN(d.getTime())) {
-          return format(d, 'yyyy-MM-dd HH:mm:ss');
-        }
-      } catch {}
-    }
-
-    // Normalization to YYYY-MM-DD HH:mm:ss if applicable
-    const match = str.match(/(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
-    if (match) {
-      const y = match[1];
-      const m = match[2].padStart(2, '0');
-      const d = match[3].padStart(2, '0');
-      if (match[4] !== undefined) {
-        const hh = match[4].padStart(2, '0');
-        const mm = (match[5] || '00').padStart(2, '0');
-        const ss = (match[6] || '00').padStart(2, '0');
-        return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
-      }
-      return `${y}-${m}-${d}`;
-    }
-
-    try {
-      const d = new Date(str);
-      if (!isNaN(d.getTime())) {
-        return format(d, 'yyyy-MM-dd HH:mm:ss');
-      }
-    } catch {}
-
-    return str;
-  };
-
   const isForcedTx = (t: any) => {
     if (t.note && (t.note.includes('強行出貨') || t.note.includes('[強行出貨]'))) return true;
     if (!t.product_id) return true;
@@ -351,6 +216,7 @@ export default function Transactions() {
         const op = String(t.operator || '').toLowerCase();
         const note = String(t.note || '').toLowerCase();
         const txid = String(t.transaction_id || '').toLowerCase();
+        const batchId = String(t.batch_id || t.batch_tx_id || '').toLowerCase();
         const spec = String(t.specification || product?.specification || '').toLowerCase();
         const loc = `${t.location || ''} ${t.floor || ''} ${t.area || ''}`.toLowerCase();
         const vendor = (vendorMap.get(t.vendor_id) || t.vendor_id || '').toLowerCase();
@@ -363,6 +229,7 @@ export default function Transactions() {
           op.includes(s) ||
           note.includes(s) ||
           txid.includes(s) ||
+          batchId.includes(s) ||
           spec.includes(s) ||
           loc.includes(s) ||
           vendor.includes(s);
@@ -387,23 +254,36 @@ export default function Transactions() {
       return filteredTransactions.map(t => [t]);
     }
 
-    // Grouped by Online Order View: ONLY combine items that share the EXACT same non-empty online_order_id
+    // Grouped by Online Order / Batch View: Combine items that share online_order_id, batch_tx_id, or batch prefix
     const result: (typeof filteredTransactions)[] = [];
-    const orderMap = new Map<string, typeof filteredTransactions>();
+    const groupMap = new Map<string, typeof filteredTransactions>();
 
     filteredTransactions.forEach(t => {
-      const orderId = t.online_order_id ? String(t.online_order_id).trim() : '';
-      if (orderId) {
-        const existing = orderMap.get(orderId);
+      let groupKey = '';
+      if (t.online_order_id && String(t.online_order_id).trim()) {
+        groupKey = `ORDER_${String(t.online_order_id).trim()}`;
+      } else if (t.batch_id && String(t.batch_id).trim()) {
+        groupKey = `BATCH_${String(t.batch_id).trim()}`;
+      } else if (t.batch_tx_id && String(t.batch_tx_id).trim()) {
+        groupKey = `BATCH_${String(t.batch_tx_id).trim()}`;
+      } else if (t.transaction_id && /^TX_\d+_\d+$/.test(String(t.transaction_id).trim())) {
+        groupKey = `BATCH_${String(t.transaction_id).trim().replace(/_\d+$/, '')}`;
+      } else if (t.note) {
+        const match = t.note.match(/\[批次出貨\s+([^\]]+)\]/);
+        if (match) groupKey = `BATCH_${match[1].trim()}`;
+      }
+
+      if (groupKey) {
+        const existing = groupMap.get(groupKey);
         if (existing) {
           existing.push(t);
         } else {
           const newGroup = [t];
-          orderMap.set(orderId, newGroup);
+          groupMap.set(groupKey, newGroup);
           result.push(newGroup);
         }
       } else {
-        // Individual records without online_order_id are kept independent!
+        // Individual records without online_order_id / batch id are kept independent!
         result.push([t]);
       }
     });
@@ -484,6 +364,12 @@ export default function Transactions() {
       const typeLbl = getTypeLabel(t.type);
       const forced = isForcedTx(t) ? '是' : '否';
 
+      const formattedQty = t.type === 'adjust' 
+        ? formatAdjustQuantity(t).display 
+        : t.type === 'stock_in' 
+          ? `+${t.quantity}` 
+          : `-${t.quantity}`;
+
       return [
         `"${String(t.transaction_id || '').replace(/"/g, '""')}"`,
         `"${String(t.online_order_id || '').replace(/"/g, '""')}"`,
@@ -492,7 +378,7 @@ export default function Transactions() {
         `"${String(t.product_id || '').replace(/"/g, '""')}"`,
         `"${String(pName || '').replace(/"/g, '""')}"`,
         `"${String(t.specification || '').replace(/"/g, '""')}"`,
-        t.quantity,
+        `"${formattedQty}"`,
         cost,
         price,
         `"${String(vendorName || '').replace(/"/g, '""')}"`,
@@ -932,9 +818,20 @@ export default function Transactions() {
                   <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-white/5 text-sm">
                     <div>
                       <p className="text-[10px] text-[var(--color-text-dim)] uppercase font-bold">異動數量</p>
-                      <p className={`font-mono font-black text-base ${t.type === 'stock_in' ? 'text-sky-400' : 'text-rose-400'}`}>
-                        {t.type === 'stock_in' ? `+${t.quantity}` : `-${t.quantity}`}
-                      </p>
+                      {t.type === 'adjust' ? (
+                        <div className="flex items-center gap-1">
+                          <p className="font-mono font-black text-base text-amber-400">
+                            {formatAdjustQuantity(t).display}
+                          </p>
+                          <span className="text-[10px] text-amber-300/80 bg-amber-500/10 px-1 rounded border border-amber-500/20 font-sans font-normal">
+                            (變化量=最終)
+                          </span>
+                        </div>
+                      ) : (
+                        <p className={`font-mono font-black text-base ${t.type === 'stock_in' ? 'text-sky-400' : 'text-rose-400'}`}>
+                          {t.type === 'stock_in' ? `+${t.quantity}` : `-${t.quantity}`}
+                        </p>
+                      )}
                     </div>
                     <div>
                       <p className="text-[10px] text-[var(--color-text-dim)] uppercase font-bold">
@@ -1073,7 +970,9 @@ export default function Transactions() {
                                 )}
                               </div>
                             </div>
-                            <span className="text-rose-400 font-mono font-black shrink-0 text-base">x{t.quantity}</span>
+                            <span className={`font-mono font-black shrink-0 text-base ${t.type === 'adjust' ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {t.type === 'adjust' ? formatAdjustQuantity(t).display : `x${t.quantity}`}
+                            </span>
                           </div>
                           <div className="flex justify-end gap-1.5 mt-2">
                             <button
@@ -1176,7 +1075,17 @@ export default function Transactions() {
               </div>
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                 <span className="text-[var(--color-text-dim)]">異動數量</span>
-                <span className="col-span-2 text-[var(--color-accent-blue)] font-bold font-mono">{selectedTxForView.quantity}</span>
+                <span className="col-span-2 font-bold font-mono">
+                  {selectedTxForView.type === 'adjust' ? (
+                    <span className="text-amber-400">
+                      {formatAdjustQuantity(selectedTxForView).display} <span className="text-xs text-amber-300/80 font-normal font-sans">(變化量=最終數量)</span>
+                    </span>
+                  ) : (
+                    <span className={selectedTxForView.type === 'stock_in' ? 'text-sky-400' : 'text-rose-400'}>
+                      {selectedTxForView.type === 'stock_in' ? `+${selectedTxForView.quantity}` : `-${selectedTxForView.quantity}`}
+                    </span>
+                  )}
+                </span>
               </div>
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                 <span className="text-[var(--color-text-dim)]">金額 / 價格</span>
