@@ -10,6 +10,7 @@ import {
   PieChart, Pie, Cell, Legend, LabelList
 } from 'recharts';
 import { format, differenceInDays, subDays } from 'date-fns';
+import { normalizeDateToYMD } from './Transactions';
 
 // Suppress Recharts defaultProps deprecation warning in React 18
 const originalWarn = console.warn;
@@ -107,10 +108,13 @@ export default function Reports() {
     });
 
     // Analyze Transactions for Hot/Stagnant Items (last 30 days)
-    const thirtyDaysAgo = subDays(now, 30);
-    const recentOuts = transactions.filter(t => 
-      t.type === 'stock_out' && t.date && new Date(t.date) >= thirtyDaysAgo
-    );
+    const thirtyDaysAgoStr = format(subDays(now, 30), 'yyyy-MM-dd');
+    const recentOuts = transactions.filter(t => {
+      const isOut = t.type === 'stock_out' || (t.type && t.type.startsWith('stock_out'));
+      if (!isOut) return false;
+      const txYMD = normalizeDateToYMD(t.date);
+      return txYMD && txYMD >= thirtyDaysAgoStr;
+    });
 
     const productSales: Record<string, number> = {};
     recentOuts.forEach(t => {

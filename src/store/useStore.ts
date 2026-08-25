@@ -3,6 +3,50 @@ import { dbProducts, dbStock, dbVendors, dbSyncQueue, dbSettings, dbTransactions
 import { v4 as uuidv4 } from 'uuid';
 import { format, subDays } from 'date-fns';
 
+export const getTxTimestamp = (dateVal?: any): number => {
+  if (!dateVal) return 0;
+  if (typeof dateVal === 'number') return isNaN(dateVal) ? 0 : dateVal;
+  if (dateVal instanceof Date) return isNaN(dateVal.getTime()) ? 0 : dateVal.getTime();
+  const str = String(dateVal).trim();
+  if (!str) return 0;
+
+  if (str.includes('T') || str.endsWith('Z')) {
+    try {
+      const d = new Date(str);
+      if (!isNaN(d.getTime())) return d.getTime();
+    } catch {}
+  }
+
+  const ymdMatch = str.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (ymdMatch) {
+    const y = parseInt(ymdMatch[1], 10);
+    const m = parseInt(ymdMatch[2], 10) - 1;
+    const d = parseInt(ymdMatch[3], 10);
+    const hh = ymdMatch[4] !== undefined ? parseInt(ymdMatch[4], 10) : 0;
+    const mm = ymdMatch[5] !== undefined ? parseInt(ymdMatch[5], 10) : 0;
+    const ss = ymdMatch[6] !== undefined ? parseInt(ymdMatch[6], 10) : 0;
+    return new Date(y, m, d, hh, mm, ss).getTime();
+  }
+
+  const mdyMatch = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (mdyMatch) {
+    const m = parseInt(mdyMatch[1], 10) - 1;
+    const d = parseInt(mdyMatch[2], 10);
+    const y = parseInt(mdyMatch[3], 10);
+    const hh = mdyMatch[4] !== undefined ? parseInt(mdyMatch[4], 10) : 0;
+    const mm = mdyMatch[5] !== undefined ? parseInt(mdyMatch[5], 10) : 0;
+    const ss = mdyMatch[6] !== undefined ? parseInt(mdyMatch[6], 10) : 0;
+    return new Date(y, m, d, hh, mm, ss).getTime();
+  }
+
+  try {
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) return d.getTime();
+  } catch {}
+
+  return 0;
+};
+
 const normalizeKeys = (obj: any) => {
   if (!obj || typeof obj !== 'object') return obj;
   const result: any = {};
@@ -173,19 +217,28 @@ const normalizeAndFillOnlineOrders = (rawItems: any[], _products?: Product[]): O
       price: priceNum || (lastOrderHeader?.order_id === order_id ? lastOrderHeader.price : 0)
     };
 
-    const product_id = String(getVal([
+    let product_id = String(getVal([
       'product_id', 'productid', 'productcode', 'sku', 'itemid', 'itemcode', 'barcode',
       '商品id', '商品ID', '商品編號', '商品料號', '商品貨號', '商品條碼', '商品代碼',
       '產品編號', '產品id', '產品ID', '產品料號', '代碼', '料號', '貨號', '條碼', 'SKU', 'SKU編號', '主商品貨號', '規格貨號'
     ])).trim();
 
-    const product_name = String(getVal([
+    let product_name = String(getVal([
       'product_name', 'productname', 'itemname', 'name', 'title',
       '商品名稱', '產品名稱', '品名', '名稱', '商品', '產品'
     ])).trim();
 
     const quantity = Number(getVal(['quantity', 'qty', 'count', '數量', '件數', '個數', '買家購買數量'])) || 1;
     const specification = String(getVal(['specification', 'spec', 'variant', '商品規格', '規格', '規格描述', '選項'])).trim();
+
+    // Fallback: if product_name is empty but product_id is provided, use product_id as name
+    if (!product_name && product_id) {
+      product_name = product_id;
+    } else if (!product_name && specification) {
+      product_name = specification;
+    } else if (!product_name) {
+      product_name = '非系統商品 (未命名)';
+    }
 
     const calcStatus = calculateOrderStatus(shipping_deadline, order_status);
 
@@ -256,7 +309,7 @@ interface AppState {
   overwriteCloudTransactions: () => Promise<boolean>;
   editTransaction: (transactionId: string, updatedFields: Partial<Transaction>) => Promise<void>;
   deleteTransaction: (transactionId: string) => Promise<void>;
-  deleteTransactionGroup: (groupId: string) => Promise<void>;
+  deleteTransactionGroup: (groupIdOrIds: string | string[]) => Promise<void>;
   toastMessage: string | null;
   showToast: (msg: string) => void;
   lowStockAlertEnabled: boolean;
@@ -286,6 +339,7 @@ interface AppState {
     filterLocation: string;
     filterVendor: string;
     showFilters: boolean;
+    viewMode: 'detailed' | 'grouped_by_order';
   };
   setTransactionsPageState: (state: Partial<AppState['transactionsPageState']>) => void;
 
@@ -345,11 +399,12 @@ export const useStore = create<AppState>((set, get) => ({
     filterType: '',
     filterPlatform: '',
     searchTerm: '',
-    startDate: format(subDays(new Date(), 7), 'yyyy-MM-dd'),
-    endDate: format(new Date(), 'yyyy-MM-dd'),
+    startDate: '',
+    endDate: '',
     filterLocation: '',
     filterVendor: '',
-    showFilters: false
+    showFilters: false,
+    viewMode: 'detailed' as 'detailed' | 'grouped_by_order'
   },
   setTransactionsPageState: (newState) => {
     set((state) => ({ transactionsPageState: { ...state.transactionsPageState, ...newState } }));
@@ -460,7 +515,7 @@ export const useStore = create<AppState>((set, get) => ({
         products: pList, 
         stock: sList, 
         vendors: vList, 
-        transactions: tList.sort((a,b) => String(b.date || '').localeCompare(String(a.date || ''))),
+        transactions: tList.sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date)),
         onlineOrders: oList
       });
     } catch (e: any) {
@@ -491,10 +546,15 @@ export const useStore = create<AppState>((set, get) => ({
         updatedPayload.name = product.name;
     }
 
+    // Deterministic or generated transaction ID
+    const targetTxId = updatedPayload.transaction_id || `TX_${Date.now()}_${Math.random().toString(36).substring(2,6)}`;
+    const targetUniqueId = updatedPayload.id || targetTxId;
+    const finalPayload = { ...updatedPayload, transaction_id: targetTxId, id: targetUniqueId, operator: get().operator };
+
     const item: SyncItem = {
-      id: uuidv4(),
+      id: targetUniqueId,
       action,
-      payload: { ...updatedPayload, operator: get().operator },
+      payload: finalPayload,
       timestamp: new Date().toISOString()
     };
     await dbSyncQueue.setItem(item.id, item);
@@ -537,8 +597,8 @@ export const useStore = create<AppState>((set, get) => ({
         }
 
         const newTx: Transaction = {
-            id: uuidv4(),
-            transaction_id: updatedPayload.transaction_id || `TX_${Date.now()}_${Math.random().toString(36).substring(2,6)}`,
+            id: targetUniqueId,
+            transaction_id: targetTxId,
             online_order_id: updatedPayload.online_order_id || updatedPayload.order_id || '',
             platform: updatedPayload.platform || (updatedPayload.type && !['stock_in', 'stock_out', 'adjust'].includes(updatedPayload.type) ? updatedPayload.type.replace(/^stock_out\s*/, '') : '') || '',
             product_id: updatedPayload.product_id || '',
@@ -552,12 +612,20 @@ export const useStore = create<AppState>((set, get) => ({
             cost_price: Number(updatedPayload.cost_price) || 0,
             price: Number(updatedPayload.price) || 0,
             vendor_id: updatedPayload.vendor_id || '',
-            date: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
+            date: updatedPayload.date || format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
             note: updatedPayload.note || '',
             operator: get().operator
         };
 
-        const updatedTx = [newTx, ...transactions];
+        const existingTxIdx = transactions.findIndex(t => (t.id && t.id === newTx.id) || (t.transaction_id && t.transaction_id === newTx.transaction_id));
+        let updatedTx: Transaction[];
+        if (existingTxIdx >= 0) {
+            updatedTx = [...transactions];
+            updatedTx[existingTxIdx] = newTx;
+        } else {
+            updatedTx = [newTx, ...transactions];
+        }
+        updatedTx.sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date));
         await dbTransactions.setItem(newTx.id, newTx);
         
         set({ stock: updatedStock, transactions: updatedTx });
@@ -584,8 +652,8 @@ export const useStore = create<AppState>((set, get) => ({
         }
 
         const newTx: Transaction = {
-            id: uuidv4(),
-            transaction_id: updatedPayload.transaction_id || `TX_${Date.now()}_${Math.random().toString(36).substring(2,6)}`,
+            id: targetUniqueId,
+            transaction_id: targetTxId,
             online_order_id: updatedPayload.online_order_id || updatedPayload.order_id || '',
             platform: updatedPayload.platform || (updatedPayload.type && !['stock_in', 'stock_out', 'adjust'].includes(updatedPayload.type) ? updatedPayload.type.replace(/^stock_out\s*/, '') : '') || '',
             product_id: updatedPayload.product_id || '',
@@ -599,12 +667,20 @@ export const useStore = create<AppState>((set, get) => ({
             cost_price: product?.cost_price || 0,
             price: Number(updatedPayload.price) || 0,
             vendor_id: product?.vendor_id || '',
-            date: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
+            date: updatedPayload.date || format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
             note: updatedPayload.note || '',
             operator: get().operator
         };
 
-        const updatedTx = [newTx, ...transactions];
+        const existingTxIdx = transactions.findIndex(t => (t.id && t.id === newTx.id) || (t.transaction_id && t.transaction_id === newTx.transaction_id));
+        let updatedTx: Transaction[];
+        if (existingTxIdx >= 0) {
+            updatedTx = [...transactions];
+            updatedTx[existingTxIdx] = newTx;
+        } else {
+            updatedTx = [newTx, ...transactions];
+        }
+        updatedTx.sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date));
         await dbTransactions.setItem(newTx.id, newTx);
 
         set({ stock: updatedStock, transactions: updatedTx });
@@ -636,8 +712,8 @@ export const useStore = create<AppState>((set, get) => ({
         }
 
         const newTx: Transaction = {
-            id: uuidv4(),
-            transaction_id: updatedPayload.transaction_id || `TX_${Date.now()}_${Math.random().toString(36).substring(2,6)}`,
+            id: targetUniqueId,
+            transaction_id: targetTxId,
             online_order_id: updatedPayload.online_order_id || updatedPayload.order_id || '',
             platform: updatedPayload.platform || (updatedPayload.type && !['stock_in', 'stock_out', 'adjust'].includes(updatedPayload.type) ? updatedPayload.type.replace(/^stock_out\s*/, '') : '') || '',
             product_id: updatedPayload.product_id || '',
@@ -651,20 +727,31 @@ export const useStore = create<AppState>((set, get) => ({
             cost_price: product?.cost_price || 0,
             price: Number(updatedPayload.price) || 0,
             vendor_id: product?.vendor_id || '',
-            date: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
+            date: updatedPayload.date || format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
             note: updatedPayload.note || '',
             operator: get().operator
         };
 
-        const updatedTx = [newTx, ...transactions];
+        const existingTxIdx = transactions.findIndex(t => (t.id && t.id === newTx.id) || (t.transaction_id && t.transaction_id === newTx.transaction_id));
+        let updatedTx: Transaction[];
+        if (existingTxIdx >= 0) {
+            updatedTx = [...transactions];
+            updatedTx[existingTxIdx] = newTx;
+        } else {
+            updatedTx = [newTx, ...transactions];
+        }
+        updatedTx.sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date));
         await dbTransactions.setItem(newTx.id, newTx);
 
         set({ stock: updatedStock, transactions: updatedTx });
     }
 
-    set((state) => ({ 
-        syncQueue: [...state.syncQueue, item]
-    }));
+    set((state) => {
+        const queueExists = state.syncQueue.some(q => q.id === item.id || (q.payload?.transaction_id && q.payload.transaction_id === item.payload?.transaction_id));
+        return {
+            syncQueue: queueExists ? state.syncQueue.map(q => q.id === item.id ? item : q) : [...state.syncQueue, item]
+        };
+    });
     
     // Try to sync immediately
     get().syncData();
@@ -859,10 +946,23 @@ export const useStore = create<AppState>((set, get) => ({
           }
         });
 
-        const validT = (dT || []).map((item: any, idx: number) => {
+        const seenTxIds = new Set<string>();
+        const validT: any[] = [];
+
+        for (let idx = 0; idx < (dT || []).length; idx++) {
+          const item = dT[idx];
           const norm = normalizeKeys(item);
           const txId = norm.transaction_id ? String(norm.transaction_id).trim() : `TX_${Date.now()}_${idx}`;
-          const id = norm.id ? String(norm.id).trim() : `${txId}_${norm.product_id || ''}_${idx}`;
+          const id = (norm.id && String(norm.id).trim() !== '') ? `${String(norm.id).trim()}` : `${txId}_${norm.product_id || ''}_${idx}`;
+
+          // Avoid duplicate transaction records if the remote sheet has duplicate transaction_ids
+          if (norm.transaction_id && seenTxIds.has(txId)) {
+            continue;
+          }
+          if (norm.transaction_id) {
+            seenTxIds.add(txId);
+          }
+
           const online_order_id = norm.online_order_id || norm['網路訂單編號'] || norm.order_id || '';
           const platformVal = norm.platform || norm['平台'] || norm['銷售平台'] || (norm.type && !['stock_in', 'stock_out', 'adjust'].includes(norm.type) ? norm.type.replace(/^stock_out\s*/, '') : '') || '';
           const product_name = norm.product_name || norm.name || norm['商品名稱'] || norm['名稱'] || '';
@@ -882,7 +982,18 @@ export const useStore = create<AppState>((set, get) => ({
             costPriceVal = prodCostMap.get(pid) || 0;
           }
 
-          return {
+          const rawDate = norm.date || norm['日期'] || norm['異動時間'] || norm['時間'] || norm['date'] || '';
+          let cleanDate = String(rawDate || '').trim();
+          if (cleanDate && (cleanDate.includes('T') || cleanDate.endsWith('Z'))) {
+            try {
+              const d = new Date(cleanDate);
+              if (!isNaN(d.getTime())) {
+                cleanDate = format(d, 'yyyy-MM-dd HH:mm:ss');
+              }
+            } catch {}
+          }
+
+          validT.push({
             ...norm,
             id,
             transaction_id: txId,
@@ -893,14 +1004,15 @@ export const useStore = create<AppState>((set, get) => ({
             type: norm.type ? String(norm.type).trim() : 'stock_out',
             quantity: Number(norm.quantity) || 0,
             cost_price: costPriceVal,
-            price: priceVal
-          };
-        });
+            price: priceVal,
+            date: cleanDate
+          });
+        }
         await dbTransactions.clear();
         for (const t of validT) {
           await dbTransactions.setItem(t.id, t);
         }
-        set({ transactions: validT.sort((a: any, b: any) => String(b.date || '').localeCompare(String(a.date || ''))) });
+        set({ transactions: validT.sort((a: any, b: any) => getTxTimestamp(b.date) - getTxTimestamp(a.date)) });
       }
 
       // Online Orders
@@ -1272,9 +1384,18 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  deleteTransactionGroup: async (groupId: string) => {
+  deleteTransactionGroup: async (groupIdOrIds: string | string[]) => {
     const { stock, transactions } = get();
-    const groupTxs = transactions.filter(t => t.transaction_id === groupId);
+    let groupTxs: Transaction[] = [];
+
+    if (Array.isArray(groupIdOrIds)) {
+      const idSet = new Set(groupIdOrIds.map(id => String(id)));
+      groupTxs = transactions.filter(t => (t.id && idSet.has(t.id)) || (t.transaction_id && idSet.has(t.transaction_id)));
+    } else {
+      const gid = String(groupIdOrIds);
+      groupTxs = transactions.filter(t => t.transaction_id === gid || t.online_order_id === gid || t.id === gid);
+    }
+
     if (groupTxs.length === 0) return;
 
     let updatedStock = [...stock];
@@ -1336,10 +1457,14 @@ export const useStore = create<AppState>((set, get) => ({
       if (tx.id) {
         await dbTransactions.removeItem(tx.id);
       }
+      if (tx.transaction_id) {
+        await dbTransactions.removeItem(tx.transaction_id);
+      }
     }
 
-    const updatedTx = transactions.filter(t => t.transaction_id !== groupId);
-    await dbTransactions.removeItem(groupId);
+    const removedIdSet = new Set(groupTxs.map(t => t.id || t.transaction_id));
+    const removedTxIdSet = new Set(groupTxs.map(t => t.transaction_id));
+    const updatedTx = transactions.filter(t => !removedIdSet.has(t.id || t.transaction_id) && !removedTxIdSet.has(t.transaction_id));
 
     set({ stock: updatedStock, transactions: updatedTx });
     get().showToast('✅ 已成功刪除整批交易紀錄，並已還原對應庫存！');
@@ -1512,7 +1637,9 @@ export const useStore = create<AppState>((set, get) => ({
       }
     }
 
-    const updatedTx = transactions.map(t => (t.id ? t.id === oldTx.id : t.transaction_id === targetId) ? newTx : t);
+    const updatedTx = transactions
+      .map(t => (t.id ? t.id === oldTx.id : t.transaction_id === targetId) ? newTx : t)
+      .sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date));
     await dbTransactions.setItem(newTx.id || newTx.transaction_id, newTx);
 
     set({ stock: updatedStock, transactions: updatedTx });

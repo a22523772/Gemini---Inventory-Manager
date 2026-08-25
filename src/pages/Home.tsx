@@ -6,6 +6,7 @@ import {
   ArrowUpDown, Edit2, Clock, Check, FileSpreadsheet, Download, Copy, Printer, ShoppingBag, Layers, Filter
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
+import { format } from 'date-fns';
 
 import { normalizePlatformName } from '../lib/platformUtils';
 
@@ -80,6 +81,9 @@ export default function Home() {
   const [summarySearchQuery, setSummarySearchQuery] = useState('');
   const [summaryOnlyShortfall, setSummaryOnlyShortfall] = useState(false);
   const [summaryVendorFilter, setSummaryVendorFilter] = useState('ALL');
+
+  // Anti-duplicate shipping in-flight state tracking
+  const [shippingOrderIds, setShippingOrderIds] = useState<Set<string>>(new Set());
 
   const getStatusBadgeStyle = (statusText: string) => {
     if (!statusText) {
@@ -272,7 +276,7 @@ export default function Home() {
   // Vendors map for supplier names
   const vendorsMap = useMemo(() => new Map(vendors.map(v => [v.vendor_id, v.vendor_name])), [vendors]);
 
-  // Aggregate all items across all pending online orders
+  // Aggregate all items across all pending online orders (ensuring all non-system items like ni-tk2618 are cleanly aggregated without loss)
   const consolidatedOrderItems = useMemo(() => {
     const itemMap = new Map<string, {
       product_id: string;
@@ -287,33 +291,52 @@ export default function Home() {
       selling_price: number;
       orders_count: number;
       order_ids: string[];
+      is_non_system: boolean;
     }>();
 
     displayOrders.forEach(o => {
-      const pid = o.product_id || 'UNKNOWN';
-      const p = productMap.get(pid);
-      const spec = o.specification || (p ? p.specification : '') || '預設規格';
-      const key = `${pid}___${spec}`;
+      const rawPid = String(o.product_id || '').trim();
+      const rawName = String(o.product_name || '').trim();
+      const rawSpec = String(o.specification || '').trim();
 
-      const vendorName = p?.vendor_id ? (vendorsMap.get(p.vendor_id) || '未指定廠商') : '未指定廠商';
-      const unit = p?.unit || '個';
-      const costPrice = p?.cost_price || 0;
-      const currentStock = productTotalStockMap.get(pid) || 0;
+      // Find if this corresponds to a system product in products list
+      const p = rawPid ? productMap.get(rawPid) : undefined;
+      const matchedProd = p || (rawName ? products.find(prod => (prod.name && prod.name === rawName) || (prod.product_id && prod.product_id === rawName)) : undefined);
+
+      const isSystemProduct = Boolean(matchedProd);
+      const resolvedPid = matchedProd ? matchedProd.product_id : (rawPid || '非系統商品');
+      const resolvedName = matchedProd ? matchedProd.name : (rawName || rawPid || '非系統商品 (未命名)');
+      const resolvedSpec = rawSpec || (matchedProd ? matchedProd.specification : '') || '預設規格';
+      const resolvedUnit = matchedProd?.unit || '個';
+      const resolvedCostPrice = matchedProd?.cost_price || 0;
+      const resolvedVendor = matchedProd?.vendor_id 
+        ? (vendorsMap.get(matchedProd.vendor_id) || '未指定廠商') 
+        : (isSystemProduct ? '未指定廠商' : '非系統商品 / 尚未建檔');
+
+      const currentStock = matchedProd 
+        ? (productTotalStockMap.get(matchedProd.product_id) || 0) 
+        : (rawPid && productTotalStockMap.has(rawPid) ? (productTotalStockMap.get(rawPid) || 0) : 0);
+
+      // Distinct key ensuring non-system items with different names/specs never overwrite each other
+      const key = isSystemProduct 
+        ? `SYS_${matchedProd!.product_id}___${resolvedSpec}`
+        : `NON_SYS_${resolvedName}___${resolvedPid}___${resolvedSpec}`;
 
       if (!itemMap.has(key)) {
         itemMap.set(key, {
-          product_id: pid,
-          product_name: o.product_name || p?.name || '未知商品',
-          specification: spec,
-          unit,
-          vendor_name: vendorName,
+          product_id: resolvedPid,
+          product_name: resolvedName,
+          specification: resolvedSpec,
+          unit: resolvedUnit,
+          vendor_name: resolvedVendor,
           total_ordered_qty: 0,
           current_stock_qty: currentStock,
           shortfall_qty: 0,
-          cost_price: costPrice,
-          selling_price: o.price || p?.selling_price || 0,
+          cost_price: resolvedCostPrice,
+          selling_price: Number(o.price) || matchedProd?.selling_price || 0,
           orders_count: 0,
-          order_ids: []
+          order_ids: [],
+          is_non_system: !isSystemProduct
         });
       }
 
@@ -334,7 +357,7 @@ export default function Home() {
     });
 
     return result;
-  }, [displayOrders, productMap, productTotalStockMap, vendorsMap]);
+  }, [displayOrders, productMap, products, productTotalStockMap, vendorsMap]);
 
   const filteredConsolidatedItems = useMemo(() => {
     return consolidatedOrderItems.filter(item => {
@@ -348,7 +371,8 @@ export default function Home() {
         const specMatch = (item.specification || '').toLowerCase().includes(q);
         const vendorMatch = (item.vendor_name || '').toLowerCase().includes(q);
         const ordersMatch = item.order_ids.some(id => id.toLowerCase().includes(q));
-        if (!pidMatch && !nameMatch && !specMatch && !vendorMatch && !ordersMatch) return false;
+        const nonSystemMatch = item.is_non_system && ('非系統商品'.includes(q) || '非系統'.includes(q));
+        if (!pidMatch && !nameMatch && !specMatch && !vendorMatch && !ordersMatch && !nonSystemMatch) return false;
       }
 
       return true;
@@ -367,7 +391,7 @@ export default function Home() {
       return;
     }
 
-    const headers = ['商品編號', '商品名稱', '規格', '供應商', '單位', '網路訂單需求總量', '目前現有庫存量', '建議訂購數量(缺貨)', '預估進價成本', '預估採購小計', '涉及訂單筆數', '訂單編號列表'];
+    const headers = ['商品編號', '商品名稱', '規格', '供應商 / 來源', '單位', '網路訂單需求總量', '目前現有庫存量', '建議訂購數量(缺貨)', '預估進價成本', '預估採購小計', '涉及訂單筆數', '訂單編號列表', '系統建檔狀態'];
     const rows = filteredConsolidatedItems.map(item => [
       `"${item.product_id || ''}"`,
       `"${(item.product_name || '').replace(/"/g, '""')}"`,
@@ -380,7 +404,8 @@ export default function Home() {
       item.cost_price || 0,
       (item.cost_price || 0) * item.shortfall_qty,
       item.orders_count,
-      `"${item.order_ids.join('; ')}"`
+      `"${item.order_ids.join('; ')}"`,
+      `"${item.is_non_system ? '非系統商品' : '系統商品'}"`
     ]);
 
     const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
@@ -473,6 +498,14 @@ export default function Home() {
   };
 
   const handleShipOrder = async (order: any, isForced: boolean = false) => {
+    const orderIdStr = String(order.order_id || '').trim();
+    if (!orderIdStr) return;
+
+    // Prevent concurrent double-clicks or re-triggering while already processing
+    if (shippingOrderIds.has(orderIdStr)) {
+      return;
+    }
+
     const health = checkOrderHealth(order);
 
     if (!health.ok && !isForced) {
@@ -481,12 +514,18 @@ export default function Home() {
       return;
     }
 
+    // Set lock immediately
+    setShippingOrderIds(prev => new Set(prev).add(orderIdStr));
+
     try {
       const normPlatform = normalizePlatformName(order.platform);
       const txType = `stock_out ${normPlatform}`;
+      const cleanOrderId = orderIdStr.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const timestampDate = format(new Date(), 'yyyy-MM-dd HH:mm:ss');
 
-      for (const item of order.items) {
-        let remainingNeeded = item.quantity;
+      for (let itemIdx = 0; itemIdx < order.items.length; itemIdx++) {
+        const item = order.items[itemIdx];
+        let remainingNeeded = Number(item.quantity) || 1;
         const itemPrice = Number(item.price || 0);
         const isProductInSystem = products.some(p => p.product_id && item.product_id && p.product_id === item.product_id);
         const productStock = isProductInSystem ? stock.filter(s => s.product_id === item.product_id) : [];
@@ -509,14 +548,17 @@ export default function Home() {
 
         const p = products.find(prod => prod.product_id === item.product_id);
         const itemCostPrice = p ? (Number(p.cost_price) || 0) : 0;
+        let deductIdx = 0;
 
         if (isProductInSystem && sortedStock.length > 0) {
           for (const entry of sortedStock) {
             if (remainingNeeded <= 0) break;
             const deductQty = Math.min(entry.quantity, remainingNeeded);
+            const targetTxId = `TX_ORD_${cleanOrderId}_${itemIdx}_${deductIdx}`;
 
             await enqueueAction('stockOut', {
-              transaction_id: `TX_${Date.now()}_${Math.random().toString(36).substring(2,6)}`,
+              id: targetTxId,
+              transaction_id: targetTxId,
               online_order_id: order.order_id,
               platform: normPlatform,
               type: txType,
@@ -531,21 +573,25 @@ export default function Home() {
               area: entry.area || '',
               expiry_date: entry.expiry_date,
               specification: item.specification || entry.specification || '',
+              date: timestampDate,
               note: `${isForced ? '[強行出貨] ' : ''}網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${normPlatform} | 買家: ${order.customer_name || '未指定'} | 物流: ${order.shipping_method || '未指定'}`,
             });
 
             remainingNeeded -= deductQty;
+            deductIdx++;
           }
         }
 
         // If item was not in system or stock was insufficient, log forced shipment for remaining qty with location/floor/area BLANK
         if (remainingNeeded > 0) {
+          const targetTxId = `TX_ORD_${cleanOrderId}_${itemIdx}_forced_${deductIdx}`;
           const forcedNote = !isProductInSystem 
             ? `[強行出貨-非系統商品] 網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${normPlatform} | 買家: ${order.customer_name || '未指定'} | 物流: ${order.shipping_method || '未指定'}`
             : `[強行出貨-缺貨紀錄] 網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${normPlatform} | 買家: ${order.customer_name || '未指定'} | 物流: ${order.shipping_method || '未指定'}`;
 
           await enqueueAction('stockOut', {
-            transaction_id: `TX_${Date.now()}_${Math.random().toString(36).substring(2,6)}`,
+            id: targetTxId,
+            transaction_id: targetTxId,
             online_order_id: order.order_id,
             platform: normPlatform,
             type: txType,
@@ -558,6 +604,7 @@ export default function Home() {
             floor: '',
             area: '',
             specification: item.specification || p?.specification || '',
+            date: timestampDate,
             note: forcedNote,
           });
         }
@@ -571,6 +618,13 @@ export default function Home() {
       setConfirmShipOrderModal(null);
     } catch (e: any) {
       showToast(`❌ 出貨失敗: ${e.message}`);
+    } finally {
+      // Release lock
+      setShippingOrderIds(prev => {
+        const next = new Set(prev);
+        next.delete(orderIdStr);
+        return next;
+      });
     }
   };
 
@@ -1129,10 +1183,24 @@ export default function Home() {
                                     詳情
                                   </button>
                                   <button 
+                                    disabled={shippingOrderIds.has(String(order.order_id))}
                                     onClick={() => handleShipOrder(order)}
-                                    className="px-2.5 py-1 text-xs font-bold bg-indigo-500 hover:bg-indigo-400 text-slate-950 rounded-lg flex items-center gap-1 transition-all shadow-md shadow-indigo-500/20"
+                                    className={`px-2.5 py-1 text-xs font-bold rounded-lg flex items-center gap-1 transition-all shadow-md ${
+                                      shippingOrderIds.has(String(order.order_id))
+                                        ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                                        : 'bg-indigo-500 hover:bg-indigo-400 text-slate-950 shadow-indigo-500/20 active:scale-95'
+                                    }`}
                                   >
-                                    <Truck className="w-3.5 h-3.5" /> 出貨
+                                    {shippingOrderIds.has(String(order.order_id)) ? (
+                                      <>
+                                        <span className="w-3.5 h-3.5 border-2 border-slate-400 border-t-transparent rounded-full animate-spin inline-block" />
+                                        出貨中...
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Truck className="w-3.5 h-3.5" /> 出貨
+                                      </>
+                                    )}
                                   </button>
                                   <button 
                                     onClick={() => handleDeleteOrder(order.order_id)}
@@ -1281,7 +1349,14 @@ export default function Home() {
                             return (
                               <tr key={idx} className={`hover:bg-white/5 transition-colors ${isShortfall ? 'bg-amber-500/5' : ''}`}>
                                 <td className="p-3">
-                                  <p className="font-extrabold text-white text-sm">{item.product_name}</p>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <p className="font-extrabold text-white text-sm">{item.product_name}</p>
+                                    {item.is_non_system && (
+                                      <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[10px] font-bold shrink-0">
+                                        非系統商品
+                                      </span>
+                                    )}
+                                  </div>
                                   <div className="flex items-center gap-2 mt-0.5 font-mono text-[11px]">
                                     <span className="text-slate-400">ID: {item.product_id}</span>
                                     <span className="text-indigo-300 bg-indigo-500/10 px-1.5 py-0.2 rounded border border-indigo-500/20">
@@ -1290,7 +1365,9 @@ export default function Home() {
                                   </div>
                                 </td>
                                 <td className="p-3">
-                                  <span className="text-slate-300 font-medium">{item.vendor_name}</span>
+                                  <span className={`font-medium ${item.is_non_system ? 'text-amber-300/80 italic text-[11px]' : 'text-slate-300'}`}>
+                                    {item.vendor_name}
+                                  </span>
                                 </td>
                                 <td className="p-3 text-center">
                                   <span className="text-slate-400 font-mono">{item.unit}</span>
@@ -1489,10 +1566,24 @@ export default function Home() {
                 關閉
               </button>
               <button 
+                disabled={shippingOrderIds.has(String(selectedOrder.order_id))}
                 onClick={() => handleShipOrder(selectedOrder)}
-                className="px-4 py-2 text-xs font-black bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg transition-colors flex items-center gap-1.5 shadow-lg shadow-indigo-500/20"
+                className={`px-4 py-2 text-xs font-black rounded-lg transition-colors flex items-center gap-1.5 shadow-lg ${
+                  shippingOrderIds.has(String(selectedOrder.order_id))
+                    ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                    : 'bg-indigo-500 hover:bg-indigo-600 text-white shadow-indigo-500/20 active:scale-95'
+                }`}
               >
-                <Truck className="w-4 h-4" /> 執行整單出貨 (扣減庫存 & 刪除記錄)
+                {shippingOrderIds.has(String(selectedOrder.order_id)) ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin inline-block" />
+                    執行出貨中...
+                  </>
+                ) : (
+                  <>
+                    <Truck className="w-4 h-4" /> 執行整單出貨 (扣減庫存 & 刪除記錄)
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -1639,10 +1730,24 @@ export default function Home() {
                 ❌ 取消 / 暫緩出貨
               </button>
               <button
+                disabled={shippingOrderIds.has(String(confirmShipOrderModal.order.order_id))}
                 onClick={() => handleShipOrder(confirmShipOrderModal.order, true)}
-                className="px-4 py-2 text-xs font-black text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl transition-all shadow-lg shadow-amber-500/20 flex items-center gap-1.5"
+                className={`px-4 py-2 text-xs font-black rounded-xl transition-all shadow-lg flex items-center gap-1.5 ${
+                  shippingOrderIds.has(String(confirmShipOrderModal.order.order_id))
+                    ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                    : 'text-slate-950 bg-amber-400 hover:bg-amber-300 shadow-amber-500/20 active:scale-95'
+                }`}
               >
-                <Truck className="w-4 h-4" /> ⚠️ 強行繼續出貨 (扣存 & 記錄)
+                {shippingOrderIds.has(String(confirmShipOrderModal.order.order_id)) ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin inline-block" />
+                    強行出貨中...
+                  </>
+                ) : (
+                  <>
+                    <Truck className="w-4 h-4" /> ⚠️ 強行繼續出貨 (扣存 & 記錄)
+                  </>
+                )}
               </button>
             </div>
           </div>

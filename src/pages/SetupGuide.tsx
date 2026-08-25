@@ -577,7 +577,7 @@ export default function SetupGuide() {
     
     data.transaction_id = data.transaction_id || Utilities.getUuid();
     data.type = data.type || 'stock_in';
-    data.date = now;
+    data.date = data.date || now;
     data.note = data.note || '';
     
     var trRow = [];
@@ -585,7 +585,23 @@ export default function SetupGuide() {
       var kName = transHeaders[k];
       trRow.push(data[kName] !== undefined ? data[kName] : '');
     }
-    transSheet.appendRow(trRow);
+
+    var txIdIdx = transHeaders.indexOf('transaction_id');
+    var existingTxRow = -1;
+    if (txIdIdx !== -1 && transSheet.getLastRow() > 1) {
+      var tVals = transSheet.getDataRange().getValues();
+      for (var tr = 1; tr < tVals.length; tr++) {
+        if (tVals[tr][txIdIdx] && String(tVals[tr][txIdIdx]).trim() === String(data.transaction_id).trim()) {
+          existingTxRow = tr + 1;
+          break;
+        }
+      }
+    }
+    if (existingTxRow !== -1) {
+      transSheet.getRange(existingTxRow, 1, 1, trRow.length).setValues([trRow]);
+    } else {
+      transSheet.appendRow(trRow);
+    }
     
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
@@ -635,7 +651,7 @@ export default function SetupGuide() {
     }
     data.transaction_id = data.batch_tx_id || data.transaction_id || Utilities.getUuid();
     data.type = data.type || 'stock_out';
-    data.date = now;
+    data.date = data.date || now;
     data.note = data.note || '';
     data.cost_price = (data.cost_price !== undefined && data.cost_price !== null && data.cost_price !== '') ? Number(data.cost_price) || 0 : 0;
     data.price = (data.price !== undefined && data.price !== null && data.price !== '') ? Number(data.price) || 0 : 0;
@@ -646,7 +662,23 @@ export default function SetupGuide() {
       var kName = transHeaders[k];
       trRow.push(data[kName] !== undefined ? data[kName] : '');
     }
-    transSheet.appendRow(trRow);
+
+    var txIdIdx = transHeaders.indexOf('transaction_id');
+    var existingTxRow = -1;
+    if (txIdIdx !== -1 && transSheet.getLastRow() > 1) {
+      var tVals = transSheet.getDataRange().getValues();
+      for (var tr = 1; tr < tVals.length; tr++) {
+        if (tVals[tr][txIdIdx] && String(tVals[tr][txIdIdx]).trim() === String(data.transaction_id).trim()) {
+          existingTxRow = tr + 1;
+          break;
+        }
+      }
+    }
+    if (existingTxRow !== -1) {
+      transSheet.getRange(existingTxRow, 1, 1, trRow.length).setValues([trRow]);
+    } else {
+      transSheet.appendRow(trRow);
+    }
     
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
@@ -695,7 +727,7 @@ export default function SetupGuide() {
     }
     data.transaction_id = data.transaction_id || Utilities.getUuid();
     data.type = 'adjust';
-    data.date = now;
+    data.date = data.date || now;
     data.cost_price = (data.cost_price !== undefined && data.cost_price !== null && data.cost_price !== '') ? Number(data.cost_price) || 0 : 0;
     data.price = (data.price !== undefined && data.price !== null && data.price !== '') ? Number(data.price) || 0 : 0;
     data.vendor_id = data.vendor_id || '';
@@ -705,7 +737,23 @@ export default function SetupGuide() {
       var kName = transHeaders[k];
       trRow.push(data[kName] !== undefined ? data[kName] : '');
     }
-    transSheet.appendRow(trRow);
+
+    var txIdIdx = transHeaders.indexOf('transaction_id');
+    var existingTxRow = -1;
+    if (txIdIdx !== -1 && transSheet.getLastRow() > 1) {
+      var tVals = transSheet.getDataRange().getValues();
+      for (var tr = 1; tr < tVals.length; tr++) {
+        if (tVals[tr][txIdIdx] && String(tVals[tr][txIdIdx]).trim() === String(data.transaction_id).trim()) {
+          existingTxRow = tr + 1;
+          break;
+        }
+      }
+    }
+    if (existingTxRow !== -1) {
+      transSheet.getRange(existingTxRow, 1, 1, trRow.length).setValues([trRow]);
+    } else {
+      transSheet.appendRow(trRow);
+    }
 
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }

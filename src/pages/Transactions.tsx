@@ -1,28 +1,137 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { PackageOpen, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Calendar, Search, Filter, X, ChevronDown, ChevronUp, Eye, Edit, Trash2, ScanBarcode, ArrowLeft } from 'lucide-react';
-import { format, subDays, startOfDay, endOfDay } from 'date-fns';
+import { 
+  PackageOpen, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Calendar, 
+  Search, Filter, X, Eye, Edit, Trash2, 
+  ScanBarcode, ArrowLeft, Download, Layers, TrendingUp, TrendingDown,
+  List, CheckCircle2, Clock
+} from 'lucide-react';
+import { format, subDays, startOfMonth } from 'date-fns';
 import { useSearchParams, Link } from 'react-router-dom';
 import QuantityInput from '../components/QuantityInput';
 
+/**
+ * Normalizes any transaction date representation to 'YYYY-MM-DD' in local timezone.
+ */
+export const normalizeDateToYMD = (dateVal?: any): string => {
+  if (!dateVal) return '';
+  if (dateVal instanceof Date) {
+    return isNaN(dateVal.getTime()) ? '' : format(dateVal, 'yyyy-MM-dd');
+  }
+  const str = String(dateVal).trim();
+  if (!str) return '';
+
+  // 1. If ISO string containing T or ending in Z -> parse in local timezone
+  if (str.includes('T') || str.endsWith('Z')) {
+    try {
+      const d = new Date(str);
+      if (!isNaN(d.getTime())) {
+        return format(d, 'yyyy-MM-dd');
+      }
+    } catch {}
+  }
+
+  // 2. Match YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
+  const ymdMatch = str.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
+  if (ymdMatch) {
+    const y = ymdMatch[1];
+    const m = ymdMatch[2].padStart(2, '0');
+    const d = ymdMatch[3].padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  // 3. Match MM/DD/YYYY
+  const mdyMatch = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
+  if (mdyMatch) {
+    const m = mdyMatch[1].padStart(2, '0');
+    const d = mdyMatch[2].padStart(2, '0');
+    const y = mdyMatch[3];
+    return `${y}-${m}-${d}`;
+  }
+
+  // 4. Any generic date parse fallback
+  try {
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) {
+      return format(d, 'yyyy-MM-dd');
+    }
+  } catch {}
+
+  return '';
+};
+
+/**
+ * Returns numeric milliseconds for accurate timestamp sorting.
+ */
+export const getTxTimestamp = (dateVal?: any): number => {
+  if (!dateVal) return 0;
+  if (typeof dateVal === 'number') return isNaN(dateVal) ? 0 : dateVal;
+  if (dateVal instanceof Date) return isNaN(dateVal.getTime()) ? 0 : dateVal.getTime();
+  const str = String(dateVal).trim();
+  if (!str) return 0;
+
+  if (str.includes('T') || str.endsWith('Z')) {
+    try {
+      const d = new Date(str);
+      if (!isNaN(d.getTime())) return d.getTime();
+    } catch {}
+  }
+
+  const ymdMatch = str.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (ymdMatch) {
+    const y = parseInt(ymdMatch[1], 10);
+    const m = parseInt(ymdMatch[2], 10) - 1;
+    const d = parseInt(ymdMatch[3], 10);
+    const hh = ymdMatch[4] !== undefined ? parseInt(ymdMatch[4], 10) : 0;
+    const mm = ymdMatch[5] !== undefined ? parseInt(ymdMatch[5], 10) : 0;
+    const ss = ymdMatch[6] !== undefined ? parseInt(ymdMatch[6], 10) : 0;
+    return new Date(y, m, d, hh, mm, ss).getTime();
+  }
+
+  const mdyMatch = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (mdyMatch) {
+    const m = parseInt(mdyMatch[1], 10) - 1;
+    const d = parseInt(mdyMatch[2], 10);
+    const y = parseInt(mdyMatch[3], 10);
+    const hh = mdyMatch[4] !== undefined ? parseInt(mdyMatch[4], 10) : 0;
+    const mm = mdyMatch[5] !== undefined ? parseInt(mdyMatch[5], 10) : 0;
+    const ss = mdyMatch[6] !== undefined ? parseInt(mdyMatch[6], 10) : 0;
+    return new Date(y, m, d, hh, mm, ss).getTime();
+  }
+
+  try {
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) return d.getTime();
+  } catch {}
+
+  return 0;
+};
+
 export default function Transactions() {
-  const { transactions, products, vendors, transactionsPageState, setTransactionsPageState, deleteTransaction, deleteTransactionGroup, editTransaction } = useStore();
+  const { 
+    transactions, products, vendors, transactionsPageState, 
+    setTransactionsPageState, deleteTransaction, deleteTransactionGroup, 
+    editTransaction, fetchRemoteData, gasApiUrl, isLoading: storeIsLoading 
+  } = useStore();
+  
   const [searchParams] = useSearchParams();
-  const [filterType, setFilterType] = useState(transactionsPageState.filterType);
+  const [filterType, setFilterType] = useState(transactionsPageState.filterType || '');
   const [filterPlatform, setFilterPlatform] = useState(transactionsPageState.filterPlatform || '');
   const [searchTerm, setSearchTerm] = useState(transactionsPageState.searchTerm || searchParams.get('pid') || '');
-  const [startDate, setStartDate] = useState(transactionsPageState.startDate !== undefined ? transactionsPageState.startDate : '');
-  const [endDate, setEndDate] = useState(transactionsPageState.endDate !== undefined ? transactionsPageState.endDate : '');
-  const [showFilters, setShowFilters] = useState(transactionsPageState.showFilters);
-  const [filterLocation, setFilterLocation] = useState(transactionsPageState.filterLocation);
-  const [filterVendor, setFilterVendor] = useState(transactionsPageState.filterVendor);
-  const { fetchRemoteData, gasApiUrl, isLoading: storeIsLoading } = useStore();
+  const [startDate, setStartDate] = useState(transactionsPageState.startDate || '');
+  const [endDate, setEndDate] = useState(transactionsPageState.endDate || '');
+  const [showFilters, setShowFilters] = useState(transactionsPageState.showFilters || false);
+  const [filterLocation, setFilterLocation] = useState(transactionsPageState.filterLocation || '');
+  const [filterVendor, setFilterVendor] = useState(transactionsPageState.filterVendor || '');
+  const [viewMode, setViewMode] = useState<'detailed' | 'grouped_by_order'>(
+    (transactionsPageState as any).viewMode || 'detailed'
+  );
 
   // Detail / Edit / Delete Modal States
   const [selectedTxForView, setSelectedTxForView] = useState<any | null>(null);
   const [selectedTxForEdit, setSelectedTxForEdit] = useState<any | null>(null);
   const [txToDelete, setTxToDelete] = useState<any | null>(null);
-  const [groupToDelete, setGroupToDelete] = useState<string | null>(null);
+  const [groupToDelete, setGroupToDelete] = useState<{ groupId: string; group: any[] } | null>(null);
 
   // Edit form states
   const [editQty, setEditQty] = useState('');
@@ -31,6 +140,7 @@ export default function Transactions() {
   const [editArea, setEditArea] = useState('');
   const [editSpec, setEditSpec] = useState('');
   const [editCost, setEditCost] = useState('');
+  const [editPrice, setEditPrice] = useState('');
   const [editVendor, setEditVendor] = useState('');
   const [editDate, setEditDate] = useState('');
   const [editNote, setEditNote] = useState('');
@@ -43,7 +153,8 @@ export default function Transactions() {
       setEditFloor(selectedTxForEdit.floor || '');
       setEditArea(selectedTxForEdit.area || '');
       setEditSpec(selectedTxForEdit.specification || '');
-      setEditCost(selectedTxForEdit.cost_price?.toString() || '');
+      setEditCost(selectedTxForEdit.cost_price !== undefined && selectedTxForEdit.cost_price !== null ? selectedTxForEdit.cost_price.toString() : '');
+      setEditPrice(selectedTxForEdit.price !== undefined && selectedTxForEdit.price !== null ? selectedTxForEdit.price.toString() : '');
       setEditVendor(selectedTxForEdit.vendor_id || '');
       setEditDate(selectedTxForEdit.date || '');
       setEditNote(selectedTxForEdit.note || '');
@@ -67,13 +178,14 @@ export default function Transactions() {
       endDate,
       filterLocation,
       filterVendor,
-      showFilters
+      showFilters,
+      viewMode
     });
-  }, [filterType, filterPlatform, searchTerm, startDate, endDate, filterLocation, filterVendor, showFilters, setTransactionsPageState]);
+  }, [filterType, filterPlatform, searchTerm, startDate, endDate, filterLocation, filterVendor, showFilters, viewMode, setTransactionsPageState]);
   
   useEffect(() => {
     if (gasApiUrl && !storeIsLoading) {
-       fetchRemoteData();
+      fetchRemoteData();
     }
   }, [gasApiUrl]);
 
@@ -82,7 +194,7 @@ export default function Transactions() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [filterType, filterPlatform, searchTerm, startDate, endDate, filterLocation, filterVendor]);
+  }, [filterType, filterPlatform, searchTerm, startDate, endDate, filterLocation, filterVendor, viewMode]);
 
   const productMap = useMemo(() => new Map(products.map(p => [p.product_id, p])), [products]);
   const vendorMap = useMemo(() => new Map(vendors.map(v => [v.vendor_id, v.vendor_name])), [vendors]);
@@ -126,127 +238,21 @@ export default function Transactions() {
     return '';
   };
 
-  const filteredTransactions = useMemo(() => {
-    return transactions.filter(t => {
-      // Type Filter
-      if (filterType && t.type !== filterType) return false;
-
-      // Platform Filter
-      if (filterPlatform) {
-        const p = getTxPlatform(t);
-        if (!p || p.toLowerCase() !== filterPlatform.toLowerCase()) return false;
-      }
-
-      // Date Range Filter
-      if (startDate && endDate) {
-        try {
-          if (!t.date) return true;
-          
-          let dStr = String(t.date);
-          if (!dStr.includes('T')) {
-             dStr = dStr.replace(/-/g, '/');
-          }
-          let tDate = new Date(dStr);
-          
-          if (!isNaN(tDate.getTime())) {
-            const start = startOfDay(new Date(startDate.replace(/-/g, '/')));
-            const end = endOfDay(new Date(endDate.replace(/-/g, '/')));
-            if (tDate < start || tDate > end) return false;
-          }
-        } catch (e) {
-          console.warn("Date parsing error for record:", t, e);
-        }
-      }
-
-      // Search Filter (Product Name, Online Order ID, Platform, Type, PID, Operator, Note, Transaction ID, Specification)
-      if (searchTerm) {
-        const s = searchTerm.toLowerCase();
-        const product = productMap.get(t.product_id);
-        const productName = (t.product_name || product?.name || '').toLowerCase();
-        const onlineOrderId = String(t.online_order_id || '').toLowerCase();
-        const platformStr = getTxPlatform(t).toLowerCase();
-        const typeStr = String(t.type || '').toLowerCase();
-        const pid = String(t.product_id || '').toLowerCase();
-        const op = String(t.operator || '').toLowerCase();
-        const note = String(t.note || '').toLowerCase();
-        const txid = String(t.transaction_id || '').toLowerCase();
-        const spec = String(t.specification || '').toLowerCase();
-        
-        if (!productName.includes(s) && !onlineOrderId.includes(s) && !platformStr.includes(s) && !typeStr.includes(s) && !pid.includes(s) && !op.includes(s) && !note.includes(s) && !txid.includes(s) && !spec.includes(s)) {
-          return false;
-        }
-      }
-
-      // Location Filter
-      if (filterLocation && t.location !== filterLocation) return false;
-
-      // Vendor Filter
-      if (filterVendor && t.vendor_id !== filterVendor) return false;
-
-      return true;
-    });
-  }, [transactions, filterType, filterPlatform, startDate, endDate, searchTerm, filterLocation, filterVendor, productMap]);
-
-  const groupedTransactions = useMemo(() => {
-    const result: (typeof filteredTransactions)[] = [];
-    const txGroupMap = new Map<string, typeof filteredTransactions>();
-    
-    filteredTransactions.forEach(t => {
-      if (t.type !== 'stock_in' && t.type !== 'adjust') {
-        let matchedGroup: typeof filteredTransactions | undefined;
-        
-        if (t.transaction_id) {
-          matchedGroup = txGroupMap.get(`txid_${t.transaction_id}`);
-        }
-
-        if (!matchedGroup && t.operator && t.date) {
-          const roundedTime = Math.floor(new Date(t.date).getTime() / 12000);
-          matchedGroup = txGroupMap.get(`key_${t.operator}_${t.note || ''}_${roundedTime}`);
-        }
-
-        if (matchedGroup) {
-          matchedGroup.push(t);
-        } else {
-          const newGroup = [t];
-          result.push(newGroup);
-          if (t.transaction_id) {
-            txGroupMap.set(`txid_${t.transaction_id}`, newGroup);
-          }
-          if (t.operator && t.date) {
-            const roundedTime = Math.floor(new Date(t.date).getTime() / 12000);
-            txGroupMap.set(`key_${t.operator}_${t.note || ''}_${roundedTime}`, newGroup);
-          }
-        }
-      } else {
-        result.push([t]);
-      }
-    });
-    return result;
-  }, [filteredTransactions]);
-
-  const totalPages = Math.ceil(groupedTransactions.length / PAGE_SIZE) || 1;
-  const paginatedGroupedTransactions = useMemo(() => {
-    const start = (currentPage - 1) * PAGE_SIZE;
-    return groupedTransactions.slice(start, start + PAGE_SIZE);
-  }, [groupedTransactions, currentPage]);
-
-  const isForcedTx = (t: any) => {
-    if (t.note && t.note.includes('強行出貨')) return true;
-    if (!t.product_id) return true;
-    if (products.length > 0 && !products.some(p => p.product_id === t.product_id)) return true;
-    return false;
+  const getTypeLabel = (type: string) => {
+    if (type === 'stock_in') return '進貨';
+    if (type === 'stock_out') return '一般出貨';
+    if (type === 'adjust') return '盤點調整';
+    if (type && type.startsWith('stock_out ')) {
+      return `${type.replace(/^stock_out\s*/, '')}出貨`;
+    }
+    return type;
   };
 
   const getTxProductName = (t: any) => {
-    if (t.product_name && t.product_name.trim()) return t.product_name;
+    if (t.product_name && String(t.product_name).trim()) return String(t.product_name).trim();
     const p = productMap.get(t.product_id);
     if (p && p.name) return p.name;
-    return t.product_id ? t.product_id : '未命名商品';
-  };
-
-  const getProductName = (pid: string) => {
-    const p = productMap.get(pid);
-    return p ? p.name : pid;
+    return t.product_id ? t.product_id : '非系統商品/未命名';
   };
 
   const getProductCostPrice = (pid: string) => {
@@ -264,6 +270,175 @@ export default function Transactions() {
     return vendorMap.get(vid) || vid;
   };
 
+  const formatTxDate = (dateVal?: string) => {
+    if (!dateVal) return '-';
+    const str = String(dateVal).trim();
+    if (!str) return '-';
+    
+    // If ISO string with T or Z -> format in local time
+    if (str.includes('T') || str.endsWith('Z')) {
+      try {
+        const d = new Date(str);
+        if (!isNaN(d.getTime())) {
+          return format(d, 'yyyy-MM-dd HH:mm:ss');
+        }
+      } catch {}
+    }
+
+    // Normalization to YYYY-MM-DD HH:mm:ss if applicable
+    const match = str.match(/(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+    if (match) {
+      const y = match[1];
+      const m = match[2].padStart(2, '0');
+      const d = match[3].padStart(2, '0');
+      if (match[4] !== undefined) {
+        const hh = match[4].padStart(2, '0');
+        const mm = (match[5] || '00').padStart(2, '0');
+        const ss = (match[6] || '00').padStart(2, '0');
+        return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+      }
+      return `${y}-${m}-${d}`;
+    }
+
+    try {
+      const d = new Date(str);
+      if (!isNaN(d.getTime())) {
+        return format(d, 'yyyy-MM-dd HH:mm:ss');
+      }
+    } catch {}
+
+    return str;
+  };
+
+  const isForcedTx = (t: any) => {
+    if (t.note && (t.note.includes('強行出貨') || t.note.includes('[強行出貨]'))) return true;
+    if (!t.product_id) return true;
+    if (products.length > 0 && !products.some(p => p.product_id === t.product_id)) return true;
+    return false;
+  };
+
+  // Filter Transactions with 100% strict date-range and multi-attribute safety
+  const filteredTransactions = useMemo(() => {
+    return transactions.filter(t => {
+      // Type Filter
+      if (filterType && t.type !== filterType) return false;
+
+      // Platform Filter
+      if (filterPlatform) {
+        const p = getTxPlatform(t);
+        if (!p || p.toLowerCase() !== filterPlatform.toLowerCase()) return false;
+      }
+
+      // Strict Date Range Filter (YYYY-MM-DD comparison)
+      if (startDate || endDate) {
+        const txYMD = normalizeDateToYMD(t.date);
+        // Exclude records that have no valid date format when a date filter is active
+        if (!txYMD) return false;
+
+        if (startDate && txYMD < startDate) return false;
+        if (endDate && txYMD > endDate) return false;
+      }
+
+      // Universal Multi-Field Search
+      if (searchTerm) {
+        const s = searchTerm.toLowerCase().trim();
+        const product = productMap.get(t.product_id);
+        const productName = (t.product_name || product?.name || '').toLowerCase();
+        const onlineOrderId = String(t.online_order_id || '').toLowerCase();
+        const platformStr = getTxPlatform(t).toLowerCase();
+        const typeStr = (getTypeLabel(t.type) + ' ' + String(t.type || '')).toLowerCase();
+        const pid = String(t.product_id || '').toLowerCase();
+        const op = String(t.operator || '').toLowerCase();
+        const note = String(t.note || '').toLowerCase();
+        const txid = String(t.transaction_id || '').toLowerCase();
+        const spec = String(t.specification || product?.specification || '').toLowerCase();
+        const loc = `${t.location || ''} ${t.floor || ''} ${t.area || ''}`.toLowerCase();
+        const vendor = (vendorMap.get(t.vendor_id) || t.vendor_id || '').toLowerCase();
+
+        const matched = productName.includes(s) ||
+          pid.includes(s) ||
+          onlineOrderId.includes(s) ||
+          platformStr.includes(s) ||
+          typeStr.includes(s) ||
+          op.includes(s) ||
+          note.includes(s) ||
+          txid.includes(s) ||
+          spec.includes(s) ||
+          loc.includes(s) ||
+          vendor.includes(s);
+
+        if (!matched) return false;
+      }
+
+      // Location Filter
+      if (filterLocation && t.location !== filterLocation) return false;
+
+      // Vendor Filter
+      if (filterVendor && t.vendor_id !== filterVendor) return false;
+
+      return true;
+    }).sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date));
+  }, [transactions, filterType, filterPlatform, startDate, endDate, searchTerm, filterLocation, filterVendor, productMap, vendorMap]);
+
+  // Robust Presentation Grouping (Zero-guesswork, NO fuzzy accidental merging)
+  const groupedTransactions = useMemo(() => {
+    if (viewMode === 'detailed') {
+      // Detailed View: Every single transaction is strictly an independent record!
+      return filteredTransactions.map(t => [t]);
+    }
+
+    // Grouped by Online Order View: ONLY combine items that share the EXACT same non-empty online_order_id
+    const result: (typeof filteredTransactions)[] = [];
+    const orderMap = new Map<string, typeof filteredTransactions>();
+
+    filteredTransactions.forEach(t => {
+      const orderId = t.online_order_id ? String(t.online_order_id).trim() : '';
+      if (orderId) {
+        const existing = orderMap.get(orderId);
+        if (existing) {
+          existing.push(t);
+        } else {
+          const newGroup = [t];
+          orderMap.set(orderId, newGroup);
+          result.push(newGroup);
+        }
+      } else {
+        // Individual records without online_order_id are kept independent!
+        result.push([t]);
+      }
+    });
+
+    return result;
+  }, [filteredTransactions, viewMode]);
+
+  // Statistics Summary
+  const summaryStats = useMemo(() => {
+    let totalInQty = 0;
+    let totalOutQty = 0;
+    let totalInCost = 0;
+    let totalOutAmount = 0;
+
+    filteredTransactions.forEach(t => {
+      const qty = Number(t.quantity) || 0;
+      if (t.type === 'stock_in') {
+        totalInQty += qty;
+        totalInCost += (Number(t.cost_price) || getProductCostPrice(t.product_id) || 0) * qty;
+      } else if (t.type === 'stock_out' || t.type.startsWith('stock_out')) {
+        totalOutQty += qty;
+        const val = Number(t.price) || Number(t.cost_price) || getProductCostPrice(t.product_id) || 0;
+        totalOutAmount += val * qty;
+      }
+    });
+
+    return { totalInQty, totalOutQty, totalInCost, totalOutAmount };
+  }, [filteredTransactions, productMap]);
+
+  const totalPages = Math.ceil(groupedTransactions.length / PAGE_SIZE) || 1;
+  const paginatedGroupedTransactions = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return groupedTransactions.slice(start, start + PAGE_SIZE);
+  }, [groupedTransactions, currentPage]);
+
   const getIcon = (type: string) => {
     switch (type) {
       case 'stock_in': return <ArrowDownToLine className="w-5 h-5 text-[var(--color-accent-blue)]" />;
@@ -273,83 +448,297 @@ export default function Transactions() {
     }
   };
 
-  const getTypeLabel = (type: string) => {
-    if (type === 'stock_in') return '進貨';
-    if (type === 'stock_out') return '一般出貨';
-    if (type === 'adjust') return '盤點調整';
-    if (type && type.startsWith('stock_out ')) {
-      return `${type.replace(/^stock_out\s*/, '')}出貨`;
+  // Export to Excel / CSV
+  const handleExportCSV = () => {
+    if (filteredTransactions.length === 0) {
+      useStore.getState().showToast('⚠️ 目前篩選條件下無任何紀錄可供匯出');
+      return;
     }
-    return type;
+
+    const headers = [
+      '異動編號',
+      '網路訂單編號',
+      '出貨平台',
+      '異動類型',
+      '商品編號(PID)',
+      '商品名稱',
+      '規格說明',
+      '異動數量',
+      '進價/成本',
+      '售價/金額',
+      '供應商',
+      '存儲位置(地點-樓層-區域)',
+      '異動時間',
+      '經辦人員',
+      '強行出貨註記',
+      '備註說明'
+    ];
+
+    const rows = filteredTransactions.map(t => {
+      const pName = getTxProductName(t);
+      const loc = `${t.location || ''}-${t.floor || ''}-${t.area || ''}`.replace(/^-|-$/g, '');
+      const vendorName = getVendorName(t.vendor_id);
+      const cost = t.cost_price || getProductCostPrice(t.product_id) || 0;
+      const price = t.price || 0;
+      const plat = getTxPlatform(t);
+      const typeLbl = getTypeLabel(t.type);
+      const forced = isForcedTx(t) ? '是' : '否';
+
+      return [
+        `"${String(t.transaction_id || '').replace(/"/g, '""')}"`,
+        `"${String(t.online_order_id || '').replace(/"/g, '""')}"`,
+        `"${String(plat || '').replace(/"/g, '""')}"`,
+        `"${String(typeLbl || '').replace(/"/g, '""')}"`,
+        `"${String(t.product_id || '').replace(/"/g, '""')}"`,
+        `"${String(pName || '').replace(/"/g, '""')}"`,
+        `"${String(t.specification || '').replace(/"/g, '""')}"`,
+        t.quantity,
+        cost,
+        price,
+        `"${String(vendorName || '').replace(/"/g, '""')}"`,
+        `"${String(loc || '').replace(/"/g, '""')}"`,
+        `"${String(formatTxDate(t.date)).replace(/"/g, '""')}"`,
+        `"${String(t.operator || '').replace(/"/g, '""')}"`,
+        `"${forced}"`,
+        `"${String(t.note || '').replace(/"/g, '""')}"`
+      ].join(',');
+    });
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `進出貨紀錄_${format(new Date(), 'yyyyMMdd_HHmmss')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    useStore.getState().showToast(`✅ 已成功匯出 ${filteredTransactions.length} 筆進出貨紀錄！`);
   };
 
   return (
     <div className="h-full flex flex-col">
-      <div className="glass-panel border-x-0 border-t-0 px-4 pt-6 pb-4 sticky top-0 z-20">
-        <div className="flex justify-between items-center mb-4">
+      {/* Top Header */}
+      <div className="glass-panel border-x-0 border-t-0 px-4 pt-6 pb-4 sticky top-0 z-20 shadow-md">
+        <div className="flex flex-wrap justify-between items-center gap-3 mb-3">
           <div className="flex items-center gap-2.5">
             <Link 
               to="/manage" 
               className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition-all active:scale-95 flex items-center justify-center"
-              title="返回管理頁面"
+              title="返回庫存管理"
             >
               <ArrowLeft className="w-5 h-5" />
             </Link>
-            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[var(--color-text-main)]">進出貨紀錄</h1>
+            <div>
+              <h1 className="text-xl sm:text-2xl font-black tracking-tight text-[var(--color-text-main)] flex items-center gap-2">
+                進出貨紀錄
+                <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20">
+                  {filteredTransactions.length} 筆
+                </span>
+              </h1>
+            </div>
           </div>
-          <button 
-            onClick={() => setShowFilters(!showFilters)}
-            className={`p-2 rounded-xl transition-all ${showFilters ? 'bg-[var(--color-accent-blue)] text-[#0f172a]' : 'bg-white/5 text-[var(--color-text-dim)] hover:text-white'}`}
-          >
-            {showFilters ? <X className="w-5 h-5" /> : <Filter className="w-5 h-5" />}
-          </button>
+
+          <div className="flex items-center gap-2">
+            {/* View Mode Toggle */}
+            <div className="bg-slate-900/80 border border-white/10 rounded-xl p-0.5 flex items-center shadow-inner">
+              <button
+                onClick={() => setViewMode('detailed')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  viewMode === 'detailed'
+                    ? 'bg-sky-500 text-slate-950 shadow-md font-black'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="每一筆進出貨獨立顯示（絕不合併）"
+              >
+                <List className="w-3.5 h-3.5" />
+                <span>逐筆明細</span>
+              </button>
+              <button
+                onClick={() => setViewMode('grouped_by_order')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  viewMode === 'grouped_by_order'
+                    ? 'bg-purple-500 text-white shadow-md font-black'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="僅將相同網路訂單號之品項整合展示"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>依訂單分組</span>
+              </button>
+            </div>
+
+            <button
+              onClick={handleExportCSV}
+              className="px-3 py-2 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer shadow-sm"
+              title="匯出篩選結果為 Excel CSV"
+            >
+              <Download className="w-4 h-4" />
+              <span className="hidden sm:inline">匯出 CSV</span>
+            </button>
+
+            <button 
+              onClick={() => setShowFilters(!showFilters)}
+              className={`p-2 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer ${
+                showFilters ? 'bg-[var(--color-accent-blue)] text-[#0f172a]' : 'bg-white/5 text-[var(--color-text-dim)] hover:text-white border border-white/10'
+              }`}
+            >
+              {showFilters ? <X className="w-4 h-4" /> : <Filter className="w-4 h-4" />}
+              <span className="hidden sm:inline">{showFilters ? '收合篩選' : '篩選器'}</span>
+            </button>
+          </div>
         </div>
 
+        {/* Universal Search Bar */}
         <div className="space-y-3">
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)]" />
             <input 
               type="text"
-              placeholder="搜尋商品、PID 或人員..."
+              placeholder="搜尋商品名稱、PID、訂單號、平台、規格、人員、地點或備註..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-10 py-2.5 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+              className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-10 py-2.5 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] transition-all shadow-inner"
             />
-            <Link to="/scan?returnTo=/transactions" className="absolute inset-y-0 right-0 pr-3 flex items-center">
-              <ScanBarcode className="h-5 w-5 text-[var(--color-accent-blue)]" />
+            {searchTerm ? (
+              <button 
+                onClick={() => setSearchTerm('')} 
+                className="absolute inset-y-0 right-10 pr-1 flex items-center text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            ) : null}
+            <Link to="/scan?returnTo=/transactions" className="absolute inset-y-0 right-0 pr-3 flex items-center" title="條碼掃描查找">
+              <ScanBarcode className="h-5 w-5 text-[var(--color-accent-blue)] hover:scale-110 transition-transform" />
             </Link>
           </div>
 
+          {/* Active Date Tag Indicator if applied */}
+          {(startDate || endDate) && (
+            <div className="flex items-center gap-2 bg-sky-950/40 border border-sky-500/30 rounded-xl px-3 py-1.5 text-xs text-sky-200">
+              <Calendar className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+              <span className="font-bold">日期區間:</span>
+              <span className="font-mono text-sky-300">
+                {startDate || '不限'} ~ {endDate || '不限'}
+              </span>
+              <button
+                onClick={() => { setStartDate(''); setEndDate(''); }}
+                className="ml-auto p-1 text-slate-400 hover:text-white rounded hover:bg-white/10 cursor-pointer flex items-center gap-1 text-[11px]"
+                title="清除日期範圍"
+              >
+                <X className="w-3 h-3" />
+                <span>清除日期限制</span>
+              </button>
+            </div>
+          )}
+
+          {/* Quick Stats Summary Banner */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+            <div className="bg-slate-900/60 border border-white/5 rounded-xl p-2 sm:p-2.5 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">總進貨量</span>
+                <span className="text-sm sm:text-base font-black text-sky-400 font-mono">+{summaryStats.totalInQty} <span className="text-[10px] font-normal text-slate-400">件</span></span>
+              </div>
+              <ArrowDownToLine className="w-4 h-4 text-sky-400/60 shrink-0" />
+            </div>
+
+            <div className="bg-slate-900/60 border border-white/5 rounded-xl p-2 sm:p-2.5 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">總出貨量</span>
+                <span className="text-sm sm:text-base font-black text-rose-400 font-mono">-{summaryStats.totalOutQty} <span className="text-[10px] font-normal text-slate-400">件</span></span>
+              </div>
+              <ArrowUpFromLine className="w-4 h-4 text-rose-400/60 shrink-0" />
+            </div>
+
+            <div className="bg-slate-900/60 border border-white/5 rounded-xl p-2 sm:p-2.5 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">進貨總成本</span>
+                <span className="text-sm sm:text-base font-black text-emerald-400 font-mono">${summaryStats.totalInCost.toLocaleString()}</span>
+              </div>
+              <TrendingUp className="w-4 h-4 text-emerald-400/60 shrink-0" />
+            </div>
+
+            <div className="bg-slate-900/60 border border-white/5 rounded-xl p-2 sm:p-2.5 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">出貨總金額</span>
+                <span className="text-sm sm:text-base font-black text-purple-400 font-mono">${summaryStats.totalOutAmount.toLocaleString()}</span>
+              </div>
+              <TrendingDown className="w-4 h-4 text-purple-400/60 shrink-0" />
+            </div>
+          </div>
+
+          {/* Expanded Filter Panel */}
           {showFilters && (
-            <div className="space-y-3 pt-3 border-t border-white/5 animate-in fade-in slide-in-from-top-2">
+            <div className="space-y-3 pt-3 border-t border-white/10 animate-in fade-in slide-in-from-top-2">
+              {/* Date Quick Filters */}
               <div className="flex items-center gap-1.5 pb-1 overflow-x-auto">
-                <span className="text-[10px] text-slate-400 font-bold shrink-0">快選:</span>
+                <span className="text-[10px] text-slate-400 font-bold shrink-0">日期快選:</span>
                 <button
                   type="button"
                   onClick={() => { setStartDate(''); setEndDate(''); }}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all border shrink-0 ${!startDate && !endDate ? 'bg-sky-500 text-slate-950 border-sky-400' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'}`}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all border shrink-0 cursor-pointer ${
+                    !startDate && !endDate ? 'bg-sky-500 text-slate-950 border-sky-400 font-black' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
+                  }`}
                 >
                   全部時間
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setStartDate(format(subDays(new Date(), 7), 'yyyy-MM-dd')); setEndDate(format(new Date(), 'yyyy-MM-dd')); }}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all border shrink-0 ${startDate === format(subDays(new Date(), 7), 'yyyy-MM-dd') ? 'bg-sky-500 text-slate-950 border-sky-400' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'}`}
+                  onClick={() => {
+                    const todayStr = format(new Date(), 'yyyy-MM-dd');
+                    setStartDate(todayStr);
+                    setEndDate(todayStr);
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all border shrink-0 cursor-pointer ${
+                    startDate === format(new Date(), 'yyyy-MM-dd') && endDate === format(new Date(), 'yyyy-MM-dd') 
+                      ? 'bg-sky-500 text-slate-950 border-sky-400 font-black' 
+                      : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
+                  }`}
+                >
+                  今日
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { 
+                    setStartDate(format(subDays(new Date(), 7), 'yyyy-MM-dd')); 
+                    setEndDate(format(new Date(), 'yyyy-MM-dd')); 
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all border shrink-0 cursor-pointer ${
+                    startDate === format(subDays(new Date(), 7), 'yyyy-MM-dd') ? 'bg-sky-500 text-slate-950 border-sky-400 font-black' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
+                  }`}
                 >
                   近 7 天
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setStartDate(format(subDays(new Date(), 30), 'yyyy-MM-dd')); setEndDate(format(new Date(), 'yyyy-MM-dd')); }}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all border shrink-0 ${startDate === format(subDays(new Date(), 30), 'yyyy-MM-dd') ? 'bg-sky-500 text-slate-950 border-sky-400' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'}`}
+                  onClick={() => { 
+                    setStartDate(format(subDays(new Date(), 30), 'yyyy-MM-dd')); 
+                    setEndDate(format(new Date(), 'yyyy-MM-dd')); 
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all border shrink-0 cursor-pointer ${
+                    startDate === format(subDays(new Date(), 30), 'yyyy-MM-dd') ? 'bg-sky-500 text-slate-950 border-sky-400 font-black' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
+                  }`}
                 >
                   近 30 天
                 </button>
+                <button
+                  type="button"
+                  onClick={() => { 
+                    setStartDate(format(startOfMonth(new Date()), 'yyyy-MM-dd')); 
+                    setEndDate(format(new Date(), 'yyyy-MM-dd')); 
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all border shrink-0 cursor-pointer ${
+                    startDate === format(startOfMonth(new Date()), 'yyyy-MM-dd') ? 'bg-sky-500 text-slate-950 border-sky-400 font-black' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
+                  }`}
+                >
+                  本月
+                </button>
               </div>
 
+              {/* Exact Date Inputs */}
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">開始日期</label>
+                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">開始日期 (含)</label>
                   <div className="relative">
                     <Calendar className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)] pointer-events-none" />
                     <input 
@@ -361,7 +750,7 @@ export default function Transactions() {
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">結束日期</label>
+                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">結束日期 (含)</label>
                   <div className="relative">
                     <Calendar className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)] pointer-events-none" />
                     <input 
@@ -374,13 +763,14 @@ export default function Transactions() {
                 </div>
               </div>
 
+              {/* Multi-category Dropdowns */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">類別</label>
+                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">類型</label>
                   <select 
                     value={filterType} 
                     onChange={e => setFilterType(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
                   >
                     <option value="" className="bg-[#0f172a]">所有類型</option>
                     <option value="stock_in" className="bg-[#0f172a]">進貨</option>
@@ -392,11 +782,11 @@ export default function Transactions() {
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">平台</label>
+                  <label className="text-[10px] font-bold text-[var(--color-text-dim)] uppercase px-1">出貨平台</label>
                   <select 
                     value={filterPlatform} 
                     onChange={e => setFilterPlatform(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
                   >
                     <option value="" className="bg-[#0f172a]">所有平台</option>
                     {platforms.map(plat => (
@@ -409,7 +799,7 @@ export default function Transactions() {
                   <select 
                     value={filterLocation} 
                     onChange={e => setFilterLocation(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
                   >
                     <option value="" className="bg-[#0f172a]">所有地點</option>
                     {locations.map(loc => (
@@ -422,7 +812,7 @@ export default function Transactions() {
                   <select 
                     value={filterVendor} 
                     onChange={e => setFilterVendor(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
                   >
                     <option value="" className="bg-[#0f172a]">所有廠商</option>
                     {vendors.map(v => (
@@ -436,8 +826,9 @@ export default function Transactions() {
         </div>
       </div>
 
+      {/* Main List Container */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-4 md:space-y-0">
-        <div className="flex justify-between items-center px-1 mb-1">
+        <div className="flex flex-wrap justify-between items-center gap-2 px-1 mb-1 md:col-span-2 xl:col-span-3">
           <p className="text-xs text-[var(--color-text-dim)] font-medium">
             {transactions.length > 0 && transactions.length !== filteredTransactions.length ? (
               <span>共找到 {transactions.length} 筆總紀錄，目前篩選條件下顯示 <span className="text-[var(--color-accent-blue)] font-bold">{filteredTransactions.length}</span> 筆</span>
@@ -456,24 +847,27 @@ export default function Transactions() {
                 setStartDate('');
                 setEndDate('');
               }}
-              className="text-[10px] text-sky-400 font-bold flex items-center gap-1 hover:underline"
+              className="text-xs text-sky-400 font-bold flex items-center gap-1 hover:underline cursor-pointer bg-sky-500/10 px-2.5 py-1 rounded-lg border border-sky-500/20"
             >
+              <X className="w-3.5 h-3.5" />
               清除所有篩選
             </button>
           )}
         </div>
+
         {filteredTransactions.length === 0 ? (
-          <div className="flex flex-col items-center justify-center text-[var(--color-text-dim)] py-12 md:col-span-2 xl:col-span-3">
-            <RefreshCcw className="w-12 h-12 mb-3 opacity-50" />
-            <p className="text-sm font-medium">
-              {transactions.length > 0 ? '目前的篩選條件下找不到紀錄' : '試算表中尚未有操作紀錄'}
+          <div className="flex flex-col items-center justify-center text-[var(--color-text-dim)] py-16 md:col-span-2 xl:col-span-3 glass-panel rounded-2xl border border-white/5">
+            <RefreshCcw className="w-12 h-12 mb-3 opacity-40 text-sky-400" />
+            <p className="text-sm font-bold text-white/80">
+              {transactions.length > 0 ? '目前的篩選條件下找不到相符的紀錄' : '尚無進出貨操作紀錄'}
             </p>
+            <p className="text-xs text-slate-500 mt-1">您可以調整上方日期、類型或關鍵字篩選條件。</p>
             {transactions.length === 0 && (
               <button 
                 onClick={() => useStore.getState().fetchRemoteData()}
-                className="mt-4 text-xs bg-white/5 px-4 py-2 rounded-lg border border-white/10 text-[var(--color-accent-blue)] font-bold active:scale-95 transition-all"
+                className="mt-4 text-xs bg-sky-500/20 hover:bg-sky-500/30 px-4 py-2 rounded-xl border border-sky-500/40 text-sky-300 font-bold active:scale-95 transition-all cursor-pointer"
               >
-                立即從試算表讀取
+                立即從雲端試算表讀取
               </button>
             )}
           </div>
@@ -482,22 +876,28 @@ export default function Transactions() {
             if (group.length === 1) {
               const t = group[0];
               return (
-                <div key={t.id || t.transaction_id || `tx-${idx}`} className="glass-panel border border-[var(--color-glass-border)] rounded-xl p-4 transition-all">
+                <div key={t.id || t.transaction_id || `tx-${idx}`} className="glass-panel border border-[var(--color-glass-border)] rounded-2xl p-4 transition-all hover:border-white/20 shadow-md">
                   <div className="flex items-start mb-2 gap-3">
-                    <div className="mt-1 w-10 h-10 shrink-0 rounded-xl bg-white/5 flex items-center justify-center">
+                    <div className="mt-1 w-10 h-10 shrink-0 rounded-xl bg-white/5 flex items-center justify-center shadow-inner">
                       {getIcon(t.type)}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex justify-between items-start gap-2">
-                        <h3 className="font-bold text-[var(--color-text-main)] text-base break-words flex-1 min-w-0">{getTxProductName(t)}</h3>
+                        <h3 className="font-bold text-[var(--color-text-main)] text-base break-words flex-1 min-w-0 leading-tight">
+                          {getTxProductName(t)}
+                        </h3>
                         <div className="text-right shrink-0">
-                          <span className="text-xs text-[var(--color-text-dim)] font-mono">
-                            {t.date.includes('T') ? new Date(t.date).toLocaleString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(/\//g, '-') : t.date}
+                          <span className="text-[11px] text-[var(--color-text-dim)] font-mono block">
+                            {formatTxDate(t.date)}
                           </span>
-                          <p className="text-xs font-bold text-[var(--color-text-main)]">{getTypeLabel(t.type)}</p>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-0.5 ${
+                            t.type === 'stock_in' ? 'bg-sky-500/20 text-sky-300' : t.type === 'adjust' ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
+                          }`}>
+                            {getTypeLabel(t.type)}
+                          </span>
                         </div>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2 mt-1">
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                         {isForcedTx(t) && (
                           <span className="bg-red-500/20 text-red-300 border border-red-500/40 px-1.5 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
                             ⚡ 強行出貨
@@ -509,15 +909,19 @@ export default function Transactions() {
                           </span>
                         )}
                         {t.online_order_id && (
-                          <span className="bg-sky-500/15 text-sky-300 border border-sky-500/30 px-1.5 py-0.5 rounded text-[10px] font-bold font-mono">
-                            訂單編號: #{t.online_order_id}
+                          <span 
+                            onClick={() => setSearchTerm(t.online_order_id)}
+                            className="bg-sky-500/15 text-sky-300 border border-sky-500/30 px-1.5 py-0.5 rounded text-[10px] font-bold font-mono hover:bg-sky-500/30 cursor-pointer transition-colors"
+                            title="點擊篩選此訂單的所有品項"
+                          >
+                            訂單: #{t.online_order_id}
                           </span>
                         )}
-                        <span className="text-xs text-[var(--color-text-dim)] font-mono">
-                          PID: {t.product_id || '(不在系統中)'}
+                        <span className="text-[11px] text-[var(--color-text-dim)] font-mono bg-white/5 px-1.5 py-0.5 rounded">
+                          PID: {t.product_id || '(非系統商品)'}
                         </span>
                         {(t.specification || getProductSpecification(t.product_id)) && (
-                          <span className="bg-white/5 px-1.5 py-0.5 rounded text-[10px] text-white/60">
+                          <span className="bg-white/5 px-1.5 py-0.5 rounded text-[10px] text-white/70">
                             規格: {t.specification || getProductSpecification(t.product_id)}
                           </span>
                         )}
@@ -527,56 +931,60 @@ export default function Transactions() {
 
                   <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-white/5 text-sm">
                     <div>
-                      <p className="text-[10px] text-[var(--color-text-dim)] uppercase">異動數量</p>
-                      <p className="font-bold text-[var(--color-accent-blue)]">{t.quantity}</p>
+                      <p className="text-[10px] text-[var(--color-text-dim)] uppercase font-bold">異動數量</p>
+                      <p className={`font-mono font-black text-base ${t.type === 'stock_in' ? 'text-sky-400' : 'text-rose-400'}`}>
+                        {t.type === 'stock_in' ? `+${t.quantity}` : `-${t.quantity}`}
+                      </p>
                     </div>
                     <div>
-                      <p className="text-[10px] text-[var(--color-text-dim)] uppercase">
-                        {t.online_order_id || t.type.startsWith('stock_out') ? '金額 (售價/成本)' : '進價'}
+                      <p className="text-[10px] text-[var(--color-text-dim)] uppercase font-bold">
+                        {t.online_order_id || t.type.startsWith('stock_out') ? '售價 / 金額' : '進價成本'}
                       </p>
-                      <p className="font-bold text-[var(--color-accent-green)]">
-                        ${t.cost_price || t.price || getProductCostPrice(t.product_id) || 0}
+                      <p className="font-mono font-black text-base text-[var(--color-accent-green)]">
+                        ${t.price || t.cost_price || getProductCostPrice(t.product_id) || 0}
                       </p>
                     </div>
                     {t.type === 'stock_in' && t.vendor_id && (
                       <div className="col-span-2">
-                        <p className="text-[10px] text-[var(--color-text-dim)] uppercase">供應商</p>
-                        <p className="font-medium text-[var(--color-text-main)]">{getVendorName(t.vendor_id)}</p>
+                        <p className="text-[10px] text-[var(--color-text-dim)] uppercase font-bold">供應商</p>
+                        <p className="font-medium text-[var(--color-text-main)] text-xs">{getVendorName(t.vendor_id)}</p>
                       </div>
                     )}
-                    {t.type === 'adjust' && t.note && (
+                    {t.note && (
                       <div className="col-span-2">
-                        <p className="text-[10px] text-[var(--color-text-dim)] uppercase">盤點備註</p>
-                        <p className="font-medium text-[var(--color-text-main)] bg-white/5 p-2 rounded-lg mt-1">{t.note}</p>
+                        <p className="text-[10px] text-[var(--color-text-dim)] uppercase font-bold">備註</p>
+                        <p className="font-medium text-[var(--color-text-main)] text-xs bg-white/5 p-2 rounded-xl mt-0.5 border border-white/5 whitespace-pre-wrap">{t.note}</p>
                       </div>
                     )}
-                    <div className="col-span-2 flex gap-2 text-xs">
-                        <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)]">{t.location}</span>
-                        <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)]">{t.floor}</span>
-                        <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)]">{t.area}</span>
-                        <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)] ml-auto border border-white/10 opacity-60">人員: {t.operator}</span>
+                    <div className="col-span-2 flex flex-wrap items-center gap-1.5 text-xs pt-1">
+                      <span className="bg-white/5 px-2 py-0.5 rounded-lg text-[var(--color-text-dim)]">{t.location || '倉庫'}</span>
+                      <span className="bg-white/5 px-2 py-0.5 rounded-lg text-[var(--color-text-dim)]">{t.floor || '1F'}</span>
+                      <span className="bg-white/5 px-2 py-0.5 rounded-lg text-[var(--color-text-dim)]">{t.area || 'A區'}</span>
+                      <span className="bg-white/5 px-2 py-0.5 rounded-lg text-[var(--color-text-dim)] ml-auto border border-white/10 opacity-70">
+                        經辦: {t.operator || 'staff'}
+                      </span>
                     </div>
                     
                     <div className="col-span-2 flex justify-end gap-2 mt-2 pt-2 border-t border-white/5">
                       <button
                         onClick={() => setSelectedTxForView(t)}
-                        className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 border border-white/5 text-[10px] font-bold text-[var(--color-text-dim)] hover:text-white hover:bg-white/10 active:scale-95 transition-all cursor-pointer"
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-bold text-[var(--color-text-dim)] hover:text-white hover:bg-white/10 active:scale-95 transition-all cursor-pointer"
                       >
-                        <Eye className="w-3 h-3" />
+                        <Eye className="w-3.5 h-3.5" />
                         詳情
                       </button>
                       <button
                         onClick={() => setSelectedTxForEdit(t)}
-                        className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 border border-white/5 text-[10px] font-bold text-[var(--color-text-dim)] hover:text-[var(--color-accent-blue)] hover:bg-[var(--color-accent-blue)]/5 active:scale-95 transition-all cursor-pointer"
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-sky-500/10 border border-sky-500/20 text-xs font-bold text-sky-300 hover:bg-sky-500/20 active:scale-95 transition-all cursor-pointer"
                       >
-                        <Edit className="w-3 h-3" />
+                        <Edit className="w-3.5 h-3.5" />
                         編輯
                       </button>
                       <button
                         onClick={() => setTxToDelete(t)}
-                        className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 border border-white/5 text-[10px] font-bold text-[var(--color-text-dim)] hover:text-red-400 hover:bg-red-500/5 active:scale-95 transition-all cursor-pointer"
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs font-bold text-rose-400 hover:bg-rose-500/20 active:scale-95 transition-all cursor-pointer"
                       >
-                        <Trash2 className="w-3 h-3" />
+                        <Trash2 className="w-3.5 h-3.5" />
                         刪除
                       </button>
                     </div>
@@ -585,65 +993,63 @@ export default function Transactions() {
               );
             }
 
-            // Batched Transaction Group
+            // Batched Transaction Group (Only when identical online_order_id matches in Group Mode)
             const first = group[0];
-            const totalQuantity = group.reduce((sum, item) => sum + item.quantity, 0);
+            const totalQuantity = group.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
 
             return (
-              <div key={first.transaction_id || `tx-group-${idx}`} className="glass-panel border border-[var(--color-glass-border)] rounded-xl p-4 transition-all">
+              <div key={first.online_order_id || first.transaction_id || `tx-group-${idx}`} className="glass-panel border border-[var(--color-glass-border)] rounded-2xl p-4 transition-all hover:border-white/20 shadow-md">
                 <div className="flex items-start mb-2 gap-3">
-                  <div className="mt-1 w-10 h-10 shrink-0 rounded-xl bg-white/5 flex items-center justify-center">
-                    {getIcon('stock_out')}
+                  <div className="mt-1 w-10 h-10 shrink-0 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center shadow-inner">
+                    <Layers className="w-5 h-5 text-purple-400" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-start gap-2">
                       <div className="flex-1 min-w-0">
-                        <h3 className="font-bold text-[var(--color-text-main)] text-base break-words">
-                          {first.note && first.note.includes('網路訂單出貨') ? '🌐 網路訂單出貨' : '批次出貨'}
+                        <h3 className="font-black text-[var(--color-text-main)] text-base break-words flex items-center gap-2">
+                          {first.online_order_id ? `🌐 訂單 #${first.online_order_id}` : '批次出貨群組'}
                         </h3>
                         {first.note && (
-                          <p className="text-xs text-sky-300 font-medium mt-0.5 break-words bg-white/5 p-1.5 rounded-lg border border-white/5">
+                          <p className="text-xs text-sky-300 font-medium mt-1 break-words bg-white/5 p-2 rounded-xl border border-white/5">
                             {first.note}
                           </p>
                         )}
                       </div>
                       <div className="text-right shrink-0">
-                        <span className="text-xs text-[var(--color-text-dim)] font-mono">
-                          {first.date.includes('T') ? new Date(first.date).toLocaleString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(/\//g, '-') : first.date}
+                        <span className="text-[11px] text-[var(--color-text-dim)] font-mono block">
+                          {formatTxDate(first.date)}
                         </span>
-                        <p className="text-xs font-bold text-[var(--color-text-main)]">出貨</p>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-0.5 bg-purple-500/20 text-purple-300">
+                          {group.length} 項品項
+                        </span>
                       </div>
                     </div>
-                    <div className="flex items-center justify-between mt-1">
-                      <p className="text-xs text-[var(--color-text-dim)] font-mono">包含 {group.length} 項商品</p>
+                    <div className="flex items-center justify-between mt-2">
+                      <p className="text-xs text-slate-400 font-mono font-bold">出貨總件數: -{totalQuantity} 件</p>
                       {group.length > 1 && (
                         <button
-                          onClick={() => setGroupToDelete(first.transaction_id)}
-                          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/20 text-[10px] font-bold text-red-400 hover:bg-red-500/20 active:scale-95 transition-all cursor-pointer"
+                          onClick={() => setGroupToDelete({ groupId: first.online_order_id || first.transaction_id, group })}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-500/10 border border-rose-500/20 text-[11px] font-bold text-rose-400 hover:bg-rose-500/20 active:scale-95 transition-all cursor-pointer shadow-sm"
                           title="刪除整批訂單紀錄"
                         >
                           <Trash2 className="w-3 h-3" />
-                          刪除整批
+                          刪除整張訂單紀錄
                         </button>
                       )}
                     </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-white/5 text-sm">
-                  <div>
-                    <p className="text-[10px] text-[var(--color-text-dim)] uppercase">總數量</p>
-                    <p className="font-bold text-[var(--color-accent-blue)]">{totalQuantity}</p>
-                  </div>
-                  <div className="col-span-2 flex flex-col gap-2 text-xs mt-2 bg-white/5 rounded-lg p-2">
+                <div className="mt-3 pt-3 border-t border-white/5 text-sm space-y-2">
+                  <div className="flex flex-col gap-2 text-xs bg-black/20 rounded-xl p-2.5 border border-white/5">
                     {group.map((t, i) => {
-                      const costVal = t.cost_price || t.price || getProductCostPrice(t.product_id) || 0;
+                      const costVal = t.price || t.cost_price || getProductCostPrice(t.product_id) || 0;
                       return (
-                        <div key={i} className="flex flex-col border-b border-white/5 pb-2 mb-2 last:border-0 last:mb-0 last:pb-0">
-                          <div className="flex justify-between items-start">
+                        <div key={t.id || t.transaction_id || i} className="flex flex-col border-b border-white/5 pb-2.5 mb-2 last:border-0 last:mb-0 last:pb-0">
+                          <div className="flex justify-between items-start gap-2">
                             <div className="min-w-0 flex-1">
-                              <span className="block truncate mr-2 text-white/80 font-bold">{getTxProductName(t)}</span>
-                              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 text-[10px] text-[var(--color-text-dim)]">
+                              <span className="block truncate text-white font-bold text-sm">{getTxProductName(t)}</span>
+                              <div className="flex flex-wrap items-center gap-1 mt-1 text-[10px] text-[var(--color-text-dim)]">
                                 {isForcedTx(t) && (
                                   <span className="bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded font-bold border border-red-500/30">
                                     ⚡ 強行出貨
@@ -654,45 +1060,40 @@ export default function Transactions() {
                                     平台: {getTxPlatform(t)}
                                   </span>
                                 )}
-                                {t.online_order_id && (
-                                  <span className="bg-sky-500/15 text-sky-300 px-1.5 py-0.5 rounded font-mono font-bold">
-                                    訂單號: #{t.online_order_id}
-                                  </span>
-                                )}
                                 <span className="bg-white/5 px-1.5 py-0.5 rounded font-mono">
-                                  PID: {t.product_id || '(不在系統中)'}
+                                  PID: {t.product_id || '(非系統商品)'}
                                 </span>
                                 <span className="bg-white/5 px-1.5 py-0.5 rounded">
-                                  金額/進價: <span className="text-[var(--color-accent-green)] font-bold">${costVal}</span>
+                                  金額: <span className="text-[var(--color-accent-green)] font-bold">${costVal}</span>
                                 </span>
                                 {t.specification && (
                                   <span className="bg-white/5 px-1.5 py-0.5 rounded max-w-[120px] truncate" title={t.specification}>
-                                    規格: <span className="text-white/60">{t.specification}</span>
+                                    規格: {t.specification}
                                   </span>
                                 )}
                               </div>
                             </div>
-                            <span className="text-[var(--color-accent-blue)] font-bold shrink-0 text-sm">x{t.quantity}</span>
+                            <span className="text-rose-400 font-mono font-black shrink-0 text-base">x{t.quantity}</span>
                           </div>
-                          <div className="flex justify-end gap-2 mt-2">
+                          <div className="flex justify-end gap-1.5 mt-2">
                             <button
                               onClick={() => setSelectedTxForView(t)}
-                              className="p-1.5 rounded bg-white/5 text-[var(--color-text-dim)] hover:text-white transition-colors cursor-pointer"
+                              className="p-1.5 rounded-lg bg-white/5 text-[var(--color-text-dim)] hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
                               title="詳情"
                             >
                               <Eye className="w-3.5 h-3.5" />
                             </button>
                             <button
                               onClick={() => setSelectedTxForEdit(t)}
-                              className="p-1.5 rounded bg-white/5 text-[var(--color-text-dim)] hover:text-[var(--color-accent-blue)] transition-colors cursor-pointer"
+                              className="p-1.5 rounded-lg bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 transition-colors cursor-pointer"
                               title="編輯"
                             >
                               <Edit className="w-3.5 h-3.5" />
                             </button>
                             <button
                               onClick={() => setTxToDelete(t)}
-                              className="p-1.5 rounded bg-white/5 text-[var(--color-text-dim)] hover:text-red-400 transition-colors cursor-pointer"
-                              title="刪除"
+                              className="p-1.5 rounded-lg bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 transition-colors cursor-pointer"
+                              title="單獨刪除此品項"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -701,102 +1102,89 @@ export default function Transactions() {
                       );
                     })}
                   </div>
-                  <div className="col-span-2 flex justify-end">
-                    <span className="bg-white/5 px-2 py-1 rounded text-[var(--color-text-dim)] text-xs border border-white/10 opacity-60">人員: {first.operator}</span>
-                  </div>
                 </div>
               </div>
             );
           })
         )}
+
+        {/* Pagination Controls */}
+        {totalPages > 1 && (
+          <div className="flex justify-center items-center gap-3 py-6 md:col-span-2 xl:col-span-3">
+            <button
+              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+              disabled={currentPage === 1}
+              className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold disabled:opacity-40 disabled:pointer-events-none transition-all"
+            >
+              上一頁
+            </button>
+            <span className="text-xs text-slate-400 font-mono font-bold">
+              第 {currentPage} / {totalPages} 頁
+            </span>
+            <button
+              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+              disabled={currentPage === totalPages}
+              className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold disabled:opacity-40 disabled:pointer-events-none transition-all"
+            >
+              下一頁
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Pagination Footer */}
-      {groupedTransactions.length > 0 && (
-        <div className="glass-panel border-x-0 border-b-0 px-4 py-3 flex items-center justify-between text-xs text-[var(--color-text-dim)] shrink-0 sticky bottom-0 z-10 bg-[#0f172a]/90 backdrop-blur-md">
-          <div className="font-mono">
-            共 <span className="text-white font-bold">{groupedTransactions.length}</span> 組紀錄 ({filteredTransactions.length} 筆)
-            {totalPages > 1 && ` (第 ${currentPage} / ${totalPages} 頁)`}
-          </div>
-          {totalPages > 1 && (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                disabled={currentPage === 1}
-                className="px-3 py-1.5 rounded-lg glass-panel hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent text-white font-medium transition-all"
-              >
-                上一頁
-              </button>
-              <span className="font-mono font-bold text-white px-1">
-                {currentPage}
-              </span>
-              <button
-                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                disabled={currentPage === totalPages}
-                className="px-3 py-1.5 rounded-lg glass-panel hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent text-white font-medium transition-all"
-              >
-                下一頁
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 查看詳情 Modal */}
+      {/* 詳情 Modal */}
       {selectedTxForView && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
-          <div className="glass-panel border border-white/10 rounded-2xl w-full max-w-sm p-5 max-h-[85vh] overflow-y-auto space-y-4 shadow-2xl relative">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+          <div className="glass-panel border border-white/10 rounded-2xl w-full max-w-sm p-5 space-y-3.5 shadow-2xl">
             <div className="flex justify-between items-center pb-2 border-b border-white/10">
-              <h2 className="text-sm font-bold text-[var(--color-text-main)] flex items-center gap-1.5">
+              <h2 className="text-sm font-bold text-[var(--color-text-main)] flex items-center gap-2">
                 {getIcon(selectedTxForView.type)}
-                紀錄詳細資訊
+                <span>{getTypeLabel(selectedTxForView.type)} 交易詳情</span>
               </h2>
               <button 
                 onClick={() => setSelectedTxForView(null)}
-                className="p-1 px-[7px] rounded-lg bg-white/5 hover:bg-white/10 text-[var(--color-text-dim)] hover:text-white transition-all cursor-pointer"
+                className="p-1 px-[7px] rounded-lg bg-white/5 hover:bg-white/10 text-[var(--color-text-dim)] cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            <div className="space-y-2.5 text-xs">
-              {isForcedTx(selectedTxForView) && (
-                <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
-                  <span className="text-[var(--color-text-dim)]">出貨狀態</span>
-                  <span className="col-span-2 text-red-400 font-bold flex items-center gap-1">⚡ 強行出貨 (缺貨 / 非系統商品)</span>
-                </div>
-              )}
+            <div className="space-y-2 text-xs">
+              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                <span className="text-[var(--color-text-dim)]">交易編號</span>
+                <span className="col-span-2 text-white font-mono break-all">{selectedTxForView.transaction_id || '-'}</span>
+              </div>
               {selectedTxForView.online_order_id && (
                 <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
-                  <span className="text-[var(--color-text-dim)]">網路訂單編號</span>
-                  <span className="col-span-2 font-mono text-sky-300 font-bold select-all">{selectedTxForView.online_order_id}</span>
+                  <span className="text-[var(--color-text-dim)]">網路訂單號</span>
+                  <span className="col-span-2 text-sky-400 font-mono font-bold break-all">#{selectedTxForView.online_order_id}</span>
                 </div>
               )}
-              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
-                <span className="text-[var(--color-text-dim)]">異動編號</span>
-                <span className="col-span-2 font-mono text-white select-all">{selectedTxForView.transaction_id}</span>
-              </div>
-              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
-                <span className="text-[var(--color-text-dim)]">商品 PID</span>
-                <span className="col-span-2 font-mono text-white select-all">{selectedTxForView.product_id || '(不在系統中)'}</span>
-              </div>
+              {getTxPlatform(selectedTxForView) && (
+                <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                  <span className="text-[var(--color-text-dim)]">平台通路</span>
+                  <span className="col-span-2 text-purple-300 font-bold">{getTxPlatform(selectedTxForView)}</span>
+                </div>
+              )}
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                 <span className="text-[var(--color-text-dim)]">商品名稱</span>
                 <span className="col-span-2 text-white font-bold">{getTxProductName(selectedTxForView)}</span>
               </div>
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
-                <span className="text-[var(--color-text-dim)]">平台 / 類型</span>
-                <span className="col-span-2 text-white font-bold">{getTypeLabel(selectedTxForView.type)}</span>
+                <span className="text-[var(--color-text-dim)]">商品編號(PID)</span>
+                <span className="col-span-2 text-white font-mono">{selectedTxForView.product_id || '(非系統商品)'}</span>
               </div>
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                 <span className="text-[var(--color-text-dim)]">異動數量</span>
-                <span className="col-span-2 text-[var(--color-accent-blue)] font-bold">{selectedTxForView.quantity}</span>
+                <span className="col-span-2 text-[var(--color-accent-blue)] font-bold font-mono">{selectedTxForView.quantity}</span>
               </div>
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
-                <span className="text-[var(--color-text-dim)]">{selectedTxForView.price ? '售價 / 金額' : '進價成本'}</span>
-                <span className="col-span-2 text-[var(--color-accent-green)] font-bold">${selectedTxForView.price || selectedTxForView.cost_price || 0}</span>
+                <span className="text-[var(--color-text-dim)]">金額 / 價格</span>
+                <span className="col-span-2 text-[var(--color-accent-green)] font-bold font-mono">
+                  ${selectedTxForView.price || selectedTxForView.cost_price || getProductCostPrice(selectedTxForView.product_id) || 0}
+                </span>
               </div>
-              {selectedTxForView.type === 'stock_in' && selectedTxForView.vendor_id && (
+              {selectedTxForView.vendor_id && (
                 <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                   <span className="text-[var(--color-text-dim)]">供應商</span>
                   <span className="col-span-2 text-white">{getVendorName(selectedTxForView.vendor_id)}</span>
@@ -809,21 +1197,23 @@ export default function Transactions() {
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                 <span className="text-[var(--color-text-dim)]">存儲位置</span>
                 <span className="col-span-2 text-white">
-                  {selectedTxForView.location} - {selectedTxForView.floor} - {selectedTxForView.area}
+                  {selectedTxForView.location || '倉庫'} - {selectedTxForView.floor || '1F'} - {selectedTxForView.area || 'A區'}
                 </span>
               </div>
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                 <span className="text-[var(--color-text-dim)]">異動時間</span>
-                <span className="col-span-2 text-white font-mono">{selectedTxForView.date}</span>
+                <span className="col-span-2 text-white font-mono">{formatTxDate(selectedTxForView.date)}</span>
               </div>
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                 <span className="text-[var(--color-text-dim)]">經辦人員</span>
-                <span className="col-span-2 text-white">{selectedTxForView.operator}</span>
+                <span className="col-span-2 text-white">{selectedTxForView.operator || 'staff'}</span>
               </div>
               {selectedTxForView.note && (
                 <div className="pt-1.5">
-                  <p className="text-[var(--color-text-dim)] mb-1">備註說明</p>
-                  <p className="bg-white/5 p-2 rounded-lg text-white text-[11px] whitespace-pre-wrap leading-relaxed border border-white/5">{selectedTxForView.note}</p>
+                  <p className="text-[var(--color-text-dim)] mb-1 font-bold">備註說明</p>
+                  <p className="bg-white/5 p-2.5 rounded-xl text-white text-[11px] whitespace-pre-wrap leading-relaxed border border-white/5">
+                    {selectedTxForView.note}
+                  </p>
                 </div>
               )}
             </div>
@@ -842,7 +1232,7 @@ export default function Transactions() {
 
       {/* 編輯 Modal */}
       {selectedTxForEdit && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
           <form 
             onSubmit={async (e) => {
               e.preventDefault();
@@ -856,11 +1246,16 @@ export default function Transactions() {
                 note: editNote,
                 operator: editOperator,
               };
-              if (selectedTxForEdit.type === 'stock_in') {
+              if (editCost !== '') {
                 fields.cost_price = Number(editCost);
+              }
+              if (editPrice !== '') {
+                fields.price = Number(editPrice);
+              }
+              if (editVendor) {
                 fields.vendor_id = editVendor;
               }
-              await editTransaction(selectedTxForEdit.transaction_id, fields);
+              await editTransaction(selectedTxForEdit.id || selectedTxForEdit.transaction_id, fields);
               setSelectedTxForEdit(null);
             }}
             className="glass-panel border border-white/10 rounded-2xl w-full max-w-sm p-5 max-h-[85vh] overflow-y-auto space-y-3.5 shadow-2xl"
@@ -881,8 +1276,8 @@ export default function Transactions() {
             <div className="space-y-3 text-xs text-[var(--color-text-main)]">
               <div>
                 <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-1">商品名稱 (唯讀)</label>
-                <div className="p-2 bg-white/5 rounded-xl text-white/50 border border-white/5 font-bold">
-                  {getProductName(selectedTxForEdit.product_id)}
+                <div className="p-2 bg-white/5 rounded-xl text-white/70 border border-white/5 font-bold">
+                  {getTxProductName(selectedTxForEdit)}
                 </div>
               </div>
 
@@ -898,24 +1293,26 @@ export default function Transactions() {
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">規格說明</label>
-                  <input
+                  <input 
                     type="text"
                     value={editSpec}
                     onChange={(e) => setEditSpec(e.target.value)}
-                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                    placeholder="如: 紅色 / 500ml"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-xs text-white outline-none focus:border-sky-500"
                   />
                 </div>
               </div>
 
-              {selectedTxForEdit.type === 'stock_in' && (
+              {selectedTxForEdit.type === 'stock_in' ? (
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">進價成本</label>
-                    <input
+                    <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">進價成本 ($)</label>
+                    <input 
                       type="number"
+                      step="any"
                       value={editCost}
                       onChange={(e) => setEditCost(e.target.value)}
-                      className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                      className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-xs text-white outline-none focus:border-sky-500"
                     />
                   </div>
                   <div>
@@ -923,124 +1320,136 @@ export default function Transactions() {
                     <select
                       value={editVendor}
                       onChange={(e) => setEditVendor(e.target.value)}
-                      className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                      className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-xs text-white outline-none focus:border-sky-500"
                     >
-                      <option value="">無</option>
+                      <option value="" className="bg-[#0f172a]">未指定</option>
                       {vendors.map(v => (
-                        <option key={v.vendor_id} value={v.vendor_id}>{v.vendor_name}</option>
+                        <option key={v.vendor_id} value={v.vendor_id} className="bg-[#0f172a]">{v.vendor_name}</option>
                       ))}
                     </select>
                   </div>
                 </div>
+              ) : (
+                <div>
+                  <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">售價/出貨金額 ($)</label>
+                  <input 
+                    type="number"
+                    step="any"
+                    value={editPrice}
+                    onChange={(e) => setEditPrice(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-xs text-white outline-none focus:border-sky-500"
+                  />
+                </div>
               )}
 
-              <div className="grid grid-cols-3 gap-1.5">
+              <div className="grid grid-cols-3 gap-2">
                 <div>
                   <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">地點</label>
-                  <input
+                  <input 
                     type="text"
-                    required
                     value={editLocation}
                     onChange={(e) => setEditLocation(e.target.value)}
-                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-xs text-white outline-none focus:border-sky-500"
                   />
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">樓層</label>
-                  <input
+                  <input 
                     type="text"
-                    required
                     value={editFloor}
                     onChange={(e) => setEditFloor(e.target.value)}
-                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-xs text-white outline-none focus:border-sky-500"
                   />
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">區域</label>
-                  <input
+                  <input 
                     type="text"
-                    required
                     value={editArea}
                     onChange={(e) => setEditArea(e.target.value)}
-                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-xs text-white outline-none focus:border-sky-500"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">日期與時間</label>
-                  <input
+                  <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">異動時間</label>
+                  <input 
                     type="text"
-                    required
                     value={editDate}
                     onChange={(e) => setEditDate(e.target.value)}
-                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] font-mono"
+                    placeholder="YYYY-MM-DD HH:mm:ss"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-xs text-white outline-none focus:border-sky-500 font-mono"
                   />
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">經辦人員</label>
-                  <input
+                  <input 
                     type="text"
-                    required
                     value={editOperator}
                     onChange={(e) => setEditOperator(e.target.value)}
-                    className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)]"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-xs text-white outline-none focus:border-sky-500"
                   />
                 </div>
               </div>
 
               <div>
                 <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">備註說明</label>
-                <textarea
-                  rows={2}
+                <textarea 
                   value={editNote}
                   onChange={(e) => setEditNote(e.target.value)}
-                  className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] resize-none"
+                  rows={3}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-xs text-white outline-none focus:border-sky-500"
                 />
               </div>
             </div>
 
-            <div className="pt-3 flex justify-end gap-2 border-t border-white/10">
+            <div className="flex justify-end gap-2 pt-3 border-t border-white/10">
               <button
                 type="button"
                 onClick={() => setSelectedTxForEdit(null)}
-                className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="px-3 py-2 bg-white/5 hover:bg-white/10 text-[var(--color-text-dim)] rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 取消
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 bg-[var(--color-accent-blue)] hover:bg-[var(--color-accent-blue)]/80 text-[#0f172a] rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="px-4 py-2 bg-[var(--color-accent-blue)] text-[#0f172a] rounded-xl text-xs font-black transition-all hover:brightness-110 active:scale-95 cursor-pointer"
               >
-                儲存更新
+                儲存變更
               </button>
             </div>
           </form>
         </div>
       )}
 
-      {/* 刪除單項確認 Modal */}
+      {/* 單筆刪除確認 Modal */}
       {txToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
-          <div className="glass-panel border border-red-500/25 rounded-2xl w-full max-w-xs p-5 space-y-4 shadow-2xl">
-            <h2 className="text-md font-bold text-red-400 flex items-center gap-1.5">🚨 刪除單項紀錄確認</h2>
-            <div className="space-y-2 text-xs leading-relaxed text-white/85">
-              <p>確定要刪除此筆 <strong>{getTypeLabel(txToDelete.type)}</strong> 紀錄嗎？</p>
-              <div className="p-2.5 bg-red-950/20 border border-red-500/10 rounded-xl mt-1 space-y-1 text-red-200">
-                <p><strong>商品：</strong>{getProductName(txToDelete.product_id)}</p>
-                <p><strong>數量：</strong>{txToDelete.quantity}</p>
-                <p><strong>位置：</strong>{txToDelete.location}-{txToDelete.floor}-{txToDelete.area}</p>
-              </div>
-              <p className="text-amber-400 font-bold mt-2 leading-snug">
-                ⚠️ 注意：此操作僅會刪除此單一品項紀錄並還原/扣除其庫存數量（+{txToDelete.quantity}），保留同一訂單中的其他品項。
-              </p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+          <div className="glass-panel border border-red-500/30 rounded-2xl w-full max-w-sm p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center gap-3 text-red-400">
+              <Trash2 className="w-6 h-6 shrink-0" />
+              <h2 className="text-base font-bold text-white">確認刪除此筆交易紀錄？</h2>
+            </div>
+            
+            <div className="text-xs text-slate-300 bg-white/5 p-3 rounded-xl border border-white/5 space-y-1.5">
+              <p><span className="text-slate-400">商品名稱：</span><span className="text-white font-bold">{getTxProductName(txToDelete)}</span></p>
+              <p><span className="text-slate-400">異動類型：</span><span className="text-white">{getTypeLabel(txToDelete.type)} ({txToDelete.quantity} 件)</span></p>
+              <p><span className="text-slate-400">異動時間：</span><span className="text-white font-mono">{formatTxDate(txToDelete.date)}</span></p>
+              {txToDelete.online_order_id && (
+                <p><span className="text-slate-400">網路訂單：</span><span className="text-sky-300 font-mono">#{txToDelete.online_order_id}</span></p>
+              )}
             </div>
 
-            <div className="pt-1.5 flex justify-end gap-2">
+            <p className="text-[11px] text-amber-300/90 leading-relaxed bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
+              ⚠️ 提示：刪除此筆紀錄將會自動反向校正目前庫存量（進貨紀錄刪除會扣減庫存，出貨紀錄刪除會回補庫存）。
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2">
               <button
                 onClick={() => setTxToDelete(null)}
-                className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="px-3 py-2 bg-white/5 hover:bg-white/10 text-slate-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 取消
               </button>
@@ -1049,45 +1458,56 @@ export default function Transactions() {
                   await deleteTransaction(txToDelete.id || txToDelete.transaction_id);
                   setTxToDelete(null);
                 }}
-                className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-black transition-all active:scale-95 cursor-pointer shadow-lg shadow-red-600/30"
               >
-                確定刪除品項
+                確認刪除
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* 刪除整批確認 Modal */}
+      {/* 整批/整張訂單刪除確認 Modal */}
       {groupToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
-          <div className="glass-panel border border-red-500/25 rounded-2xl w-full max-w-xs p-5 space-y-4 shadow-2xl">
-            <h2 className="text-md font-bold text-red-400 flex items-center gap-1.5">🚨 刪除整批出貨確認</h2>
-            <div className="space-y-2 text-xs leading-relaxed text-white/85">
-              <p>確定要刪除此整批出貨紀錄嗎？</p>
-              <div className="p-2.5 bg-red-950/20 border border-red-500/10 rounded-xl mt-1 space-y-1 text-red-200 font-mono">
-                <p><strong>批次號：</strong>{groupToDelete}</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+          <div className="glass-panel border border-red-500/30 rounded-2xl w-full max-w-sm p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center gap-3 text-red-400">
+              <Trash2 className="w-6 h-6 shrink-0" />
+              <h2 className="text-base font-bold text-white">確認刪除整張訂單紀錄？</h2>
+            </div>
+            
+            <div className="text-xs text-slate-300 bg-white/5 p-3 rounded-xl border border-white/5 space-y-2 max-h-48 overflow-y-auto">
+              <p className="text-sky-300 font-bold">訂單/群組編號: #{groupToDelete.groupId}</p>
+              <p className="text-slate-400">包含以下 {groupToDelete.group.length} 個品項出貨明細：</p>
+              <div className="space-y-1 pt-1 border-t border-white/5">
+                {groupToDelete.group.map((item, idx) => (
+                  <div key={idx} className="flex justify-between text-[11px] text-white/90">
+                    <span className="truncate max-w-[180px]">{getTxProductName(item)}</span>
+                    <span className="font-mono font-bold text-rose-400">x{item.quantity}</span>
+                  </div>
+                ))}
               </div>
-              <p className="text-amber-400 font-bold mt-2 leading-snug">
-                ⚠️ 注意：這將會還原此批次內所有商品項目的庫存數量，並移除該筆訂單的所有交易紀錄。
-              </p>
             </div>
 
-            <div className="pt-1.5 flex justify-end gap-2">
+            <p className="text-[11px] text-amber-300/90 leading-relaxed bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
+              ⚠️ 提示：刪除整批出貨紀錄將會自動回補所有品項的庫存量。
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2">
               <button
                 onClick={() => setGroupToDelete(null)}
-                className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="px-3 py-2 bg-white/5 hover:bg-white/10 text-slate-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 取消
               </button>
               <button
                 onClick={async () => {
-                  await deleteTransactionGroup(groupToDelete);
+                  await deleteTransactionGroup(groupToDelete.groupId);
                   setGroupToDelete(null);
                 }}
-                className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-black transition-all active:scale-95 cursor-pointer shadow-lg shadow-red-600/30"
               >
-                確定刪除整批
+                確認刪除整張訂單
               </button>
             </div>
           </div>

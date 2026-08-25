@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import { ArrowLeft, Save, Search, X, Filter, Plus, ScanBarcode, FileText } from 'lucide-react';
+import { format } from 'date-fns';
 import OutboundCart from '../components/OutboundCart';
 import QuantityInput from '../components/QuantityInput';
 
@@ -257,6 +258,7 @@ export default function StockManage() {
       area,
       expiry_date: currentExpiry || '',
       specification: currentSpecification,
+      date: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
       operator
     };
 
