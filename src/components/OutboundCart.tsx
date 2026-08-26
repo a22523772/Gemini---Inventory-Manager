@@ -241,17 +241,23 @@ export default function OutboundCart() {
       const batchTxId = `TX_${Date.now()}`;
       
       // Process items array serially
-      for (const item of cart) {
+      for (let i = 0; i < cart.length; i++) {
+        const item = cart[i];
         let payload = {
+          id: `${batchTxId}_${item.stockEntry.stock_id || item.product.product_id}_${i}_${Math.random().toString(36).substring(2, 6)}`,
+          transaction_id: batchTxId,
+          batch_id: batchTxId,
+          batch_tx_id: batchTxId,
           stock_id: item.stockEntry.stock_id,
           product_id: item.product.product_id,
           quantity: item.quantity,
+          price: item.product.price || item.product.cost_price || 0,
           location: item.stockEntry.location,
           floor: item.stockEntry.floor,
           area: item.stockEntry.area,
           expiry_date: item.stockEntry.expiry_date || '',
           specification: item.stockEntry.specification || '',
-          batch_tx_id: batchTxId,
+          note: `[批次出貨 ${batchTxId}]`,
           operator
         };
         await enqueueAction('stockOut', payload);

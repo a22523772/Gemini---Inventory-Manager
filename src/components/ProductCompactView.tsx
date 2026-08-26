@@ -31,7 +31,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
     products, 
     stock, 
     vendors, 
-    toggleDiscontinued, 
+    toggleOutOfStock, 
     showToast 
   } = useStore();
 
@@ -39,7 +39,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
   const [selectedVendor, setSelectedVendor] = useState('ALL');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [onlyLowStock, setOnlyLowStock] = useState(false);
-  const [hideDiscontinued, setHideDiscontinued] = useState(false);
+  const [hideOutOfStock, setHideOutOfStock] = useState(false);
   const [sortBy, setSortBy] = useState<'name' | 'stock_asc' | 'stock_desc' | 'cost_desc' | 'replenish_desc'>('stock_asc');
   const [copiedLine, setCopiedLine] = useState(false);
   const [copiedTsv, setCopiedTsv] = useState(false);
@@ -90,12 +90,12 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
           ? Number(rawMin) 
           : 5;
 
-      const isDiscontinued = Boolean(p.is_discontinued);
+      const isOutOfStock = Boolean(p.is_out_of_stock || p.is_discontinued);
       const isOut = currentStock <= 0;
       const isLow = !isOut && currentStock <= minStock;
       
       // Suggested order quantity (if stock is below alert threshold)
-      const suggestedOrderQty = (isOut || isLow) && !isDiscontinued
+      const suggestedOrderQty = (isOut || isLow) && !isOutOfStock
         ? Math.max(minStock * 2 - currentStock, minStock > 0 ? minStock : 10)
         : 0;
 
@@ -118,7 +118,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
         current_stock: currentStock,
         min_stock: minStock,
         stock_entries: stockData.entries,
-        is_discontinued: isDiscontinued,
+        is_out_of_stock: isOutOfStock,
         is_out: isOut,
         is_low: isLow,
         suggested_order_qty: suggestedOrderQty,
@@ -132,8 +132,8 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
     return items.filter(item => {
       if (selectedVendor !== 'ALL' && item.vendor_id !== selectedVendor) return false;
       if (selectedCategory !== 'ALL' && item.category !== selectedCategory) return false;
-      if (hideDiscontinued && item.is_discontinued) return false;
-      if (onlyLowStock && (item.current_stock > item.min_stock || item.is_discontinued)) return false;
+      if (hideOutOfStock && item.is_out_of_stock) return false;
+      if (onlyLowStock && (item.current_stock > item.min_stock || item.is_out_of_stock)) return false;
 
       if (searchTerm.trim()) {
         const q = searchTerm.toLowerCase().trim();
@@ -165,7 +165,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
           return 0;
       }
     });
-  }, [items, selectedVendor, selectedCategory, hideDiscontinued, onlyLowStock, searchTerm, sortBy]);
+  }, [items, selectedVendor, selectedCategory, hideOutOfStock, onlyLowStock, searchTerm, sortBy]);
 
   // Summary statistics for current filter
   const stats = useMemo(() => {
@@ -173,12 +173,12 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
     let totalVal = 0;
     let lowCount = 0;
     let outCount = 0;
-    let discontinuedCount = 0;
+    let outOfStockStatusCount = 0;
 
     filteredItems.forEach(i => {
       totalUnits += i.current_stock;
       totalVal += i.total_cost_value;
-      if (i.is_discontinued) discontinuedCount++;
+      if (i.is_out_of_stock) outOfStockStatusCount++;
       else if (i.is_out) outCount++;
       else if (i.is_low) lowCount++;
     });
@@ -189,7 +189,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
       totalVal,
       lowCount,
       outCount,
-      discontinuedCount,
+      outOfStockStatusCount,
       needReplenishCount: lowCount + outCount
     };
   }, [filteredItems]);
@@ -212,7 +212,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
       i.min_stock,
       i.cost_price,
       i.suggested_order_qty,
-      i.is_discontinued ? '暫時停產' : i.is_out ? '缺貨' : i.is_low ? '庫存偏低' : '充裕'
+      i.is_out_of_stock ? '暫時缺貨' : i.is_out ? '缺貨' : i.is_low ? '庫存偏低' : '充裕'
     ]);
     const content = [headers.join('\t'), ...rows.map(r => r.join('\t'))].join('\n');
     navigator.clipboard.writeText(content).then(() => {
@@ -233,7 +233,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
       ? (vendorMap.get(selectedVendor) || selectedVendor)
       : '全部廠商';
 
-    const orderCandidates = filteredItems.filter(i => !i.is_discontinued && (onlyLowStock ? true : i.suggested_order_qty > 0 || i.current_stock <= i.min_stock));
+    const orderCandidates = filteredItems.filter(i => !i.is_out_of_stock && (onlyLowStock ? true : i.suggested_order_qty > 0 || i.current_stock <= i.min_stock));
     const targetList = orderCandidates.length > 0 ? orderCandidates : filteredItems;
 
     let text = `【${vendorLabel} 訂貨清單 (${new Date().toLocaleDateString('zh-TW')})】\n`;
@@ -267,7 +267,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
       return;
     }
 
-    const headers = ['商品編號', '商品名稱', '品牌', '規格', '條碼', '供應商', '現有庫存', '單位', '安全警示庫存', '進價成本', '庫存總成本', '建議訂購量', '是否停產'];
+    const headers = ['商品編號', '商品名稱', '品牌', '規格', '條碼', '供應商', '現有庫存', '單位', '安全警示庫存', '進價成本', '庫存總成本', '建議訂購量', '是否缺貨'];
     const rows = filteredItems.map(i => [
       `"${i.product_id}"`,
       `"${i.name.replace(/"/g, '""')}"`,
@@ -281,7 +281,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
       i.cost_price,
       i.total_cost_value,
       i.suggested_order_qty,
-      i.is_discontinued ? '是(停產中)' : '否'
+      i.is_out_of_stock ? '是(暫時缺貨)' : '否'
     ]);
 
     const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
@@ -380,19 +380,19 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
           </div>
 
           <div 
-            onClick={() => setHideDiscontinued(!hideDiscontinued)}
+            onClick={() => setHideOutOfStock(!hideOutOfStock)}
             className={`border rounded-xl px-3 py-2 cursor-pointer transition-all ${
-              hideDiscontinued 
-                ? 'bg-purple-500/20 border-purple-500/50 text-purple-200' 
-                : 'bg-black/30 border-white/5 hover:border-purple-500/30'
+              hideOutOfStock 
+                ? 'bg-amber-500/20 border-amber-500/50 text-amber-200' 
+                : 'bg-black/30 border-white/5 hover:border-amber-500/30'
             }`}
           >
             <div className="flex justify-between items-center">
-              <span className="text-[11px] text-slate-400 block font-medium">暫時停產 (廠商生產中)</span>
-              {hideDiscontinued && <span className="text-[9px] font-bold bg-purple-500 text-white px-1.5 rounded">已隱藏</span>}
+              <span className="text-[11px] text-slate-400 block font-medium">暫時缺貨 (待補貨)</span>
+              {hideOutOfStock && <span className="text-[9px] font-bold bg-amber-500 text-black px-1.5 rounded">已隱藏</span>}
             </div>
-            <span className="text-lg font-black font-mono text-purple-300">
-              {stats.discontinuedCount} <span className="text-xs font-normal text-slate-400">款</span>
+            <span className="text-lg font-black font-mono text-amber-300">
+              {stats.outOfStockStatusCount} <span className="text-xs font-normal text-slate-400">款</span>
             </span>
           </div>
         </div>
@@ -453,15 +453,15 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
             </button>
 
             <button
-              onClick={() => setHideDiscontinued(!hideDiscontinued)}
+              onClick={() => setHideOutOfStock(!hideOutOfStock)}
               className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 border transition-all cursor-pointer ${
-                hideDiscontinued
-                  ? 'bg-purple-500/20 border-purple-500/50 text-purple-300'
+                hideOutOfStock
+                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
                   : 'bg-black/40 border-white/10 text-slate-400 hover:text-slate-200'
               }`}
             >
-              <PauseCircle className="w-3.5 h-3.5 text-purple-400" />
-              <span>隱藏停產</span>
+              <PauseCircle className="w-3.5 h-3.5 text-amber-400" />
+              <span>隱藏缺貨</span>
             </button>
           </div>
 
@@ -540,15 +540,15 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
               </thead>
               <tbody className="divide-y divide-white/5">
                 {filteredItems.map((item, idx) => {
-                  const isDiscontinued = item.is_discontinued;
+                  const isOutOfStock = item.is_out_of_stock;
                   const isOut = item.is_out;
                   const isLow = item.is_low;
 
                   let stockBadgeColor = 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
                   let stockText = `${item.current_stock} ${item.unit}`;
 
-                  if (isDiscontinued) {
-                    stockBadgeColor = 'bg-purple-500/20 text-purple-300 border-purple-500/30';
+                  if (isOutOfStock) {
+                    stockBadgeColor = 'bg-amber-500/20 text-amber-300 border-amber-500/30';
                   } else if (isOut) {
                     stockBadgeColor = 'bg-red-500/20 text-red-300 border-red-500/40 font-black animate-pulse';
                     stockText = `⚠️ 缺貨 (0 ${item.unit})`;
@@ -561,7 +561,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                     <tr 
                       key={item.product_id}
                       className={`hover:bg-white/[0.04] transition-colors ${
-                        isDiscontinued ? 'opacity-65 bg-purple-950/10' :
+                        isOutOfStock ? 'opacity-65 bg-amber-950/10' :
                         isOut ? 'bg-red-950/15' :
                         isLow ? 'bg-amber-950/10' : ''
                       }`}
@@ -643,9 +643,9 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
 
                       {/* Suggested Order Qty */}
                       <td className="p-3 text-center">
-                        {isDiscontinued ? (
-                          <span className="text-[11px] text-purple-300/80 font-medium">
-                            ⏸️ 廠商生產中
+                        {isOutOfStock ? (
+                          <span className="text-[11px] text-amber-300/80 font-medium">
+                            🟡 待補貨
                           </span>
                         ) : item.suggested_order_qty > 0 ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-sky-500/20 text-sky-300 border border-sky-500/40 rounded-full font-mono text-xs font-black animate-pulse">
@@ -658,21 +658,21 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                         )}
                       </td>
 
-                      {/* Discontinued / Active Toggle */}
+                      {/* Out of Stock / Active Toggle */}
                       <td className="p-3 text-center">
                         <button
-                          onClick={() => toggleDiscontinued(item.product_id)}
+                          onClick={() => toggleOutOfStock(item.product_id)}
                           className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold transition-all border cursor-pointer ${
-                            isDiscontinued 
-                              ? 'bg-purple-500/20 text-purple-300 border-purple-500/40 hover:bg-purple-500/30' 
+                            isOutOfStock 
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30' 
                               : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20 hover:bg-emerald-500/20'
                           }`}
-                          title={isDiscontinued ? '點擊恢復正常供應' : '點擊標記為暫時停產'}
+                          title={isOutOfStock ? '點擊恢復正常供應' : '點擊標記為暫時缺貨'}
                         >
-                          {isDiscontinued ? (
+                          {isOutOfStock ? (
                             <>
-                              <PauseCircle className="w-3.5 h-3.5 text-purple-400" />
-                              <span>暫時停產</span>
+                              <PauseCircle className="w-3.5 h-3.5 text-amber-400" />
+                              <span>暫時缺貨</span>
                             </>
                           ) : (
                             <>

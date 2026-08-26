@@ -142,16 +142,7 @@ export interface ProductStatusInfo {
 export const getProductStatusInfo = (p: any): ProductStatusInfo => {
   if (!p) return { isPaused: false, status: 'normal', label: '正常供應', badgeClass: 'bg-emerald-500/20 text-emerald-300' };
 
-  if (p.is_discontinued) {
-    return {
-      isPaused: true,
-      status: 'discontinued',
-      label: '暫時停產',
-      badgeClass: 'bg-purple-500/25 text-purple-300 border border-purple-500/40'
-    };
-  }
-
-  if (p.is_out_of_stock) {
+  if (p.is_discontinued || p.is_out_of_stock) {
     return {
       isPaused: true,
       status: 'out_of_stock',
@@ -161,16 +152,7 @@ export const getProductStatusInfo = (p: any): ProductStatusInfo => {
   }
 
   const rawStatus = String(p.status || p['狀態'] || p.state || '').trim();
-  if (rawStatus.includes('停產') || rawStatus.toLowerCase() === 'discontinued') {
-    return {
-      isPaused: true,
-      status: 'discontinued',
-      label: '暫時停產',
-      badgeClass: 'bg-purple-500/25 text-purple-300 border border-purple-500/40'
-    };
-  }
-
-  if (rawStatus.includes('缺貨') || rawStatus.toLowerCase() === 'out_of_stock') {
+  if (rawStatus.includes('停產') || rawStatus.includes('缺貨') || rawStatus.toLowerCase() === 'discontinued' || rawStatus.toLowerCase() === 'out_of_stock') {
     return {
       isPaused: true,
       status: 'out_of_stock',
@@ -179,16 +161,7 @@ export const getProductStatusInfo = (p: any): ProductStatusInfo => {
     };
   }
 
-  if (String(p['暫時停產'] || '').toUpperCase() === 'TRUE' || String(p['停產'] || '').toUpperCase() === 'TRUE') {
-    return {
-      isPaused: true,
-      status: 'discontinued',
-      label: '暫時停產',
-      badgeClass: 'bg-purple-500/25 text-purple-300 border border-purple-500/40'
-    };
-  }
-
-  if (String(p['暫時缺貨'] || '').toUpperCase() === 'TRUE' || String(p['缺貨'] || '').toUpperCase() === 'TRUE') {
+  if (String(p['暫時停產'] || '').toUpperCase() === 'TRUE' || String(p['停產'] || '').toUpperCase() === 'TRUE' || String(p['暫時缺貨'] || '').toUpperCase() === 'TRUE' || String(p['缺貨'] || '').toUpperCase() === 'TRUE') {
     return {
       isPaused: true,
       status: 'out_of_stock',
@@ -754,7 +727,7 @@ export const useStore = create<AppState>((set, get) => ({
 
     // Deterministic or generated transaction ID
     const targetTxId = updatedPayload.transaction_id || `TX_${Date.now()}_${Math.random().toString(36).substring(2,6)}`;
-    const targetUniqueId = updatedPayload.id || targetTxId;
+    const targetUniqueId = updatedPayload.id || (updatedPayload.transaction_id ? `${targetTxId}_${Math.random().toString(36).substring(2,7)}` : targetTxId);
     const finalPayload = { ...updatedPayload, transaction_id: targetTxId, id: targetUniqueId, operator: get().operator };
 
     const item: SyncItem = {
@@ -806,6 +779,8 @@ export const useStore = create<AppState>((set, get) => ({
             id: targetUniqueId,
             transaction_id: targetTxId,
             online_order_id: updatedPayload.online_order_id || updatedPayload.order_id || '',
+            batch_id: updatedPayload.batch_id || updatedPayload.batch_tx_id || '',
+            batch_tx_id: updatedPayload.batch_tx_id || updatedPayload.batch_id || '',
             platform: updatedPayload.platform || (updatedPayload.type && !['stock_in', 'stock_out', 'adjust'].includes(updatedPayload.type) ? updatedPayload.type.replace(/^stock_out\s*/, '') : '') || '',
             product_id: updatedPayload.product_id || '',
             product_name: updatedPayload.product_name || updatedPayload.name || product?.name || '',
@@ -824,8 +799,7 @@ export const useStore = create<AppState>((set, get) => ({
         };
 
         const existingTxIdx = transactions.findIndex(t => 
-            (t.id && newTx.id && t.id === newTx.id) || 
-            (t.transaction_id && newTx.transaction_id && t.transaction_id === newTx.transaction_id && t.product_id === newTx.product_id && (t.specification || '') === (newTx.specification || ''))
+            t.id && newTx.id && t.id === newTx.id
         );
         let updatedTx: Transaction[];
         if (existingTxIdx >= 0) {
@@ -864,6 +838,8 @@ export const useStore = create<AppState>((set, get) => ({
             id: targetUniqueId,
             transaction_id: targetTxId,
             online_order_id: updatedPayload.online_order_id || updatedPayload.order_id || '',
+            batch_id: updatedPayload.batch_id || updatedPayload.batch_tx_id || '',
+            batch_tx_id: updatedPayload.batch_tx_id || updatedPayload.batch_id || '',
             platform: updatedPayload.platform || (updatedPayload.type && !['stock_in', 'stock_out', 'adjust'].includes(updatedPayload.type) ? updatedPayload.type.replace(/^stock_out\s*/, '') : '') || '',
             product_id: updatedPayload.product_id || '',
             product_name: updatedPayload.product_name || updatedPayload.name || product?.name || '',
@@ -882,8 +858,7 @@ export const useStore = create<AppState>((set, get) => ({
         };
 
         const existingTxIdx = transactions.findIndex(t => 
-            (t.id && newTx.id && t.id === newTx.id) || 
-            (t.transaction_id && newTx.transaction_id && t.transaction_id === newTx.transaction_id && t.product_id === newTx.product_id && (t.specification || '') === (newTx.specification || ''))
+            t.id && newTx.id && t.id === newTx.id
         );
         let updatedTx: Transaction[];
         if (existingTxIdx >= 0) {
@@ -947,8 +922,7 @@ export const useStore = create<AppState>((set, get) => ({
         };
 
         const existingTxIdx = transactions.findIndex(t => 
-            (t.id && newTx.id && t.id === newTx.id) || 
-            (t.transaction_id && newTx.transaction_id && t.transaction_id === newTx.transaction_id && t.product_id === newTx.product_id && (t.specification || '') === (newTx.specification || ''))
+            t.id && newTx.id && t.id === newTx.id
         );
         let updatedTx: Transaction[];
         if (existingTxIdx >= 0) {
@@ -964,13 +938,10 @@ export const useStore = create<AppState>((set, get) => ({
     }
 
     set((state) => {
-        const queueExists = state.syncQueue.some(q => 
-            q.id === item.id || 
-            (q.payload?.transaction_id && q.payload.transaction_id === item.payload?.transaction_id && q.payload?.product_id === item.payload?.product_id && (q.payload?.specification || '') === (item.payload?.specification || ''))
-        );
+        const queueExists = state.syncQueue.some(q => q.id === item.id);
         return {
             syncQueue: queueExists 
-                ? state.syncQueue.map(q => (q.id === item.id || (q.payload?.transaction_id && q.payload.transaction_id === item.payload?.transaction_id && q.payload?.product_id === item.payload?.product_id && (q.payload?.specification || '') === (item.payload?.specification || ''))) ? item : q) 
+                ? state.syncQueue.map(q => q.id === item.id ? item : q) 
                 : [...state.syncQueue, item]
         };
     });
@@ -1096,8 +1067,9 @@ export const useStore = create<AppState>((set, get) => ({
           }
 
           const rawStatusStr = String(p.status || p['狀態'] || '').trim();
-          if (rawStatusStr.includes('停產')) isDiscontinued = true;
-          if (rawStatusStr.includes('缺貨')) isOutOfStock = true;
+          if (rawStatusStr.includes('停產') || rawStatusStr.includes('缺貨')) isOutOfStock = true;
+
+          const isReallyOutOfStock = isOutOfStock || isDiscontinued;
 
           const cleanP = {
             ...p,
@@ -1109,9 +1081,9 @@ export const useStore = create<AppState>((set, get) => ({
             unit: p.unit ? String(p.unit).trim() : '',
             specification: p.specification ? String(p.specification).trim() : '',
             has_expiry: String(p.has_expiry).toUpperCase() === 'TRUE',
-            is_discontinued: isDiscontinued,
-            is_out_of_stock: isOutOfStock,
-            status: isDiscontinued ? '暫時停產' : isOutOfStock ? '暫時缺貨' : '正常',
+            is_discontinued: false,
+            is_out_of_stock: isReallyOutOfStock,
+            status: isReallyOutOfStock ? '暫時缺貨' : '正常',
             cost_price: Number(p.cost_price) || 0,
             min_stock: (() => {
               const raw = p.min_stock ?? p['安全庫存'] ?? p['安全庫存量'] ?? p['最低庫存'] ?? p['最低庫存量'] ?? p['警示庫存'] ?? p.minstock;
@@ -1441,25 +1413,29 @@ export const useStore = create<AppState>((set, get) => ({
     const { products, editProduct, showToast } = get();
     const prod = products.find(p => p.product_id === productId);
     if (!prod) return;
-    const nextStatus = !prod.is_discontinued;
+    const isCurrentlyOut = Boolean(prod.is_out_of_stock || prod.is_discontinued);
+    const nextStatus = !isCurrentlyOut;
     const updated = {
       ...prod,
-      is_discontinued: nextStatus,
-      status: nextStatus ? '暫時停產' : (prod.is_out_of_stock ? '暫時缺貨' : '正常')
+      is_discontinued: false,
+      is_out_of_stock: nextStatus,
+      status: nextStatus ? '暫時缺貨' : '正常'
     };
     await editProduct(updated);
-    showToast(nextStatus ? `⏸️ 【${prod.name}】已標記為「暫時停產」` : `🟢 【${prod.name}】已恢復為正常供應`);
+    showToast(nextStatus ? `🟡 【${prod.name}】已標記為「暫時缺貨」` : `🟢 【${prod.name}】已恢復為正常供應`);
   },
 
   toggleOutOfStock: async (productId: string) => {
     const { products, editProduct, showToast } = get();
     const prod = products.find(p => p.product_id === productId);
     if (!prod) return;
-    const nextStatus = !prod.is_out_of_stock;
+    const isCurrentlyOut = Boolean(prod.is_out_of_stock || prod.is_discontinued);
+    const nextStatus = !isCurrentlyOut;
     const updated = {
       ...prod,
+      is_discontinued: false,
       is_out_of_stock: nextStatus,
-      status: nextStatus ? '暫時缺貨' : (prod.is_discontinued ? '暫時停產' : '正常')
+      status: nextStatus ? '暫時缺貨' : '正常'
     };
     await editProduct(updated);
     showToast(nextStatus ? `🟡 【${prod.name}】已標記為「暫時缺貨」` : `🟢 【${prod.name}】已恢復為正常供應`);
@@ -1469,22 +1445,19 @@ export const useStore = create<AppState>((set, get) => ({
     const { products, editProduct, showToast } = get();
     const prod = products.find(p => p.product_id === productId);
     if (!prod) return;
-    const isDisc = status === 'discontinued';
-    const isOut = status === 'out_of_stock';
-    const statusLabel = isDisc ? '暫時停產' : isOut ? '暫時缺貨' : '正常';
+    const isOut = status === 'out_of_stock' || status === 'discontinued';
+    const statusLabel = isOut ? '暫時缺貨' : '正常';
     const updated = {
       ...prod,
-      is_discontinued: isDisc,
+      is_discontinued: false,
       is_out_of_stock: isOut,
       status: statusLabel
     };
     await editProduct(updated);
     showToast(
-      isDisc
-        ? `🟣 【${prod.name}】已設定為「暫時停產」`
-        : isOut
-          ? `🟡 【${prod.name}】已設定為「暫時缺貨」`
-          : `🟢 【${prod.name}】已恢復為「正常供應」`
+      isOut
+        ? `🟡 【${prod.name}】已設定為「暫時缺貨」`
+        : `🟢 【${prod.name}】已恢復為「正常供應」`
     );
   },
 
@@ -1688,10 +1661,23 @@ export const useStore = create<AppState>((set, get) => ({
 
     if (Array.isArray(groupIdOrIds)) {
       const idSet = new Set(groupIdOrIds.map(id => String(id)));
-      groupTxs = transactions.filter(t => (t.id && idSet.has(t.id)) || (t.transaction_id && idSet.has(t.transaction_id)));
+      groupTxs = transactions.filter(t => 
+        (t.id && idSet.has(String(t.id))) || 
+        (t.transaction_id && idSet.has(String(t.transaction_id))) ||
+        (t.online_order_id && idSet.has(String(t.online_order_id))) ||
+        (t.batch_id && idSet.has(String(t.batch_id))) ||
+        (t.batch_tx_id && idSet.has(String(t.batch_tx_id)))
+      );
     } else {
       const gid = String(groupIdOrIds);
-      groupTxs = transactions.filter(t => t.transaction_id === gid || t.online_order_id === gid || t.id === gid);
+      groupTxs = transactions.filter(t => 
+        t.transaction_id === gid || 
+        t.online_order_id === gid || 
+        t.batch_id === gid || 
+        t.batch_tx_id === gid || 
+        t.id === gid ||
+        (t.transaction_id && t.transaction_id.startsWith(gid))
+      );
     }
 
     if (groupTxs.length === 0) return;

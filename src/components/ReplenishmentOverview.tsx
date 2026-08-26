@@ -90,7 +90,10 @@ export default function ReplenishmentOverview() {
 
   // Calculate replenishment urgency and ranking for each product
   const rankedItems = useMemo(() => {
-    const items = products.map(p => {
+    // Filter out products that are marked as out-of-stock or discontinued
+    const activeProducts = products.filter(p => !p.is_out_of_stock && !p.is_discontinued && p.status !== '暫時缺貨' && p.status !== '暫時停產' && p.status !== 'out_of_stock' && p.status !== 'discontinued');
+
+    const items = activeProducts.map(p => {
       const currentStock = stockMap.get(p.product_id) || 0;
       const stat = salesStats.get(p.product_id) || { totalSold: 0, sold30d: 0, sold60d: 0, txCount: 0 };
       
@@ -101,14 +104,10 @@ export default function ReplenishmentOverview() {
           ? Number(rawMin) 
           : 5;
 
-      const isDiscontinued = !!p.is_discontinued;
       const isOutOfStock = currentStock <= 0;
       const isLowStock = currentStock <= alertThreshold;
 
       // Replenishment Urgency Score based on transaction sales frequency
-      // 1. Out of stock with past sales gets highest priority
-      // 2. High 30-day velocity with low stock
-      // 3. High overall historical sales with low stock
       let score = 0;
       if (isOutOfStock) {
         score = 10000 + (stat.sold30d * 50) + (stat.totalSold * 10) + (stat.txCount * 5);
@@ -120,13 +119,10 @@ export default function ReplenishmentOverview() {
         score = (stat.sold30d * 10) + stat.totalSold - (currentStock * 0.5);
       }
 
-      // If temporarily discontinued, demote ranking slightly or flag it
-      const rankScore = isDiscontinued ? score * 0.1 : score;
+      const rankScore = score;
 
-      let urgencyLevel: 'critical' | 'warning' | 'normal' | 'discontinued' = 'normal';
-      if (isDiscontinued) {
-        urgencyLevel = 'discontinued';
-      } else if (isOutOfStock && (stat.totalSold > 0 || stat.sold30d > 0)) {
+      let urgencyLevel: 'critical' | 'warning' | 'normal' = 'normal';
+      if (isOutOfStock && (stat.totalSold > 0 || stat.sold30d > 0)) {
         urgencyLevel = 'critical';
       } else if (isLowStock) {
         urgencyLevel = 'warning';
@@ -142,7 +138,6 @@ export default function ReplenishmentOverview() {
         alertThreshold,
         isOutOfStock,
         isLowStock,
-        isDiscontinued,
         urgencyLevel,
         score,
         rankScore
@@ -196,13 +191,11 @@ export default function ReplenishmentOverview() {
     filteredItems.forEach((item, idx) => {
       const p = item.product;
       const vendorName = vendorMap.get(p.vendor_id) || p.vendor_id || '未指定';
-      const statusNote = item.isDiscontinued 
-        ? '【暫時停產】' 
-        : item.isOutOfStock 
-          ? '【缺貨急需補貨】' 
-          : item.isLowStock 
-            ? '【低於警示量】' 
-            : '正常';
+      const statusNote = item.isOutOfStock 
+        ? '【缺貨急需補貨】' 
+        : item.isLowStock 
+          ? '【低於警示量】' 
+          : '正常';
 
       lines.push([
         `#${idx + 1}`,

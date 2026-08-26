@@ -247,6 +247,61 @@ export default function Transactions() {
     }).sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date));
   }, [transactions, filterType, filterPlatform, startDate, endDate, searchTerm, filterLocation, filterVendor, productMap, vendorMap]);
 
+  // Helper to extract grouping key for order/batch bundling
+  const getTxGroupKey = (t: any): string => {
+    // 1. Explicit online_order_id
+    if (t.online_order_id && String(t.online_order_id).trim()) {
+      return `ORDER_${String(t.online_order_id).trim()}`;
+    }
+    // 2. Explicit batch_id or batch_tx_id
+    if (t.batch_id && String(t.batch_id).trim()) {
+      return `BATCH_${String(t.batch_id).trim()}`;
+    }
+    if (t.batch_tx_id && String(t.batch_tx_id).trim()) {
+      return `BATCH_${String(t.batch_tx_id).trim()}`;
+    }
+    // 3. Structured Note Matching (order number / batch number)
+    if (t.note) {
+      const noteStr = String(t.note);
+      const orderMatch = noteStr.match(/訂單(?:號|編號)?\s*[:：]\s*([^\s|]+)/) || 
+                         noteStr.match(/\[(?:訂單|網路訂單)\s*[:：]?\s*([^\]]+)\]/);
+      if (orderMatch && orderMatch[1].trim()) {
+        return `ORDER_${orderMatch[1].trim()}`;
+      }
+      const batchMatch = noteStr.match(/\[(?:批次出貨|批次)\s*[:：]?\s*([^\]]+)\]/) || 
+                         noteStr.match(/批次(?:號|編號)?\s*[:：]\s*([^\s|]+)/);
+      if (batchMatch && batchMatch[1].trim()) {
+        return `BATCH_${batchMatch[1].trim()}`;
+      }
+    }
+    // 4. Transaction ID Prefix or Exact Matching
+    const txid = String(t.transaction_id || '').trim();
+    if (txid) {
+      if (txid.startsWith('TX_ORD_')) {
+        const match = txid.match(/^TX_ORD_([^_]+)/);
+        if (match) return `ORDER_${match[1]}`;
+      }
+      if (txid.startsWith('TX_BATCH_')) {
+        const match = txid.match(/^TX_BATCH_([^_]+)/);
+        if (match) return `BATCH_${match[1]}`;
+      }
+      // If transaction_id contains timestamp root like TX_1787543146515 or TX_1787543146515_0
+      const tsMatch = txid.match(/^(TX_\d{10,})/);
+      if (tsMatch) {
+        return `TXID_${tsMatch[1]}`;
+      }
+      // If transaction_id is in format TX_xxx_yyy or TX_xxx-yyy
+      const baseMatch = txid.match(/^([A-Za-z0-9_-]+?)[_\-#](?:\d+|[a-z0-9]{2,8})$/i);
+      if (baseMatch) {
+        return `TXID_${baseMatch[1]}`;
+      }
+      // Direct transaction_id
+      return `TXID_${txid}`;
+    }
+
+    return '';
+  };
+
   // Robust Presentation Grouping (Zero-guesswork, NO fuzzy accidental merging)
   const groupedTransactions = useMemo(() => {
     if (viewMode === 'detailed') {
@@ -254,24 +309,12 @@ export default function Transactions() {
       return filteredTransactions.map(t => [t]);
     }
 
-    // Grouped by Online Order / Batch View: Combine items that share online_order_id, batch_tx_id, or batch prefix
+    // Grouped by Online Order / Batch View: Combine items that share order ID, batch ID, or transaction ID
     const result: (typeof filteredTransactions)[] = [];
     const groupMap = new Map<string, typeof filteredTransactions>();
 
     filteredTransactions.forEach(t => {
-      let groupKey = '';
-      if (t.online_order_id && String(t.online_order_id).trim()) {
-        groupKey = `ORDER_${String(t.online_order_id).trim()}`;
-      } else if (t.batch_id && String(t.batch_id).trim()) {
-        groupKey = `BATCH_${String(t.batch_id).trim()}`;
-      } else if (t.batch_tx_id && String(t.batch_tx_id).trim()) {
-        groupKey = `BATCH_${String(t.batch_tx_id).trim()}`;
-      } else if (t.transaction_id && /^TX_\d+_\d+$/.test(String(t.transaction_id).trim())) {
-        groupKey = `BATCH_${String(t.transaction_id).trim().replace(/_\d+$/, '')}`;
-      } else if (t.note) {
-        const match = t.note.match(/\[批次出貨\s+([^\]]+)\]/);
-        if (match) groupKey = `BATCH_${match[1].trim()}`;
-      }
+      const groupKey = getTxGroupKey(t);
 
       if (groupKey) {
         const existing = groupMap.get(groupKey);
@@ -283,7 +326,7 @@ export default function Transactions() {
           result.push(newGroup);
         }
       } else {
-        // Individual records without online_order_id / batch id are kept independent!
+        // Individual records without any group identifier are kept independent!
         result.push([t]);
       }
     });
@@ -890,12 +933,25 @@ export default function Transactions() {
               );
             }
 
-            // Batched Transaction Group (Only when identical online_order_id matches in Group Mode)
+            // Batched Transaction Group (When multiple items share an order ID, batch ID, or transaction ID)
             const first = group[0];
+            const isOnlineOrder = !!(first.online_order_id && String(first.online_order_id).trim());
+            const rawTxId = String(first.transaction_id || '').trim();
+            const cleanBatchId = first.batch_id || first.batch_tx_id || (rawTxId.startsWith('TX_') ? rawTxId.replace(/_\d+$/, '') : rawTxId);
+            const titleText = isOnlineOrder 
+              ? `🌐 網路訂單 #${first.online_order_id}` 
+              : cleanBatchId 
+                ? `📦 批次出貨 #${cleanBatchId}` 
+                : '📦 多品項出貨群組';
+
             const totalQuantity = group.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+            const totalAmount = group.reduce((sum, item) => {
+              const price = Number(item.price) || Number(item.cost_price) || getProductCostPrice(item.product_id) || 0;
+              return sum + (price * (Number(item.quantity) || 0));
+            }, 0);
 
             return (
-              <div key={first.online_order_id || first.transaction_id || `tx-group-${idx}`} className="glass-panel border border-[var(--color-glass-border)] rounded-2xl p-4 transition-all hover:border-white/20 shadow-md">
+              <div key={first.online_order_id || cleanBatchId || first.transaction_id || `tx-group-${idx}`} className="glass-panel border border-[var(--color-glass-border)] rounded-2xl p-4 transition-all hover:border-white/20 shadow-md">
                 <div className="flex items-start mb-2 gap-3">
                   <div className="mt-1 w-10 h-10 shrink-0 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center shadow-inner">
                     <Layers className="w-5 h-5 text-purple-400" />
@@ -904,7 +960,7 @@ export default function Transactions() {
                     <div className="flex justify-between items-start gap-2">
                       <div className="flex-1 min-w-0">
                         <h3 className="font-black text-[var(--color-text-main)] text-base break-words flex items-center gap-2">
-                          {first.online_order_id ? `🌐 訂單 #${first.online_order_id}` : '批次出貨群組'}
+                          {titleText}
                         </h3>
                         {first.note && (
                           <p className="text-xs text-sky-300 font-medium mt-1 break-words bg-white/5 p-2 rounded-xl border border-white/5">
@@ -917,17 +973,20 @@ export default function Transactions() {
                           {formatTxDate(first.date)}
                         </span>
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-0.5 bg-purple-500/20 text-purple-300">
-                          {group.length} 項品項
+                          {group.length} 款商品
                         </span>
                       </div>
                     </div>
-                    <div className="flex items-center justify-between mt-2">
-                      <p className="text-xs text-slate-400 font-mono font-bold">出貨總件數: -{totalQuantity} 件</p>
+                    <div className="flex flex-wrap items-center justify-between gap-2 mt-2 pt-2 border-t border-white/5">
+                      <div className="flex items-center gap-3">
+                        <p className="text-xs text-rose-400 font-mono font-bold">總出貨件數: -{totalQuantity} 件</p>
+                        <p className="text-xs text-[var(--color-accent-green)] font-mono font-bold">總金額: ${totalAmount.toLocaleString()}</p>
+                      </div>
                       {group.length > 1 && (
                         <button
-                          onClick={() => setGroupToDelete({ groupId: first.online_order_id || first.transaction_id, group })}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-500/10 border border-rose-500/20 text-[11px] font-bold text-rose-400 hover:bg-rose-500/20 active:scale-95 transition-all cursor-pointer shadow-sm"
-                          title="刪除整批訂單紀錄"
+                          onClick={() => setGroupToDelete({ groupId: first.online_order_id || cleanBatchId || first.transaction_id, group })}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-500/10 border border-rose-500/20 text-[11px] font-bold text-rose-400 hover:bg-rose-500/20 active:scale-95 transition-all cursor-pointer shadow-sm ml-auto"
+                          title="刪除整批出貨紀錄"
                         >
                           <Trash2 className="w-3 h-3" />
                           刪除整張訂單紀錄
@@ -1411,7 +1470,8 @@ export default function Transactions() {
               </button>
               <button
                 onClick={async () => {
-                  await deleteTransactionGroup(groupToDelete.groupId);
+                  const targetIds = groupToDelete.group.map(t => t.id || t.transaction_id).filter(Boolean);
+                  await deleteTransactionGroup(targetIds.length > 0 ? targetIds : groupToDelete.groupId);
                   setGroupToDelete(null);
                 }}
                 className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-black transition-all active:scale-95 cursor-pointer shadow-lg shadow-red-600/30"

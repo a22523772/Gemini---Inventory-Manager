@@ -649,7 +649,7 @@ export default function SetupGuide() {
       transSheet.getRange(1, 3).setValue('name');
       transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
     }
-    data.transaction_id = data.transaction_id || (data.batch_tx_id ? data.batch_tx_id + '_' + Utilities.getUuid().substring(0,6) : Utilities.getUuid());
+    data.transaction_id = data.transaction_id || data.batch_id || data.batch_tx_id || Utilities.getUuid();
     data.type = data.type || 'stock_out';
     data.date = data.date || now;
     data.note = data.note || '';

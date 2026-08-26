@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useStore, calculateOrderStatus } from '../store/useStore';
+import { useStore, calculateOrderStatus, getProductStatusInfo } from '../store/useStore';
 import { 
   Package, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, 
   AlertTriangle, BarChart2, Globe, Truck, Trash2, X, PlusCircle, User, Calendar, CheckCircle, Flame, Search, ArrowRight, FileText,
@@ -158,6 +158,10 @@ export default function Home() {
 
   const lowStockProducts = useMemo(() => {
     return products.filter(p => {
+      const statusInfo = getProductStatusInfo(p);
+      if (statusInfo.isPaused || statusInfo.status === 'out_of_stock' || p.is_out_of_stock || p.is_discontinued) {
+        return false;
+      }
       const pStock = productTotalStockMap.get(p.product_id) || 0;
       const rawMin = p.min_stock;
       const alertThreshold = (typeof rawMin === 'number' && !isNaN(rawMin)) 
@@ -522,6 +526,7 @@ export default function Home() {
       const txType = `stock_out ${normPlatform}`;
       const cleanOrderId = orderIdStr.replace(/[^a-zA-Z0-9_-]/g, '_');
       const timestampDate = format(new Date(), 'yyyy-MM-dd HH:mm:ss');
+      const orderTxId = `TX_ORD_${cleanOrderId}`;
 
       for (let itemIdx = 0; itemIdx < order.items.length; itemIdx++) {
         const item = order.items[itemIdx];
@@ -554,12 +559,14 @@ export default function Home() {
           for (const entry of sortedStock) {
             if (remainingNeeded <= 0) break;
             const deductQty = Math.min(entry.quantity, remainingNeeded);
-            const targetTxId = `TX_ORD_${cleanOrderId}_${itemIdx}_${deductIdx}`;
+            const rowUniqueId = `${orderTxId}_${itemIdx}_${deductIdx}_${Math.random().toString(36).substring(2, 6)}`;
 
             await enqueueAction('stockOut', {
-              id: targetTxId,
-              transaction_id: targetTxId,
+              id: rowUniqueId,
+              transaction_id: orderTxId,
               online_order_id: order.order_id,
+              batch_id: orderTxId,
+              batch_tx_id: orderTxId,
               platform: normPlatform,
               type: txType,
               stock_id: entry.stock_id,
@@ -584,15 +591,17 @@ export default function Home() {
 
         // If item was not in system or stock was insufficient, log forced shipment for remaining qty with location/floor/area BLANK
         if (remainingNeeded > 0) {
-          const targetTxId = `TX_ORD_${cleanOrderId}_${itemIdx}_forced_${deductIdx}`;
+          const rowUniqueId = `${orderTxId}_${itemIdx}_forced_${deductIdx}_${Math.random().toString(36).substring(2, 6)}`;
           const forcedNote = !isProductInSystem 
             ? `[強行出貨-非系統商品] 網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${normPlatform} | 買家: ${order.customer_name || '未指定'} | 物流: ${order.shipping_method || '未指定'}`
             : `[強行出貨-缺貨紀錄] 網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${normPlatform} | 買家: ${order.customer_name || '未指定'} | 物流: ${order.shipping_method || '未指定'}`;
 
           await enqueueAction('stockOut', {
-            id: targetTxId,
-            transaction_id: targetTxId,
+            id: rowUniqueId,
+            transaction_id: orderTxId,
             online_order_id: order.order_id,
+            batch_id: orderTxId,
+            batch_tx_id: orderTxId,
             platform: normPlatform,
             type: txType,
             product_id: item.product_id || '',

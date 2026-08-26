@@ -28,7 +28,7 @@ console.error = (...args) => {
 };
 
 type TabType = 'dashboard' | 'list' | 'paused';
-type PausedFilterStatus = 'all' | 'out_of_stock' | 'discontinued';
+type PausedFilterStatus = 'all';
 
 export default function Reports() {
   const { 
@@ -43,9 +43,7 @@ export default function Reports() {
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<TabType>(reportsPageState.activeTab || 'dashboard');
-  const [pausedFilterStatus, setPausedFilterStatus] = useState<PausedFilterStatus>(
-    (reportsPageState.pausedFilterStatus as PausedFilterStatus) || 'all'
-  );
+  const [pausedFilterStatus, setPausedFilterStatus] = useState<PausedFilterStatus>('all');
   const [pausedSearchTerm, setPausedSearchTerm] = useState<string>(reportsPageState.pausedSearchTerm || '');
   const [pausedVendorFilter, setPausedVendorFilter] = useState<string>('all');
 
@@ -54,10 +52,10 @@ export default function Reports() {
   useEffect(() => {
     setReportsPageState({ 
       activeTab, 
-      pausedFilterStatus, 
+      pausedFilterStatus: 'all', 
       pausedSearchTerm 
     });
-  }, [activeTab, pausedFilterStatus, pausedSearchTerm, setReportsPageState]);
+  }, [activeTab, pausedSearchTerm, setReportsPageState]);
 
   // 1. Data Processing
   const reportData = useMemo(() => {
@@ -285,7 +283,7 @@ export default function Reports() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `暫時缺貨停產專報_${format(new Date(), 'yyyyMMdd_HHmm')}.csv`);
+    link.setAttribute('download', `暫時缺貨專報_${format(new Date(), 'yyyyMMdd_HHmm')}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -513,21 +511,18 @@ export default function Reports() {
     </div>
   );
 
-  // --- Render Dedicated Paused Report (暫時缺貨・暫時停產專屬報表) ---
+  // --- Render Dedicated Paused Report (暫時缺貨專屬報表) ---
   const renderPausedReport = () => (
     <div className="space-y-6">
       {/* 1. Header Overview Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="glass-panel p-3.5 rounded-xl border border-purple-500/30 bg-purple-500/5">
-          <div className="flex items-center space-x-1.5 mb-1 text-purple-300">
+        <div className="glass-panel p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/5">
+          <div className="flex items-center space-x-1.5 mb-1 text-amber-300">
             <Ban className="w-4 h-4" />
             <span className="text-[11px] font-bold uppercase tracking-wider">專報品項數</span>
           </div>
           <div className="text-xl font-bold text-white">{reportData.pausedProductsCount} <span className="text-xs font-normal text-zinc-400">項</span></div>
-          <div className="text-[10px] text-zinc-400 mt-1 flex gap-2">
-            <span className="text-amber-300">缺貨 {reportData.pausedOutOfStockCount}</span>
-            <span className="text-purple-300">停產 {reportData.pausedDiscontinuedCount}</span>
-          </div>
+          <div className="text-[10px] text-zinc-400 mt-1">暫時缺貨獨立存檔</div>
         </div>
 
         <div className="glass-panel p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/5">
@@ -562,43 +557,16 @@ export default function Reports() {
       <div className="glass-panel p-3.5 rounded-xl border border-white/10 space-y-3">
         {/* Status Filter Tabs */}
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center space-x-1 bg-white/5 p-1 rounded-lg border border-white/10 text-xs">
-            <button
-              onClick={() => setPausedFilterStatus('all')}
-              className={`px-3 py-1 rounded font-bold transition-all ${
-                pausedFilterStatus === 'all'
-                  ? 'bg-white text-black shadow'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              全部 ({reportData.pausedProductsCount})
-            </button>
-            <button
-              onClick={() => setPausedFilterStatus('out_of_stock')}
-              className={`px-3 py-1 rounded font-bold transition-all flex items-center space-x-1 ${
-                pausedFilterStatus === 'out_of_stock'
-                  ? 'bg-amber-500 text-black shadow'
-                  : 'text-amber-400 hover:text-amber-200'
-              }`}
-            >
-              <span>🟡 暫時缺貨 ({reportData.pausedOutOfStockCount})</span>
-            </button>
-            <button
-              onClick={() => setPausedFilterStatus('discontinued')}
-              className={`px-3 py-1 rounded font-bold transition-all flex items-center space-x-1 ${
-                pausedFilterStatus === 'discontinued'
-                  ? 'bg-purple-500 text-white shadow'
-                  : 'text-purple-400 hover:text-purple-200'
-              }`}
-            >
-              <span>🟣 暫時停產 ({reportData.pausedDiscontinuedCount})</span>
-            </button>
+          <div className="flex items-center space-x-1.5 text-xs text-amber-300 font-bold">
+            <span className="px-2.5 py-1 bg-amber-500/20 border border-amber-500/30 rounded-lg">
+              🟡 暫時缺貨商品清單 ({reportData.pausedProductsCount})
+            </span>
           </div>
 
           <button
             onClick={handleExportPausedCsv}
             disabled={filteredPausedList.length === 0}
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+            className="flex items-center space-x-1.5 px-3 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 rounded-lg text-xs font-bold transition-all disabled:opacity-50 cursor-pointer"
           >
             <Download className="w-3.5 h-3.5" />
             <span>匯出專報 CSV</span>
@@ -649,20 +617,15 @@ export default function Reports() {
           <div className="glass-panel p-8 rounded-xl text-center border border-white/10 space-y-2">
             <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto opacity-80" />
             <p className="text-white font-bold text-sm">目前專屬報表無符合條件之商品</p>
-            <p className="text-zinc-400 text-xs">所有暫時缺貨或暫時停產之商品狀態已由系統獨立歸檔。</p>
+            <p className="text-zinc-400 text-xs">所有暫時缺貨之商品狀態已由系統獨立歸檔。</p>
           </div>
         ) : (
           filteredPausedList.map((item, idx) => {
             const p = item.product;
-            const isDisc = item.statusInfo.status === 'discontinued';
             return (
               <div 
                 key={p.product_id || idx}
-                className={`glass-panel p-4 rounded-xl border transition-all ${
-                  isDisc 
-                    ? 'border-purple-500/40 bg-purple-950/10 hover:border-purple-400/60' 
-                    : 'border-amber-500/40 bg-amber-950/10 hover:border-amber-400/60'
-                }`}
+                className="glass-panel p-4 rounded-xl border border-amber-500/40 bg-amber-950/10 hover:border-amber-400/60 transition-all"
               >
                 {/* Header row */}
                 <div className="flex justify-between items-start gap-2 mb-2">
@@ -684,7 +647,7 @@ export default function Reports() {
                   {/* Stock counter */}
                   <div className="text-right shrink-0">
                     <div className="text-xs text-zinc-400">倉庫庫存</div>
-                    <div className={`text-lg font-black font-mono ${item.totalStock > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    <div className={`text-lg font-black font-mono ${item.totalStock > 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
                       {item.totalStock} <span className="text-xs font-normal text-zinc-300">{p.unit || '件'}</span>
                     </div>
                   </div>
@@ -712,30 +675,12 @@ export default function Reports() {
                   <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => setProductAvailability(p.product_id, 'normal')}
-                      className="px-2.5 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 rounded text-xs font-bold transition-all flex items-center gap-1"
+                      className="px-2.5 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 rounded text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
                       title="恢復為正常供應，並重新納入常規報表計算"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       <span>恢復供應</span>
                     </button>
-
-                    {isDisc ? (
-                      <button
-                        onClick={() => setProductAvailability(p.product_id, 'out_of_stock')}
-                        className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 rounded text-xs font-bold transition-all"
-                        title="切換為暫時缺貨"
-                      >
-                        改為缺貨
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => setProductAvailability(p.product_id, 'discontinued')}
-                        className="px-2.5 py-1 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 rounded text-xs font-bold transition-all"
-                        title="切換為暫時停產"
-                      >
-                        改為停產
-                      </button>
-                    )}
                   </div>
 
                   {/* Navigation shortcut links */}
@@ -769,7 +714,7 @@ export default function Reports() {
       <header className="flex flex-wrap justify-between items-end gap-2">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text-main)] mb-1">洞察報表</h1>
-          <p className="text-sm text-[var(--color-text-dim)]">財務估算、庫存健康度與停產缺貨專區</p>
+          <p className="text-sm text-[var(--color-text-dim)]">財務估算、庫存健康度與暫時缺貨專區</p>
         </div>
       </header>
 
@@ -799,15 +744,15 @@ export default function Reports() {
           onClick={() => setActiveTab('paused')}
           className={`flex-1 flex items-center justify-center py-2 text-xs sm:text-sm font-bold rounded-lg transition-all relative ${
             activeTab === 'paused' 
-              ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/30 font-black' 
-              : 'text-purple-300 hover:text-white'
+              ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/30 font-black' 
+              : 'text-amber-300 hover:text-white'
           }`}
         >
           <Ban className="w-4 h-4 mr-1.5" /> 
-          <span>缺貨/停產專報</span>
+          <span>暫時缺貨專報</span>
           {reportData.pausedProductsCount > 0 && (
             <span className={`ml-1.5 px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
-              activeTab === 'paused' ? 'bg-black/30 text-white' : 'bg-purple-500/30 text-purple-200'
+              activeTab === 'paused' ? 'bg-black/30 text-black' : 'bg-amber-500/30 text-amber-200'
             }`}>
               {reportData.pausedProductsCount}
             </span>

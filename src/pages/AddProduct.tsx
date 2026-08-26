@@ -33,7 +33,7 @@ export default function AddProduct() {
   const [costPrice, setCostPrice] = useState('');
   const [vendorId, setVendorId] = useState('');
   const [hasExpiry, setHasExpiry] = useState(false);
-  const [productStatus, setProductStatus] = useState<'normal' | 'out_of_stock' | 'discontinued'>('normal');
+  const [productStatus, setProductStatus] = useState<'normal' | 'out_of_stock'>('normal');
   const [minStock, setMinStock] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
 
@@ -52,7 +52,8 @@ export default function AddProduct() {
         setCostPrice(draft.costPrice || '');
         setVendorId(draft.vendorId || '');
         setHasExpiry(draft.hasExpiry || false);
-        setProductStatus(draft.productStatus || (draft.isDiscontinued ? 'discontinued' : 'normal'));
+        const isDraftOut = draft.productStatus === 'out_of_stock' || draft.productStatus === 'discontinued' || draft.isDiscontinued || draft.isOutOfStock;
+        setProductStatus(isDraftOut ? 'out_of_stock' : 'normal');
         setMinStock(draft.minStock || '');
         if (draft.expiryDate) setExpiryDate(draft.expiryDate);
       } catch (e) {
@@ -86,8 +87,8 @@ export default function AddProduct() {
       setVendorId(existingProduct.vendor_id || '');
       setHasExpiry(existingProduct.has_expiry || false);
       
-      const st = existingProduct.status || (existingProduct.is_discontinued ? 'discontinued' : existingProduct.is_out_of_stock ? 'out_of_stock' : 'normal');
-      setProductStatus(st as any);
+      const isOut = existingProduct.is_out_of_stock || existingProduct.is_discontinued || existingProduct.status === 'out_of_stock' || existingProduct.status === 'discontinued' || String(existingProduct.status).includes('缺貨') || String(existingProduct.status).includes('停產');
+      setProductStatus(isOut ? 'out_of_stock' : 'normal');
       setMinStock(existingProduct.min_stock?.toString() || '');
     }
   }, [existingProduct]);
@@ -115,7 +116,6 @@ export default function AddProduct() {
        if (existingVendor) actualVendorId = existingVendor.vendor_id;
     }
 
-    const isDiscontinuedVal = productStatus === 'discontinued';
     const isOutOfStockVal = productStatus === 'out_of_stock';
 
     const productData = {
@@ -129,8 +129,8 @@ export default function AddProduct() {
       cost_price: Number(costPrice) || 0,
       vendor_id: actualVendorId,
       has_expiry: hasExpiry,
-      status: productStatus,
-      is_discontinued: isDiscontinuedVal,
+      status: isOutOfStockVal ? '暫時缺貨' : '正常',
+      is_discontinued: false,
       is_out_of_stock: isOutOfStockVal,
       min_stock: minStock !== '' ? Number(minStock) : undefined
     };
@@ -310,7 +310,7 @@ export default function AddProduct() {
                 商品供應與生產狀態
               </label>
               
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {/* 1. 正常供應 */}
                 <div 
                   onClick={() => setProductStatus('normal')}
@@ -340,23 +340,7 @@ export default function AddProduct() {
                     <span className="text-amber-400">🟡</span>
                     <span className={productStatus === 'out_of_stock' ? 'text-amber-300' : 'text-zinc-300'}>暫時缺貨</span>
                   </div>
-                  <div className="text-[10px] text-zinc-400 mt-1 leading-tight">獨立於專報，待進貨回補</div>
-                </div>
-
-                {/* 3. 暫時停產 */}
-                <div 
-                  onClick={() => setProductStatus('discontinued')}
-                  className={`p-3 rounded-xl border cursor-pointer transition-all ${
-                    productStatus === 'discontinued'
-                      ? 'border-purple-500 bg-purple-500/15 text-white shadow-sm'
-                      : 'border-white/10 bg-white/5 text-zinc-400 hover:border-white/20'
-                  }`}
-                >
-                  <div className="flex items-center gap-1.5 font-bold text-xs">
-                    <span className="text-purple-400">🟣</span>
-                    <span className={productStatus === 'discontinued' ? 'text-purple-300' : 'text-zinc-300'}>暫時停產</span>
-                  </div>
-                  <div className="text-[10px] text-zinc-400 mt-1 leading-tight">原廠生產中，暫緩日常警示</div>
+                  <div className="text-[10px] text-zinc-400 mt-1 leading-tight">獨立於專報，不納入日常補貨警示</div>
                 </div>
               </div>
             </div>

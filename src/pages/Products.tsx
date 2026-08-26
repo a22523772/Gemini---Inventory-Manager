@@ -358,14 +358,6 @@ export default function Products() {
                   >
                     🟡 暫時缺貨
                   </button>
-                  <button
-                    onClick={() => setFilterDiscontinued('discontinued')}
-                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
-                      filterDiscontinued === 'discontinued' ? 'bg-purple-500/30 text-purple-300' : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    🟣 暫時停產
-                  </button>
                 </div>
 
                 <div className="relative">
@@ -462,12 +454,10 @@ export default function Products() {
             const isExpired = group.isExpired;
             const isExpiringSoon = group.isExpiringSoon;
             const statusInfo = getProductStatusInfo(p);
-            const isDiscontinued = statusInfo.status === 'discontinued';
-            const isOutOfStock = statusInfo.status === 'out_of_stock';
             const isPaused = statusInfo.isPaused;
 
             return (
-              <div key={groupId} className={`glass-panel border ${isDiscontinued ? 'border-purple-500/40 bg-purple-500/5' : isOutOfStock ? 'border-amber-500/40 bg-amber-500/5' : isExpired ? 'border-red-500/50 bg-red-500/5' : isExpiringSoon ? 'border-orange-500/50 bg-orange-500/5' : isLowStock ? 'border-amber-500/50 bg-amber-500/5' : 'border-[var(--color-glass-border)]'} rounded-xl p-4 transition-all shadow-sm`}>
+              <div key={groupId} className={`glass-panel border ${isPaused ? 'border-amber-500/40 bg-amber-500/5' : isExpired ? 'border-red-500/50 bg-red-500/5' : isExpiringSoon ? 'border-orange-500/50 bg-orange-500/5' : isLowStock ? 'border-amber-500/50 bg-amber-500/5' : 'border-[var(--color-glass-border)]'} rounded-xl p-4 transition-all shadow-sm`}>
                 <div className="flex justify-between items-start mb-2">
                   <div className="flex-1 pr-2">
                     <h3 className="font-bold text-[var(--color-text-main)] text-base flex flex-wrap gap-1 items-center">
@@ -476,13 +466,7 @@ export default function Products() {
                       {p.specification && <span className="text-[10px] font-normal px-1.5 py-0.5 ml-1 bg-white/10 rounded-md text-[var(--color-accent-blue)]">{p.specification}</span>}
                     </h3>
                     <div className="flex flex-wrap gap-1.5 mt-2">
-                       {isDiscontinued && (
-                         <span className="text-[10px] font-bold px-2 py-0.5 bg-purple-500/20 text-purple-300 rounded-md flex items-center gap-1 border border-purple-500/40 shadow-sm">
-                           <PauseCircle className="w-3 h-3 text-purple-400" />
-                           🟣 暫時停產 (原廠生產中)
-                         </span>
-                       )}
-                       {isOutOfStock && (
+                       {isPaused && (
                          <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-500/20 text-amber-300 rounded-md flex items-center gap-1 border border-amber-500/40 shadow-sm">
                            <Ban className="w-3 h-3 text-amber-400" />
                            🟡 暫時缺貨 (待補貨)
@@ -536,19 +520,16 @@ export default function Products() {
                         <div className="flex gap-1.5 items-center flex-wrap">
                            {/* Status quick toggle dropdown / buttons */}
                            <select
-                             value={statusInfo.status}
+                             value={isPaused ? 'out_of_stock' : 'normal'}
                              onChange={(e) => setProductAvailability(p.product_id, e.target.value as any)}
                              className={`px-2 py-1 text-xs font-bold rounded-lg border outline-none transition-all cursor-pointer ${
-                               statusInfo.status === 'discontinued'
-                                 ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
-                                 : statusInfo.status === 'out_of_stock'
+                               isPaused
                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                                  : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                              }`}
                            >
                              <option value="normal" className="bg-[#0f172a] text-emerald-300">🟢 正常供應</option>
                              <option value="out_of_stock" className="bg-[#0f172a] text-amber-300">🟡 暫時缺貨</option>
-                             <option value="discontinued" className="bg-[#0f172a] text-purple-300">🟣 暫時停產</option>
                            </select>
                            <button onClick={() => navigate(`/add-product?editId=${p.product_id}`)} className="p-2 glass-panel text-[var(--color-accent-blue)] rounded-lg hover:bg-white/10" title="編輯商品">
                              <Pencil className="w-4 h-4" />
