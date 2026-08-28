@@ -10,6 +10,7 @@ import AddProduct from './pages/AddProduct';
 import Vendors from './pages/Vendors';
 import Transactions from './pages/Transactions';
 import Reports from './pages/Reports';
+import Purchases from './pages/Purchases';
 import { useStore } from './store/useStore';
 
 export default function App() {
@@ -48,7 +49,10 @@ export default function App() {
           <Route path="manage" element={<StockManage />} />
           <Route path="setup" element={<SetupGuide />} />
           <Route path="add-product" element={<AddProduct />} />
+          <Route path="edit-product" element={<AddProduct />} />
+          <Route path="edit-product/:id" element={<AddProduct />} />
           <Route path="vendors" element={<Vendors />} />
+          <Route path="purchases" element={<Purchases />} />
           <Route path="transactions" element={<Transactions />} />
           <Route path="reports" element={<Reports />} />
         </Route>

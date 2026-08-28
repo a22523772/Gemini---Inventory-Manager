@@ -65,12 +65,15 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
 
   // Unique list of vendors and categories for dropdowns
   const vendorOptions = useMemo(() => {
-    const vIds = Array.from(new Set(products.map(p => p.vendor_id).filter(Boolean)));
-    return vIds.map(vid => ({
+    const vIds = new Set(products.map(p => p.vendor_id).filter(Boolean));
+    vendors.forEach(v => {
+      if (v.vendor_id) vIds.add(v.vendor_id);
+    });
+    return Array.from(vIds).map(vid => ({
       id: vid,
       name: vendorMap.get(vid) || vid
     })).sort((a, b) => a.name.localeCompare(b.name, 'zh-HK'));
-  }, [products, vendorMap]);
+  }, [products, vendors, vendorMap]);
 
   const categoryOptions = useMemo(() => {
     return Array.from(new Set(products.map(p => p.category).filter(Boolean)))
@@ -696,7 +699,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                           </button>
 
                           <Link
-                            to={`/edit-product/${item.product_id}`}
+                            to={`/add-product?editId=${encodeURIComponent(item.product_id)}`}
                             className="p-1 text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg border border-white/5 transition-colors"
                             title="編輯商品完整資料"
                           >

@@ -26,7 +26,24 @@ export default function ReplenishmentOverview() {
   const [copied, setCopied] = useState(false);
 
   // Vendor map for lookup
-  const vendorMap = useMemo(() => new Map(vendors.map(v => [v.vendor_id, v.vendor_name])), [vendors]);
+  const vendorMap = useMemo(() => {
+    const map = new Map<string, string>();
+    vendors.forEach(v => map.set(v.vendor_id, v.vendor_name || v.name || v.vendor_id));
+    return map;
+  }, [vendors]);
+
+  const vendorList = useMemo(() => {
+    const map = new Map<string, string>();
+    vendors.forEach(v => {
+      if (v.vendor_id) map.set(v.vendor_id, v.vendor_name || v.name || v.vendor_id);
+    });
+    products.forEach(p => {
+      if (p.vendor_id && !map.has(p.vendor_id)) {
+        map.set(p.vendor_id, vendorMap.get(p.vendor_id) || p.vendor_id);
+      }
+    });
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'zh-HK'));
+  }, [vendors, products, vendorMap]);
 
   // Current stock per product_id
   const stockMap = useMemo(() => {
@@ -268,9 +285,9 @@ export default function ReplenishmentOverview() {
               className="w-full py-2 px-3 bg-white/5 border border-white/10 rounded-xl text-xs text-white outline-none focus:border-emerald-400 cursor-pointer appearance-none"
             >
               <option value="" className="bg-slate-900">所有供應商 (補貨對象)</option>
-              {vendors.map(v => (
-                <option key={v.vendor_id} value={v.vendor_id} className="bg-slate-900">
-                  {v.vendor_name}
+              {vendorList.map(v => (
+                <option key={v.id} value={v.id} className="bg-slate-900">
+                  {v.name}
                 </option>
               ))}
             </select>

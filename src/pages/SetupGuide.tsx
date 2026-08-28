@@ -866,6 +866,117 @@ export default function SetupGuide() {
     }
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
+
+  if (action === 'addPurchaseOrder' || action === 'savePurchaseOrders' || action === 'editPurchaseOrder') {
+    var poSheet = ss.getSheetByName('purchase_orders');
+    if (!poSheet) {
+      poSheet = ss.insertSheet('purchase_orders');
+      poSheet.appendRow(['po_id', 'vendor_id', 'vendor_name', 'product_id', 'name', 'specification', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_image_url']);
+    }
+    var headers = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
+    var poIdIdx = headers.indexOf('po_id');
+    
+    var poList = Array.isArray(data) ? data : [data];
+    for (var p = 0; p < poList.length; p++) {
+      var po = poList[p];
+      if (poSheet.getLastRow() > 1 && poIdIdx !== -1) {
+        var values = poSheet.getDataRange().getValues();
+        for (var r = values.length - 1; r >= 1; r--) {
+          if (String(values[r][poIdIdx]).trim() === String(po.po_id).trim()) {
+            poSheet.deleteRow(r + 1);
+          }
+        }
+      }
+      
+      var items = po.items || [{
+        product_id: po.product_id || '',
+        name: po.name || po.product_name || '',
+        specification: po.specification || '',
+        ordered_quantity: po.ordered_quantity || po.quantity || 1,
+        received_quantity: po.received_quantity || 0,
+        cost_price: po.cost_price || 0,
+        note: po.item_note || ''
+      }];
+      
+      for (var it = 0; it < items.length; it++) {
+        var item = items[it];
+        var row = [];
+        for (var h = 0; h < headers.length; h++) {
+          var colName = headers[h];
+          var val = '';
+          if (colName === 'po_id') val = po.po_id;
+          else if (colName === 'vendor_id') val = po.vendor_id || '';
+          else if (colName === 'vendor_name') val = po.vendor_name || '';
+          else if (colName === 'product_id') val = item.product_id || '';
+          else if (colName === 'name') val = item.name || item.product_name || '';
+          else if (colName === 'specification') val = item.specification || '';
+          else if (colName === 'ordered_quantity') val = Number(item.ordered_quantity) || 0;
+          else if (colName === 'received_quantity') val = Number(item.received_quantity) || 0;
+          else if (colName === 'cost_price') val = Number(item.cost_price) || 0;
+          else if (colName === 'status') val = po.status || 'pending';
+          else if (colName === 'order_date') val = po.order_date || '';
+          else if (colName === 'expected_date') val = po.expected_date || '';
+          else if (colName === 'note') val = item.note || po.note || '';
+          else if (colName === 'operator') val = po.operator || '';
+          else if (colName === 'invoice_image_url') val = po.invoice_image_url || '';
+          row.push(val);
+        }
+        poSheet.appendRow(row);
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({success: true})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'deletePurchaseOrder') {
+    var poSheet = ss.getSheetByName('purchase_orders');
+    if (poSheet && poSheet.getLastRow() > 1) {
+      var headers = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
+      var poIdIdx = headers.indexOf('po_id');
+      if (poIdIdx !== -1) {
+        var values = poSheet.getDataRange().getValues();
+        for (var r = values.length - 1; r >= 1; r--) {
+          if (String(values[r][poIdIdx]).trim() === String(data.po_id).trim()) {
+            poSheet.deleteRow(r + 1);
+          }
+        }
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({success: true})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'uploadInvoiceImage') {
+    try {
+      var folderName = '進貨單據歸檔';
+      var folders = DriveApp.getFoldersByName(folderName);
+      var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(folderName);
+      
+      var base64Data = data.imageBase64 || data.base64 || '';
+      var cleanBase64 = base64Data;
+      if (cleanBase64.indexOf('base64,') !== -1) {
+        cleanBase64 = cleanBase64.split('base64,')[1];
+      }
+      var decoded = Utilities.base64Decode(cleanBase64);
+      var fileName = data.fileName || ('Invoice_' + Utilities.formatDate(new Date(), 'GMT+8', 'yyyyMMdd_HHmmss') + '.jpg');
+      var blob = Utilities.newBlob(decoded, 'image/jpeg', fileName);
+      var file = folder.createFile(blob);
+      try {
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      } catch(e) {}
+      
+      var fileId = file.getId();
+      var directUrl = 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w1600';
+      var viewUrl = file.getUrl();
+      
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        fileId: fileId,
+        url: directUrl,
+        viewUrl: viewUrl
+      })).setMimeType(ContentService.MimeType.JSON);
+    } catch(err) {
+      return ContentService.createTextOutput(JSON.stringify({success: false, error: err.toString()})).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
 }
 
 function doGet(e) {
@@ -987,6 +1098,54 @@ function doGet(e) {
       }
       result.push(obj);
     }
+    return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'getPurchaseOrders') {
+    var sheet = ss.getSheetByName('purchase_orders');
+    if (!sheet || sheet.getLastRow() <= 1) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
+    var dataRange = sheet.getDataRange();
+    var data = dataRange.getDisplayValues();
+    if (data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
+    var keys = data[0];
+    var poMap = {};
+    for (var i = 1; i < data.length; i++) {
+      if (!data[i].join('').trim()) continue;
+      var obj = {};
+      for (var j = 0; j < keys.length; j++) {
+        var val = data[i][j];
+        if (keys[j] === 'ordered_quantity' || keys[j] === 'received_quantity' || keys[j] === 'cost_price') {
+          val = Number(val) || 0;
+        }
+        obj[keys[j]] = val;
+      }
+      var poid = obj.po_id || ('PO_ROW_' + i);
+      if (!poMap[poid]) {
+        poMap[poid] = {
+          po_id: poid,
+          vendor_id: obj.vendor_id || '',
+          vendor_name: obj.vendor_name || '',
+          status: obj.status || 'pending',
+          order_date: obj.order_date || '',
+          expected_date: obj.expected_date || '',
+          note: obj.note || '',
+          operator: obj.operator || '',
+          invoice_image_url: obj.invoice_image_url || '',
+          items: []
+        };
+      }
+      poMap[poid].items.push({
+        product_id: obj.product_id || '',
+        name: obj.name || '',
+        product_name: obj.name || '',
+        specification: obj.specification || '',
+        ordered_quantity: Number(obj.ordered_quantity) || 0,
+        received_quantity: Number(obj.received_quantity) || 0,
+        cost_price: Number(obj.cost_price) || 0,
+        note: obj.note || ''
+      });
+    }
+    var result = Object.values(poMap);
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
   }
 }`}

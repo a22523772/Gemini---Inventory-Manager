@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import { ArrowLeft, Save, ScanBarcode, PackagePlus, Pencil } from 'lucide-react';
 
 export default function AddProduct() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { id: routeParamId } = useParams();
   const { addProduct, editProduct, products, vendors, showToast } = useStore();
 
-  const editId = searchParams.get('editId');
+  const editId = searchParams.get('editId') || routeParamId || null;
   const existingProduct = editId ? products.find(p => p.product_id === editId) : null;
 
   // Extract unique categories and brands for datalists

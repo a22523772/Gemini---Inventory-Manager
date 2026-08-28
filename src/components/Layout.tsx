@@ -4,7 +4,7 @@ import { useStore } from '../store/useStore';
 import { 
   Home, Package, ScanLine, ArrowRightLeft, Settings, 
   BarChart2, Users, FileText, RefreshCw, Layers, 
-  CheckCircle2, CloudOff, UserCheck, ShieldCheck
+  CheckCircle2, CloudOff, UserCheck, ShieldCheck, Truck
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -16,12 +16,16 @@ export default function Layout() {
     operator, 
     syncData, 
     isLoading, 
-    gasApiUrl 
+    gasApiUrl,
+    purchaseOrders
   } = useStore();
+
+  const pendingPOCount = (purchaseOrders || []).filter(po => po.status === 'pending' || po.status === 'partial').length;
 
   const getPageTitle = (pathname: string) => {
     if (pathname === '/') return '首頁儀表板';
     if (pathname.startsWith('/products')) return '商品圖書管理';
+    if (pathname.startsWith('/purchases')) return '採購與進貨管理';
     if (pathname.startsWith('/scan')) return '條碼快速掃描';
     if (pathname.startsWith('/manage')) return '庫存進出貨 / 盤點';
     if (pathname.startsWith('/transactions')) return '交易歷史紀錄';
@@ -35,6 +39,7 @@ export default function Layout() {
   const navItems = [
     { to: lastPaths.home || '/', activeBase: '/', icon: Home, label: '首頁儀表板', desc: '總覽、出貨與警示' },
     { to: lastPaths.products || '/products', activeBase: '/products', icon: Package, label: '商品圖書', desc: '商品規格與總庫存' },
+    { to: '/purchases', activeBase: '/purchases', icon: Truck, label: '採購進貨', desc: '在途追蹤、拍照進貨', badge: pendingPOCount > 0 ? pendingPOCount : 0 },
     { to: lastPaths.manage || '/manage', activeBase: '/manage', icon: ArrowRightLeft, label: '進出貨盤點', desc: '快速進貨、出貨、盤點' },
     { to: '/transactions', activeBase: '/transactions', icon: FileText, label: '交易紀錄', desc: '查詢進出貨明細' },
     { to: '/reports', activeBase: '/reports', icon: BarChart2, label: '報表分析', desc: '效期、過期、供應商統計' },

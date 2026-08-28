@@ -310,7 +310,7 @@ export default function Home() {
       const isSystemProduct = Boolean(matchedProd);
       const resolvedPid = matchedProd ? matchedProd.product_id : (rawPid || '非系統商品');
       const resolvedName = matchedProd ? matchedProd.name : (rawName || rawPid || '非系統商品 (未命名)');
-      const resolvedSpec = rawSpec || (matchedProd ? matchedProd.specification : '') || '預設規格';
+      const resolvedSpec = rawSpec || (matchedProd ? (matchedProd.specification || '') : '');
       const resolvedUnit = matchedProd?.unit || '個';
       const resolvedCostPrice = matchedProd?.cost_price || 0;
       const resolvedVendor = matchedProd?.vendor_id 
@@ -396,21 +396,26 @@ export default function Home() {
     }
 
     const headers = ['商品編號', '商品名稱', '規格', '供應商 / 來源', '單位', '網路訂單需求總量', '目前現有庫存量', '建議訂購數量(缺貨)', '預估進價成本', '預估採購小計', '涉及訂單筆數', '訂單編號列表', '系統建檔狀態'];
-    const rows = filteredConsolidatedItems.map(item => [
-      `"${item.product_id || ''}"`,
-      `"${(item.product_name || '').replace(/"/g, '""')}"`,
-      `"${(item.specification || '').replace(/"/g, '""')}"`,
-      `"${(item.vendor_name || '').replace(/"/g, '""')}"`,
-      `"${(item.unit || '個').replace(/"/g, '""')}"`,
-      item.total_ordered_qty,
-      item.current_stock_qty,
-      item.shortfall_qty,
-      item.cost_price || 0,
-      (item.cost_price || 0) * item.shortfall_qty,
-      item.orders_count,
-      `"${item.order_ids.join('; ')}"`,
-      `"${item.is_non_system ? '非系統商品' : '系統商品'}"`
-    ]);
+    const rows = filteredConsolidatedItems.map(item => {
+      const rawSpec = item.specification ? String(item.specification).trim() : '';
+      const isBlankSpec = !rawSpec || rawSpec === '預設規格' || rawSpec === '無' || rawSpec === '無規格' || rawSpec === '-' || rawSpec === '預設' || rawSpec === '未指定';
+      const cleanSpec = isBlankSpec ? '' : rawSpec;
+      return [
+        `"${item.product_id || ''}"`,
+        `"${(item.product_name || '').replace(/"/g, '""')}"`,
+        `"${cleanSpec.replace(/"/g, '""')}"`,
+        `"${(item.vendor_name || '').replace(/"/g, '""')}"`,
+        `"${(item.unit || '個').replace(/"/g, '""')}"`,
+        item.total_ordered_qty,
+        item.current_stock_qty,
+        item.shortfall_qty,
+        item.cost_price || 0,
+        (item.cost_price || 0) * item.shortfall_qty,
+        item.orders_count,
+        `"${item.order_ids.join('; ')}"`,
+        `"${item.is_non_system ? '非系統商品' : '系統商品'}"`
+      ];
+    });
 
     const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -431,15 +436,20 @@ export default function Home() {
     }
 
     const headers = ['商品名稱', '規格', '數量'];
-    const rows = filteredConsolidatedItems.map(item => [
-      item.product_name || '',
-      item.specification || '',
-      item.shortfall_qty > 0 ? item.shortfall_qty : item.total_ordered_qty
-    ]);
+    const rows = filteredConsolidatedItems.map(item => {
+      const rawSpec = item.specification ? String(item.specification).trim() : '';
+      const isBlankSpec = !rawSpec || rawSpec === '預設規格' || rawSpec === '無' || rawSpec === '無規格' || rawSpec === '-' || rawSpec === '預設' || rawSpec === '未指定';
+      const cleanSpec = isBlankSpec ? '' : rawSpec;
+      return [
+        item.product_name || '',
+        cleanSpec,
+        item.shortfall_qty > 0 ? item.shortfall_qty : item.total_ordered_qty
+      ];
+    });
 
     const tsvContent = [headers.join('\t'), ...rows.map(r => r.join('\t'))].join('\n');
     navigator.clipboard.writeText(tsvContent).then(() => {
-      showToast("📋 已成功複製商品名稱、規格、數量！可直接在 Excel 中貼上");
+      showToast("📋 已成功複製商品名稱、規格、數量！無規格已留空，可直接在 Excel 中貼上");
     }).catch(() => {
       showToast("❌ 複製失敗，請手動選取複製");
     });
@@ -1144,24 +1154,51 @@ export default function Home() {
                                 {order.items.map((item: any, idx: number) => {
                                   const spec = item.specification || getProductSpecification(item.product_id);
                                   const shipMethod = item.shipping_method || order.shipping_method;
+                                  const sysProd = item.product_id ? productMap.get(item.product_id) : (item.product_name ? products.find(p => p.name === item.product_name || p.product_id === item.product_name) : null);
+                                  const vendorName = sysProd?.vendor_id ? (vendorsMap.get(sysProd.vendor_id) || sysProd.vendor_id) : null;
+                                  const costPrice = sysProd?.cost_price !== undefined && sysProd?.cost_price !== null && !isNaN(Number(sysProd.cost_price)) ? Number(sysProd.cost_price) : null;
+
                                   return (
                                     <div key={idx} className="bg-white/5 rounded-lg p-2.5 flex items-start justify-between text-xs hover:bg-white/10 transition-colors">
                                       <div className="flex-1 min-w-0 mr-2 space-y-1">
-                                        <p className="font-semibold text-white truncate">{item.product_name}</p>
-                                        <div className="flex flex-wrap gap-1">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <p className="font-semibold text-white truncate">{item.product_name}</p>
+                                          {sysProd ? (
+                                            <span className="text-[10px] font-mono bg-sky-500/10 text-sky-300 border border-sky-500/20 px-1.5 py-0.2 rounded font-medium">
+                                              系統商品
+                                            </span>
+                                          ) : (
+                                            <span className="text-[10px] font-mono bg-amber-500/10 text-amber-300 border border-amber-500/20 px-1.5 py-0.2 rounded italic">
+                                              非系統商品
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
                                           {spec && (
-                                            <span className="inline-block bg-indigo-500/10 text-indigo-300 text-[10px] px-1.5 py-0.5 rounded border border-indigo-500/20 font-medium">
+                                            <span className="inline-block bg-indigo-500/10 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-500/20 font-medium">
                                               規格: {spec}
                                             </span>
                                           )}
                                           {shipMethod && (
-                                            <span className="inline-block bg-teal-500/10 text-teal-300 text-[10px] px-1.5 py-0.5 rounded border border-teal-500/20 font-medium">
+                                            <span className="inline-block bg-teal-500/10 text-teal-300 px-1.5 py-0.5 rounded border border-teal-500/20 font-medium">
                                               物流: {shipMethod}
                                             </span>
                                           )}
+                                          {sysProd && (
+                                            <>
+                                              {costPrice !== null && (
+                                                <span className="inline-block bg-amber-500/10 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/20 font-mono font-bold" title={`單件進價: $${costPrice.toLocaleString()}`}>
+                                                  進價: ${costPrice.toLocaleString()} {item.quantity > 1 ? `(小計 $${(costPrice * item.quantity).toLocaleString()})` : ''}
+                                                </span>
+                                              )}
+                                              <span className="inline-block bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-white/10" title="商品供應商">
+                                                廠商: {vendorName || '未指定'}
+                                              </span>
+                                            </>
+                                          )}
                                         </div>
                                       </div>
-                                      <div className="text-right shrink-0">
+                                      <div className="text-right shrink-0 font-mono">
                                         <p className="text-slate-400 text-xs">數量: <strong className="text-white font-black">{item.quantity}</strong></p>
                                       </div>
                                     </div>
@@ -1510,12 +1547,16 @@ export default function Home() {
                   {selectedOrder.items.map((item: any, idx: number) => {
                     const health = checkItemHealth(item);
                     const spec = item.specification || getProductSpecification(item.product_id);
+                    const sysProd = item.product_id ? productMap.get(item.product_id) : (item.product_name ? products.find(p => p.name === item.product_name || p.product_id === item.product_name) : null);
+                    const vendorName = sysProd?.vendor_id ? (vendorsMap.get(sysProd.vendor_id) || sysProd.vendor_id) : null;
+                    const costPrice = sysProd?.cost_price !== undefined && sysProd?.cost_price !== null && !isNaN(Number(sysProd.cost_price)) ? Number(sysProd.cost_price) : null;
+
                     return (
                       <div key={idx} className="bg-zinc-900/60 border border-white/5 rounded-xl p-3 space-y-2">
                         <div className="flex items-start justify-between gap-2">
-                          <div>
+                          <div className="flex-1 min-w-0">
                             <p className="text-xs font-bold text-white">{item.product_name}</p>
-                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                               {item.product_id ? (
                                 <span className="text-[10px] font-mono bg-white/10 text-zinc-300 px-1.5 py-0.5 rounded">商品ID: {item.product_id}</span>
                               ) : (
@@ -1535,6 +1576,18 @@ export default function Home() {
                                 </div>
                               )}
                               {spec && <span className="text-[10px] bg-indigo-500/10 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-500/20">規格: {spec}</span>}
+                              {sysProd && (
+                                <>
+                                  {costPrice !== null && (
+                                    <span className="text-[10px] bg-amber-500/10 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/20 font-mono font-bold" title={`單件進價: $${costPrice.toLocaleString()}`}>
+                                      進價成本: ${costPrice.toLocaleString()} {item.quantity > 1 ? `(小計 $${(costPrice * item.quantity).toLocaleString()})` : ''}
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-white/10" title="商品供應商">
+                                    供應商: {vendorName || '未指定'}
+                                  </span>
+                                </>
+                              )}
                             </div>
                           </div>
                           <div className="text-right text-xs shrink-0 font-mono">

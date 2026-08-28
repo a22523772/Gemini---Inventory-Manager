@@ -7,6 +7,34 @@ export const dbSyncQueue = localforage.createInstance({ name: 'StockApp', storeN
 export const dbSettings = localforage.createInstance({ name: 'StockApp', storeName: 'settings' });
 export const dbTransactions = localforage.createInstance({ name: 'StockApp', storeName: 'transactions' });
 export const dbOnlineOrders = localforage.createInstance({ name: 'StockApp', storeName: 'onlineOrders' });
+export const dbPurchaseOrders = localforage.createInstance({ name: 'StockApp', storeName: 'purchaseOrders' });
+
+export type PurchaseOrderItem = {
+  item_id?: string;
+  product_id: string;
+  product_name: string;
+  name?: string; // Alias for product_name
+  specification?: string;
+  ordered_quantity: number;
+  received_quantity: number;
+  cost_price: number;
+  note?: string;
+};
+
+export type PurchaseOrder = {
+  po_id: string;
+  vendor_id: string;
+  vendor_name?: string;
+  status: 'pending' | 'partial' | 'completed' | 'cancelled';
+  order_date: string;
+  expected_date?: string;
+  note?: string;
+  operator: string;
+  invoice_image_url?: string;
+  items: PurchaseOrderItem[];
+  created_at?: string;
+  updated_at?: string;
+};
 
 export type OnlineOrder = {
   order_id: string;
@@ -60,6 +88,7 @@ export type Stock = {
 export type Vendor = {
   vendor_id: string;
   vendor_name: string;
+  name?: string; // Alias for vendor_name
   contact?: string;
   phone?: string;
 };
@@ -84,6 +113,8 @@ export type Transaction = {
   specification?: string;
   cost_price?: number;
   vendor_id?: string;
+  po_id?: string;
+  invoice_image_url?: string;
   date: string;
   note?: string;
   operator: string;
@@ -92,7 +123,7 @@ export type Transaction = {
 // Queue item type
 export type SyncItem = {
   id: string; // local uuid
-  action: 'stockIn' | 'stockOut' | 'adjustStock' | 'addProduct' | 'addVendor' | 'editProduct' | 'deleteProduct' | 'editVendor' | 'deleteVendor';
+  action: 'stockIn' | 'stockOut' | 'adjustStock' | 'addProduct' | 'addVendor' | 'editProduct' | 'deleteProduct' | 'editVendor' | 'deleteVendor' | 'addPurchaseOrder' | 'editPurchaseOrder' | 'deletePurchaseOrder';
   payload: any;
   timestamp: string;
 };

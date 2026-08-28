@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { dbProducts, dbStock, dbVendors, dbSyncQueue, dbSettings, dbTransactions, dbOnlineOrders, Product, Stock, Vendor, SyncItem, Transaction, OnlineOrder } from '../lib/db';
+import { dbProducts, dbStock, dbVendors, dbSyncQueue, dbSettings, dbTransactions, dbOnlineOrders, dbPurchaseOrders, Product, Stock, Vendor, SyncItem, Transaction, OnlineOrder, PurchaseOrder, PurchaseOrderItem } from '../lib/db';
 import { v4 as uuidv4 } from 'uuid';
 import { format, subDays } from 'date-fns';
 
@@ -455,6 +455,7 @@ interface AppState {
   vendors: Vendor[];
   transactions: Transaction[];
   onlineOrders: OnlineOrder[];
+  purchaseOrders: PurchaseOrder[];
   syncQueue: SyncItem[];
   gasApiUrl: string;
   operator: string;
@@ -468,6 +469,30 @@ interface AppState {
   syncData: () => Promise<void>;
   fetchRemoteData: () => Promise<void>;
   fetchOnlineOrders: () => Promise<void>;
+  fetchPurchaseOrders: () => Promise<void>;
+  addPurchaseOrder: (po: Omit<PurchaseOrder, 'created_at' | 'updated_at'>) => Promise<void>;
+  updatePurchaseOrder: (poId: string, updated: Partial<PurchaseOrder>) => Promise<void>;
+  deletePurchaseOrder: (poId: string) => Promise<void>;
+  uploadInvoiceImage: (base64Data: string, fileName?: string) => Promise<{ success: boolean; url?: string; viewUrl?: string; fileId?: string; error?: string }>;
+  batchStockInFromInvoice: (params: {
+    items: Array<{
+      product_id: string;
+      product_name: string;
+      specification?: string;
+      quantity: number;
+      cost_price?: number;
+      vendor_id?: string;
+      location: string;
+      floor: string;
+      area: string;
+      expiry_date?: string;
+      note?: string;
+    }>;
+    po_id?: string;
+    invoice_number?: string;
+    invoice_image_url?: string;
+    is_close_remaining_po?: boolean;
+  }) => Promise<void>;
   updateOnlineOrderStatus: (orderId: string, status: string, productId?: string) => Promise<boolean>;
   deleteOnlineOrder: (orderId: string) => Promise<boolean>;
   addProduct: (product: Omit<Product, 'created_at'>, isManual?: boolean) => Promise<void>;
@@ -547,6 +572,7 @@ export const useStore = create<AppState>((set, get) => ({
   vendors: [],
   transactions: [],
   onlineOrders: [],
+  purchaseOrders: [],
   syncQueue: [],
   gasApiUrl: '',
   operator: 'staff',
@@ -690,12 +716,20 @@ export const useStore = create<AppState>((set, get) => ({
         if (item) oList.push(item);
       }
 
+      const poKeys = await dbPurchaseOrders.keys();
+      const poList: PurchaseOrder[] = [];
+      for (const k of poKeys) {
+        const item = await dbPurchaseOrders.getItem<PurchaseOrder>(k);
+        if (item) poList.push(item);
+      }
+
       set({ 
         products: pList, 
         stock: sList, 
         vendors: vList, 
         transactions: tList.sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date)),
-        onlineOrders: oList
+        onlineOrders: oList,
+        purchaseOrders: poList
       });
     } catch (e: any) {
       set({ error: e.message });
@@ -935,6 +969,24 @@ export const useStore = create<AppState>((set, get) => ({
         await dbTransactions.setItem(newTx.id, newTx);
 
         set({ stock: updatedStock, transactions: updatedTx });
+    } else if (action === 'addPurchaseOrder' || action === 'editPurchaseOrder') {
+        const po = updatedPayload as PurchaseOrder;
+        const currentPOs = get().purchaseOrders;
+        const existingIdx = currentPOs.findIndex(p => p.po_id === po.po_id);
+        let updatedPOs = [...currentPOs];
+        if (existingIdx !== -1) {
+          updatedPOs[existingIdx] = po;
+        } else {
+          updatedPOs = [po, ...currentPOs];
+        }
+        await dbPurchaseOrders.setItem(po.po_id, po);
+        set({ purchaseOrders: updatedPOs });
+    } else if (action === 'deletePurchaseOrder') {
+        const poId = updatedPayload.po_id;
+        const currentPOs = get().purchaseOrders;
+        const updatedPOs = currentPOs.filter(p => p.po_id !== poId);
+        await dbPurchaseOrders.removeItem(poId);
+        set({ purchaseOrders: updatedPOs });
     }
 
     set((state) => {
@@ -1145,11 +1197,23 @@ export const useStore = create<AppState>((set, get) => ({
       if (rV.ok) {
         const dV = await rV.json();
         const validV = (dV || []).map((item: any) => normalizeKeys(item))
-          .filter((v: any) => v && v.vendor_id)
-          .map((v: any) => ({
-            ...v,
-            vendor_id: String(v.vendor_id).trim()
-          }));
+          .filter((v: any) => v && (v.vendor_id || v.vendor_name || v.name))
+          .map((v: any) => {
+            const vId = String(v.vendor_id || v.vendor_name || v.name || '').trim();
+            const vName = String(v.vendor_name || v.name || v.vendor_id || '').trim();
+            return {
+              ...v,
+              vendor_id: vId,
+              vendor_name: vName,
+              name: vName,
+              contact: String(v.contact || '').trim(),
+              phone: String(v.phone || '').trim(),
+              address: String(v.address || '').trim(),
+              note: String(v.note || '').trim(),
+              tax_id: String(v.tax_id || '').trim(),
+            };
+          })
+          .filter((v: any) => v.vendor_id && v.vendor_name);
         await dbVendors.clear();
         for (const v of validV) {
           await dbVendors.setItem(v.vendor_id, v);
@@ -1261,6 +1325,25 @@ export const useStore = create<AppState>((set, get) => ({
         }
       } catch (err) {
         console.warn("Failed to fetch online orders in fetchRemoteData, ignoring:", err);
+      }
+
+      // Purchase Orders
+      try {
+        const rPO = await fetch(`${cleanUrl}?action=getPurchaseOrders`);
+        if (rPO.ok) {
+          const dPO = await rPO.json();
+          if (Array.isArray(dPO)) {
+            await dbPurchaseOrders.clear();
+            for (const po of dPO) {
+              if (po && po.po_id) {
+                await dbPurchaseOrders.setItem(po.po_id, po);
+              }
+            }
+            set({ purchaseOrders: dPO });
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to fetch purchase orders in fetchRemoteData:", err);
       }
 
     } catch (e: any) {
@@ -1934,5 +2017,201 @@ export const useStore = create<AppState>((set, get) => ({
       await get().overwriteCloudTransactions();
       await get().overwriteCloudStock();
     }
+  },
+
+  fetchPurchaseOrders: async () => {
+    const { gasApiUrl, showToast } = get();
+    if (!gasApiUrl || !gasApiUrl.trim() || !gasApiUrl.trim().startsWith('http')) {
+      showToast("ℹ️ 尚未設定 Google Apps Script 網址，目前使用本機離線資料");
+      return;
+    }
+    set({ isLoading: true });
+    try {
+      const cleanUrl = gasApiUrl.trim();
+      const res = await fetch(`${cleanUrl}?action=getPurchaseOrders`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          await dbPurchaseOrders.clear();
+          for (const po of data) {
+            if (po && po.po_id) {
+              await dbPurchaseOrders.setItem(po.po_id, po);
+            }
+          }
+          set({ purchaseOrders: data });
+          showToast(`✨ 成功同步 ${data.length} 筆採購訂貨單！`);
+        }
+      } else {
+        throw new Error(`雲端回應狀態碼: ${res.status}`);
+      }
+    } catch (e: any) {
+      console.warn("fetchPurchaseOrders network notice:", e.message || e);
+      showToast(`⚠️ 連線至試算表失敗，已載入本機離線採購紀錄`);
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  addPurchaseOrder: async (poData) => {
+    const now = new Date().toISOString();
+    const po: PurchaseOrder = {
+      ...poData,
+      po_id: poData.po_id || `PO_${format(new Date(), 'yyyyMMdd')}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+      created_at: now,
+      updated_at: now
+    };
+    await dbPurchaseOrders.setItem(po.po_id, po);
+    set((state) => ({ purchaseOrders: [po, ...state.purchaseOrders] }));
+    await get().enqueueAction('addPurchaseOrder', po);
+    get().showToast(`✅ 採購訂單 ${po.po_id} 建立成功！`);
+  },
+
+  updatePurchaseOrder: async (poId, updated) => {
+    const currentPOs = get().purchaseOrders;
+    const target = currentPOs.find(p => p.po_id === poId);
+    if (!target) return;
+
+    const merged: PurchaseOrder = {
+      ...target,
+      ...updated,
+      updated_at: new Date().toISOString()
+    };
+
+    await dbPurchaseOrders.setItem(poId, merged);
+    set((state) => ({
+      purchaseOrders: state.purchaseOrders.map(p => p.po_id === poId ? merged : p)
+    }));
+    await get().enqueueAction('editPurchaseOrder', merged);
+  },
+
+  deletePurchaseOrder: async (poId) => {
+    await dbPurchaseOrders.removeItem(poId);
+    set((state) => ({
+      purchaseOrders: state.purchaseOrders.filter(p => p.po_id !== poId)
+    }));
+    await get().enqueueAction('deletePurchaseOrder', { po_id: poId });
+    get().showToast('🗑️ 採購單已刪除');
+  },
+
+  uploadInvoiceImage: async (base64Data, fileName) => {
+    const { gasApiUrl } = get();
+    if (!gasApiUrl) {
+      return { success: true, url: base64Data, viewUrl: base64Data };
+    }
+    try {
+      const res = await fetch(`${gasApiUrl}?action=uploadInvoiceImage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          imageBase64: base64Data,
+          fileName: fileName || `Invoice_${Date.now()}.jpg`
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          return {
+            success: true,
+            url: data.url || data.viewUrl,
+            viewUrl: data.viewUrl || data.url,
+            fileId: data.fileId
+          };
+        }
+      }
+      return { success: true, url: base64Data, viewUrl: base64Data };
+    } catch (err: any) {
+      console.warn("Upload image to drive failed, using local base64 fallback:", err);
+      return { success: true, url: base64Data, viewUrl: base64Data };
+    }
+  },
+
+  batchStockInFromInvoice: async (params) => {
+    const { items, po_id, invoice_number, invoice_image_url, is_close_remaining_po } = params;
+    const nowStr = format(new Date(), 'yyyy-MM-dd HH:mm:ss');
+    const { products, purchaseOrders, enqueueAction, updatePurchaseOrder, showToast } = get();
+
+    // 1. Process each item into inventory
+    for (const item of items) {
+      const p = products.find(prod => prod.product_id === item.product_id);
+      const stockInPayload = {
+        product_id: item.product_id,
+        product_name: item.product_name || p?.name || '',
+        name: item.product_name || p?.name || '',
+        quantity: Number(item.quantity) || 1,
+        location: item.location || '倉庫',
+        floor: item.floor || '1F',
+        area: item.area || 'A區',
+        specification: item.specification || p?.specification || '',
+        cost_price: Number(item.cost_price) || p?.cost_price || 0,
+        vendor_id: item.vendor_id || p?.vendor_id || '',
+        po_id: po_id || '',
+        invoice_image_url: invoice_image_url || '',
+        date: nowStr,
+        note: invoice_number ? `單據號: ${invoice_number}${item.note ? ' / ' + item.note : ''}` : (item.note || '單據智慧進貨')
+      };
+
+      await enqueueAction('stockIn', stockInPayload);
+    }
+
+    // 2. If matched with a PO, update received quantities and status
+    if (po_id) {
+      const po = purchaseOrders.find(p => p.po_id === po_id);
+      if (po) {
+        const itemDeliveryMap = new Map<string, number>();
+        items.forEach(it => {
+          const key = `${it.product_id}___${it.specification || ''}`;
+          itemDeliveryMap.set(key, (itemDeliveryMap.get(key) || 0) + Number(it.quantity || 0));
+        });
+
+        let allFullyReceived = true;
+        let anyReceived = false;
+
+        const updatedItems = po.items.map(poItem => {
+          const key = `${poItem.product_id}___${poItem.specification || ''}`;
+          const deliveredQty = itemDeliveryMap.get(key) || 0;
+          const currentReceived = (poItem.received_quantity || 0) + deliveredQty;
+          
+          if (currentReceived > 0) anyReceived = true;
+          if (currentReceived < poItem.ordered_quantity) allFullyReceived = false;
+
+          return {
+            ...poItem,
+            received_quantity: currentReceived
+          };
+        });
+
+        let newStatus: PurchaseOrder['status'] = po.status;
+        if (is_close_remaining_po || allFullyReceived) {
+          newStatus = 'completed';
+        } else if (anyReceived) {
+          newStatus = 'partial';
+        }
+
+        await updatePurchaseOrder(po.po_id, {
+          status: newStatus,
+          items: updatedItems,
+          invoice_image_url: invoice_image_url || po.invoice_image_url
+        });
+      }
+    }
+
+    showToast(`🎉 成功完成 ${items.length} 項商品進貨入庫！`);
   }
 }));
+
+export const getOnOrderStockQty = (purchaseOrders: PurchaseOrder[], productId: string, specification?: string): number => {
+  let count = 0;
+  purchaseOrders.forEach(po => {
+    if (po.status === 'pending' || po.status === 'partial') {
+      (po.items || []).forEach(item => {
+        const matchPid = item.product_id === productId;
+        const matchSpec = specification !== undefined ? (item.specification || '') === specification : true;
+        if (matchPid && matchSpec) {
+          const remaining = Math.max(0, Number(item.ordered_quantity || 0) - Number(item.received_quantity || 0));
+          count += remaining;
+        }
+      });
+    }
+  });
+  return count;
+};

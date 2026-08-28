@@ -1,8 +1,21 @@
-import React, { useEffect, useState, useRef, ChangeEvent } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore } from '../store/useStore';
-import { ArrowLeft, Zap, ZapOff } from 'lucide-react';
+import { 
+  ArrowLeft, 
+  Zap, 
+  ZapOff, 
+  Camera, 
+  Keyboard, 
+  RotateCcw, 
+  Search, 
+  X, 
+  Package, 
+  CheckCircle2, 
+  AlertCircle,
+  ExternalLink
+} from 'lucide-react';
 
 export default function ScannerPage() {
   const navigate = useNavigate();
@@ -24,6 +37,10 @@ export default function ScannerPage() {
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [isProcessingFile, setIsProcessingFile] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showManualModal, setShowManualModal] = useState(false);
+  const [manualCode, setManualCode] = useState('');
+  const [retryCount, setRetryCount] = useState(0);
+
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isRoutingRef = useRef(false);
@@ -31,6 +48,17 @@ export default function ScannerPage() {
   const isCameraReadyRef = useRef(false);
   const startingRef = useRef(false);
   const isMountedRef = useRef(true);
+
+  // Filter products for manual input autocomplete
+  const filteredProducts = React.useMemo(() => {
+    if (!manualCode.trim()) return products.slice(0, 8);
+    const q = manualCode.trim().toLowerCase();
+    return products.filter(p => 
+      (p.name && p.name.toLowerCase().includes(q)) ||
+      (p.barcode && p.barcode.toLowerCase().includes(q)) ||
+      (p.product_id && p.product_id.toLowerCase().includes(q))
+    ).slice(0, 8);
+  }, [products, manualCode]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -42,8 +70,8 @@ export default function ScannerPage() {
     const config = { 
       fps: 15,
       qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
-        const size = Math.min(viewfinderWidth, viewfinderHeight) * 0.7;
-        return { width: Math.max(size, 250), height: Math.max(size * 0.5, 150) };
+        const size = Math.min(viewfinderWidth, viewfinderHeight) * 0.75;
+        return { width: Math.max(size, 240), height: Math.max(size * 0.55, 140) };
       },
       experimentalFeatures: {
         useBarCodeDetectorIfSupported: false
@@ -59,7 +87,7 @@ export default function ScannerPage() {
         Html5QrcodeSupportedFormats.ITF
       ],
       videoConstraints: {
-        facingMode: "environment",
+        facingMode: { ideal: "environment" },
         // @ts-ignore
         focusMode: "continuous"
       }
@@ -73,10 +101,10 @@ export default function ScannerPage() {
       setErrorMsg(null);
 
       try {
-        // Wait for DOM
+        // Wait for DOM container
         let attempts = 0;
         while (attempts < 15 && (!document.getElementById("qr-reader") || document.getElementById("qr-reader")?.clientWidth === 0)) {
-           await new Promise(r => setTimeout(r, 200));
+           await new Promise(r => setTimeout(r, 150));
            attempts++;
         }
 
@@ -91,12 +119,11 @@ export default function ScannerPage() {
         }
         const html5QrCode = html5QrCodeRef.current;
 
-        // Ensure any previous scan is stopped
+        // Ensure any previous scan is stopped safely
         if (html5QrCode.isScanning) {
           try {
             await html5QrCode.stop();
-            // Small delay after stop to let hardware release
-            await new Promise(r => setTimeout(r, 400));
+            await new Promise(r => setTimeout(r, 300));
           } catch (e) {
             console.warn("Pre-init stop failed", e);
           }
@@ -105,57 +132,56 @@ export default function ScannerPage() {
         let started = false;
         const shouldContinue = () => isMountedRef.current && !started;
 
-        // Try to trigger permission prompt explicitly
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-            stream.getTracks().forEach(track => track.stop());
-          } catch (e) {
-            console.warn("Manual getUserMedia trigger failed:", e);
-            if (e instanceof Error && (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError')) {
-              throw new Error("相機權限未開啟。");
-            }
-          }
-        }
-
-        // Strategy 1: facingMode environment
+        // Strategy 1: Camera enumeration
         if (shouldContinue()) {
           try {
-            await html5QrCode.start({ facingMode: "environment" }, config, qrCodeSuccessCallback, () => {});
-            started = true;
-          } catch (e) {
-            console.warn("Environment facingMode failed", e);
-          }
-        }
-
-        // Strategy 2: Enumeration
-        if (shouldContinue()) {
-          try {
-            const cameras = await Html5Qrcode.getCameras();
+            const cameras = await Html5Qrcode.getCameras().catch(() => []);
             if (cameras && cameras.length > 0 && isMountedRef.current) {
-              const backCam = cameras.find(c => /back|rear|environment|外置|後置/i.test(c.label));
+              const backCam = cameras.find(c => /back|rear|environment|外置|後置|0/i.test(c.label));
               const camId = backCam ? backCam.id : cameras[cameras.length - 1].id;
               
               await html5QrCode.start(camId, config, qrCodeSuccessCallback, () => {});
               started = true;
             }
           } catch (e) {
-            console.warn("getCameras failed", e);
+            console.warn("getCameras strategy notice:", e);
           }
         }
 
-        // Strategy 3: user facingMode
+        // Strategy 2: facingMode environment
+        if (shouldContinue()) {
+          try {
+            await html5QrCode.start({ facingMode: "environment" }, config, qrCodeSuccessCallback, () => {});
+            started = true;
+          } catch (e) {
+            console.warn("Environment facingMode notice:", e);
+          }
+        }
+
+        // Strategy 3: user facingMode / generic camera
         if (shouldContinue()) {
           try {
             await html5QrCode.start({ facingMode: "user" }, config, qrCodeSuccessCallback, () => {});
             started = true;
           } catch (e) {
-            console.warn("User facingMode failed", e);
+            console.warn("User facingMode notice:", e);
+          }
+        }
+
+        // Strategy 4: default video true
+        if (shouldContinue()) {
+          try {
+            // @ts-ignore
+            await html5QrCode.start(true, config, qrCodeSuccessCallback, () => {});
+            started = true;
+          } catch (e) {
+            console.warn("Generic camera start notice:", e);
           }
         }
 
         if (!started && isMountedRef.current) {
-          throw new Error("無法啟動相機。可能權限遭拒或設備已被占用。");
+          setErrorMsg("未能啟動即時相機。可能是權限未授權、無相機設備或處於受限預覽環境。您仍可透過「拍照辨識」或「手動輸入」進行操作。");
+          return;
         }
 
         if (!isMountedRef.current) {
@@ -173,7 +199,7 @@ export default function ScannerPage() {
         try {
           const track = html5QrCode.getRunningTrack();
           const capabilities = track.getCapabilities() as any;
-          if (capabilities.zoom) {
+          if (capabilities && capabilities.zoom) {
             setSupportsZoom(true);
             setMaxZoom(capabilities.zoom.max || 1);
             setZoom(capabilities.zoom.min || 1);
@@ -181,10 +207,10 @@ export default function ScannerPage() {
         } catch (e) {
           console.warn("Could not detect zoom capabilities", e);
         }
-      } catch (err) {
-        console.error("Final scanner error", err);
+      } catch (err: any) {
+        console.warn("Scanner initialization notice:", err?.message || err);
         if (isMountedRef.current) {
-           setErrorMsg(err instanceof Error ? err.message : "相機啟動異常");
+          setErrorMsg(err instanceof Error ? err.message : "相機啟動異常");
         }
       } finally {
         startingRef.current = false;
@@ -196,11 +222,10 @@ export default function ScannerPage() {
     return () => {
       isMountedRef.current = false;
       if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
-        // Stop it reliably
         html5QrCodeRef.current.stop().catch(() => {});
       }
     };
-  }, [navigate, returnTo]);
+  }, [navigate, returnTo, retryCount]);
 
   const toggleTorch = async () => {
     if (html5QrCodeRef.current && isCameraReady) {
@@ -234,16 +259,19 @@ export default function ScannerPage() {
 
   const processText = (text: string) => {
     if (isRoutingRef.current || !isMountedRef.current) return;
+    const cleanText = text.trim();
+    if (!cleanText) return;
+
     isRoutingRef.current = true;
-    setScannedResult(text);
+    setScannedResult(cleanText);
     
     const stopAndNavigate = async () => {
       if (html5QrCodeRef.current?.isScanning) {
         await html5QrCodeRef.current.stop().catch(() => {});
       }
       
-      let pid = text;
-      const product = productsRef.current.find(p => String(p.barcode) === text || String(p.product_id) === text);
+      let pid = cleanText;
+      const product = productsRef.current.find(p => String(p.barcode) === cleanText || String(p.product_id) === cleanText);
       if (product) pid = product.product_id;
 
       let targetPath = returnTo;
@@ -264,7 +292,7 @@ export default function ScannerPage() {
 
   const handleNativeCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !html5QrCodeRef.current) return;
+    if (!file) return;
 
     setIsProcessingFile(true);
     
@@ -291,15 +319,18 @@ export default function ScannerPage() {
       }
 
       // Strategy 2: Optimize Image (Resize) for JS-based scanner
-      // High-res photos often fail in JS because the barcode lines are too thin relative to resolution.
+      if (!html5QrCodeRef.current) {
+        html5QrCodeRef.current = new Html5Qrcode("qr-reader");
+      }
       const optimizedFile = await optimizeImageForScanning(file);
       const decodedText = await html5QrCodeRef.current.scanFile(optimizedFile, false);
       processText(decodedText);
     } catch (err) {
-      console.error("Native capture scan error", err);
-      alert("無法辨識照片中的條碼。建議：\n1. 靠近一點拍攝\n2. 確保光線充足\n3. 條碼需清晰不反光");
+      console.warn("Native capture scan notice:", err);
+      alert("無法從此照片辨識出清晰條碼。建議：\n1. 靠近條碼垂直平放拍攝\n2. 確保光線充足、無嚴重反光\n3. 或使用「手動輸入」直接指定商品");
     } finally {
       setIsProcessingFile(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -350,8 +381,21 @@ export default function ScannerPage() {
     });
   };
 
+  const handleManualSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualCode.trim()) return;
+    setShowManualModal(false);
+    processText(manualCode.trim());
+  };
+
+  const handleSelectProduct = (p: typeof products[0]) => {
+    setShowManualModal(false);
+    processText(p.barcode || p.product_id);
+  };
+
   return (
-    <div className="h-screen w-full flex flex-col bg-black overflow-hidden relative">
+    <div className="h-screen w-full flex flex-col bg-slate-950 text-white overflow-hidden relative">
+      {/* Hidden file input for native camera capture */}
       <input 
         type="file" 
         accept="image/*" 
@@ -360,46 +404,72 @@ export default function ScannerPage() {
         className="hidden"
         ref={fileInputRef}
       />
-      <header className="flex items-center p-4 bg-black/60 backdrop-blur-md border-b border-white/10 z-30">
-        <button onClick={() => navigate(-1)} className="p-2 -ml-2 text-white rounded-full active:bg-white/20">
-          <ArrowLeft className="w-6 h-6" />
-        </button>
-        <h1 className="ml-2 text-lg font-bold text-white">掃描條碼</h1>
-        {isCameraReady && (
+
+      {/* Header */}
+      <header className="flex items-center justify-between p-4 bg-slate-950/80 backdrop-blur-md border-b border-white/10 z-30">
+        <div className="flex items-center gap-2">
           <button 
-            onClick={toggleTorch}
-            className="ml-auto p-3 text-white rounded-full active:bg-white/20"
+            onClick={() => navigate(-1)} 
+            className="p-2 -ml-2 text-white/80 hover:text-white rounded-full active:bg-white/10"
+            title="返回"
           >
-            {torchOn ? <Zap className="w-6 h-6 text-yellow-400" /> : <ZapOff className="w-6 h-6" />}
+            <ArrowLeft className="w-6 h-6" />
           </button>
-        )}
+          <div>
+            <h1 className="text-base font-bold text-white leading-tight">條碼掃描</h1>
+            <p className="text-[11px] text-white/50">支援 EAN-13, QR Code, Code 128</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          {isCameraReady && (
+            <button 
+              onClick={toggleTorch}
+              className={`p-2.5 rounded-full transition-colors ${torchOn ? 'bg-yellow-400/20 text-yellow-400' : 'bg-white/10 text-white/80'}`}
+              title="開關補光燈"
+            >
+              {torchOn ? <Zap className="w-5 h-5 fill-current" /> : <ZapOff className="w-5 h-5" />}
+            </button>
+          )}
+
+          <button 
+            onClick={() => setShowManualModal(true)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold backdrop-blur-md border border-white/10"
+            title="手動輸入條碼"
+          >
+            <Keyboard className="w-4 h-4 text-emerald-400" />
+            <span>手動輸入</span>
+          </button>
+        </div>
       </header>
       
-      <div className="flex-1 relative bg-black flex flex-col items-center justify-center">
+      {/* Viewfinder Canvas Area */}
+      <div className="flex-1 relative bg-black flex flex-col items-center justify-center overflow-hidden">
         <div id="qr-reader" className="absolute inset-0 w-full h-full z-0"></div>
         
-        {/* Overlay scanning guide */}
-        {!scannedResult && (
+        {/* Active Viewfinder Framing Overlay */}
+        {isCameraReady && !scannedResult && !errorMsg && (
           <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center z-10">
-              <div className="w-[80vw] h-[40vw] border-2 border-[var(--color-accent-blue)] rounded-2xl relative shadow-[0_0_0_100vmax_rgba(0,0,0,0.7)]">
-                  <div className="absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 border-[var(--color-accent-blue)] rounded-tl-xl"></div>
-                  <div className="absolute -top-1 -right-1 w-8 h-8 border-t-4 border-r-4 border-[var(--color-accent-blue)] rounded-tr-xl"></div>
-                  <div className="absolute -bottom-1 -left-1 w-8 h-8 border-b-4 border-l-4 border-[var(--color-accent-blue)] rounded-bl-xl"></div>
-                  <div className="absolute -bottom-1 -right-1 w-8 h-8 border-b-4 border-r-4 border-[var(--color-accent-blue)] rounded-br-xl"></div>
-                  
-                  {/* Scanning line animation */}
-                  <div className="absolute left-1 right-1 h-0.5 bg-[var(--color-accent-blue)] opacity-60 shadow-[0_0_8px_var(--color-accent-blue)] animate-scan-line"></div>
-              </div>
-              <p className="mt-10 text-white/90 text-sm font-medium px-5 py-2 bg-black/40 rounded-full backdrop-blur-sm border border-white/10 uppercase tracking-widest">
-                  請將條碼置於框內
-              </p>
+            <div className="w-[78vw] max-w-[340px] h-[45vw] max-h-[200px] border-2 border-emerald-400/80 rounded-2xl relative shadow-[0_0_0_100vmax_rgba(0,0,0,0.65)]">
+              <div className="absolute -top-1 -left-1 w-6 h-6 border-t-4 border-l-4 border-emerald-400 rounded-tl-xl"></div>
+              <div className="absolute -top-1 -right-1 w-6 h-6 border-t-4 border-r-4 border-emerald-400 rounded-tr-xl"></div>
+              <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-4 border-l-4 border-emerald-400 rounded-bl-xl"></div>
+              <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-4 border-r-4 border-emerald-400 rounded-br-xl"></div>
+              
+              {/* Scanning laser line animation */}
+              <div className="absolute left-2 right-2 h-0.5 bg-emerald-400 opacity-80 shadow-[0_0_10px_#34d399] animate-scan-line"></div>
+            </div>
+            <p className="mt-8 text-white/90 text-xs font-semibold px-4 py-1.5 bg-black/60 rounded-full backdrop-blur-md border border-white/10 tracking-wider flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+              將條碼對準綠色框線
+            </p>
           </div>
         )}
 
         {/* Zoom Controls */}
         {isCameraReady && supportsZoom && (
-          <div className="absolute bottom-40 left-0 right-0 px-10 z-20">
-            <div className="flex items-center gap-4 bg-black/40 backdrop-blur-md p-3 rounded-2xl border border-white/10">
+          <div className="absolute bottom-36 left-0 right-0 px-8 z-20">
+            <div className="max-w-xs mx-auto flex items-center gap-3 bg-black/60 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-white/10">
               <span className="text-white/60 text-xs font-bold">1x</span>
               <input 
                 type="range"
@@ -408,105 +478,209 @@ export default function ScannerPage() {
                 step="0.1"
                 value={zoom}
                 onChange={handleZoomChange}
-                className="flex-1 accent-[var(--color-accent-blue)] h-1 rounded-lg"
+                className="flex-1 accent-emerald-400 h-1.5 rounded-lg"
               />
               <span className="text-white/60 text-xs font-bold">{Math.round(maxZoom)}x</span>
             </div>
           </div>
         )}
  
+        {/* Processing Uploaded Image Spinner */}
         {isProcessingFile && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-[60] backdrop-blur-sm">
-             <div className="animate-spin rounded-full h-14 w-14 border-4 border-white/10 border-t-[var(--color-accent-blue)] mb-6"></div>
-             <p className="text-white font-bold text-lg">辨識中...</p>
-             <p className="text-white/60 text-sm mt-2">請稍候</p>
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/85 z-[60] backdrop-blur-md">
+             <div className="animate-spin rounded-full h-12 w-12 border-4 border-white/10 border-t-emerald-400 mb-4"></div>
+             <p className="text-white font-bold text-base">正在分析條碼圖片...</p>
+             <p className="text-white/50 text-xs mt-1">請稍候</p>
           </div>
         )}
 
+        {/* Camera Starting Spinner */}
         {!isCameraReady && !scannedResult && !errorMsg && !isProcessingFile && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-40">
-             <div className="animate-spin rounded-full h-14 w-14 border-4 border-white/10 border-t-[var(--color-accent-blue)] mb-6"></div>
-             <p className="text-white font-medium">相機初始化中...</p>
-             <p className="text-white/40 text-xs mt-2">首次開啟可能需要較長時間</p>
-             <button 
-               onClick={() => window.location.reload()} 
-               className="mt-10 px-5 py-2 bg-white/5 text-white/60 rounded-full text-xs border border-white/10"
-             >
-               重新整理
-             </button>
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 z-20 p-6 text-center">
+             <div className="animate-spin rounded-full h-12 w-12 border-4 border-white/10 border-t-emerald-400 mb-4"></div>
+             <p className="text-white font-semibold text-sm">相機啟動中...</p>
+             <p className="text-white/40 text-xs mt-1.5">正在連接視訊鏡頭</p>
+             
+             <div className="mt-8 flex flex-col gap-2 w-full max-w-xs">
+               <button 
+                 onClick={() => fileInputRef.current?.click()}
+                 className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-2"
+               >
+                 <Camera className="w-4 h-4" />
+                 改用拍照 / 圖片辨識
+               </button>
+               <button 
+                 onClick={() => setShowManualModal(true)}
+                 className="w-full py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs flex items-center justify-center gap-2"
+               >
+                 <Keyboard className="w-4 h-4 text-emerald-400" />
+                 直接手動輸入條碼
+               </button>
+             </div>
           </div>
         )}
 
+        {/* Camera Error / Fallback View */}
         {errorMsg && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/95 z-50 p-8 text-center">
-             <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-6">
-                <ArrowLeft className="w-8 h-8 text-red-500 rotate-180" />
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/95 z-30 p-6 text-center">
+             <div className="w-14 h-14 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-center justify-center mb-4 text-amber-400">
+                <AlertCircle className="w-7 h-7" />
              </div>
-             <h3 className="text-white text-lg font-bold mb-2">相機無法使用</h3>
-             <p className="text-white/60 text-sm mb-10 leading-relaxed">
-               {errorMsg}<br/>
-               請確認已允許相機存取權限，並儘量使用手機原生瀏覽器開啟。
+             <h3 className="text-white text-base font-bold mb-1.5">即時鏡頭未啟動</h3>
+             <p className="text-white/60 text-xs max-w-xs leading-relaxed mb-6">
+               {errorMsg}
              </p>
-             <div className="grid grid-cols-1 gap-4 w-full max-w-xs">
-               <button 
-                 onClick={() => window.location.reload()} 
-                 className="w-full py-4 bg-[var(--color-accent-blue)] text-white font-black rounded-xl shadow-lg shadow-blue-500/20 active:scale-95 transition-transform"
-               >
-                 重新整理
-               </button>
-               <button 
-                 onClick={() => navigate(-1)} 
-                 className="w-full py-4 bg-white/10 text-white font-bold rounded-xl active:scale-95 transition-transform"
-               >
-                 返回上一頁
-               </button>
+
+             <div className="flex flex-col gap-3 w-full max-w-xs">
+                {/* 1. Primary fallback: Native Photo Capture / File Picker */}
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl text-sm shadow-lg shadow-emerald-500/20 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                >
+                  <Camera className="w-5 h-5" />
+                  📷 拍照或選擇條碼照片辨識
+                </button>
+
+                {/* 2. Manual Input */}
+                <button 
+                  onClick={() => setShowManualModal(true)}
+                  className="w-full py-3 bg-white/10 hover:bg-white/20 text-white font-semibold rounded-xl text-sm border border-white/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                >
+                  <Keyboard className="w-4 h-4 text-emerald-400" />
+                  ⌨️ 手動輸入條碼 / 商品編號
+                </button>
+
+                {/* 3. Retry Camera */}
+                <button 
+                  onClick={() => {
+                    setErrorMsg(null);
+                    setRetryCount(c => c + 1);
+                  }}
+                  className="w-full py-2.5 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white rounded-xl text-xs flex items-center justify-center gap-1.5 border border-white/5"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  重試開啟相機鏡頭
+                </button>
              </div>
           </div>
         )}
 
+        {/* Scan Success Toast */}
         {scannedResult && (
-          <div className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-[var(--color-accent-green)] text-black font-black px-8 py-4 rounded-full shadow-2xl z-30 animate-in fade-in zoom-in slide-in-from-bottom-4">
-             成功掃描: {scannedResult}
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 bg-emerald-500 text-slate-950 font-bold px-6 py-3 rounded-full shadow-2xl z-30 flex items-center gap-2 animate-in fade-in zoom-in">
+             <CheckCircle2 className="w-5 h-5" />
+             <span>成功辨識: {scannedResult}</span>
           </div>
         )}
         
-        {/* Manual Input Fallback */}
-        <div className="absolute bottom-10 left-0 right-0 flex flex-col items-center gap-4 z-20 px-6">
-           <button 
-             onClick={() => fileInputRef.current?.click()}
-             className="w-full max-w-sm py-3 bg-[var(--color-accent-blue)] text-black font-black rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
-           >
-              <Zap className="w-5 h-5 fill-current" />
-              使用系統相機 (支援自動變焦)
-           </button>
-
-           <button 
-             onClick={() => {
-               const code = prompt("請輸入條碼或產品ID:");
-               if (code) {
-                  // Simulate success
-                  setScannedResult(code);
-                  const product = products.find(p => String(p.barcode) === code || String(p.product_id) === code);
-                  const pid = product ? product.product_id : code;
-                  const targetPath = returnTo || (product ? '/products' : '/add-product');
-                  const separator = targetPath.includes('?') ? '&' : '?';
-                  navigate(`${targetPath}${separator}pid=${encodeURIComponent(pid)}`, { replace: true });
-               }
-             }}
-             className="px-6 py-2 bg-white/10 hover:bg-white/20 text-white/70 text-sm rounded-full backdrop-blur-md border border-white/5 active:scale-95 transition-all"
-           >
-             找不到條碼？點此手動輸入
-           </button>
-        </div>
+        {/* Bottom Actions Toolbar */}
+        {isCameraReady && !errorMsg && (
+          <div className="absolute bottom-6 left-0 right-0 flex flex-col items-center gap-3 z-20 px-6">
+             <button 
+               onClick={() => fileInputRef.current?.click()}
+               className="w-full max-w-xs py-3 bg-slate-900/90 hover:bg-slate-800 text-white font-semibold rounded-xl border border-white/15 backdrop-blur-md active:scale-95 transition-all flex items-center justify-center gap-2 shadow-lg text-sm"
+             >
+                <Camera className="w-4 h-4 text-emerald-400" />
+                <span>拍照上傳辨識</span>
+             </button>
+          </div>
+        )}
       </div>
+
+      {/* Manual Input Dialog Modal */}
+      {showManualModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-white/15 rounded-2xl w-full max-w-md p-5 shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-emerald-500/10 rounded-xl text-emerald-400">
+                  <Keyboard className="w-5 h-5" />
+                </div>
+                <h3 className="font-bold text-white text-base">輸入條碼或商品編號</h3>
+              </div>
+              <button 
+                onClick={() => setShowManualModal(false)}
+                className="p-1.5 text-white/50 hover:text-white rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleManualSubmit} className="mt-4">
+              <div className="relative">
+                <input 
+                  type="text"
+                  autoFocus
+                  value={manualCode}
+                  onChange={(e) => setManualCode(e.target.value)}
+                  placeholder="請輸入條碼、商品 ID 或名稱關鍵字..."
+                  className="w-full bg-slate-950 border border-white/20 rounded-xl pl-10 pr-4 py-3 text-white placeholder-white/40 focus:outline-none focus:border-emerald-400 text-sm font-mono"
+                />
+                <Search className="w-4 h-4 text-white/40 absolute left-3.5 top-3.5" />
+              </div>
+
+              <div className="flex gap-2 mt-3">
+                <button
+                  type="submit"
+                  disabled={!manualCode.trim()}
+                  className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:pointer-events-none text-slate-950 font-bold rounded-xl text-sm transition-colors"
+                >
+                  確認帶入
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowManualModal(false)}
+                  className="px-4 py-3 bg-white/10 hover:bg-white/20 text-white rounded-xl text-sm"
+                >
+                  取消
+                </button>
+              </div>
+            </form>
+
+            {/* Quick Product Suggestions */}
+            <div className="mt-4 flex-1 overflow-y-auto min-h-0 border-t border-white/10 pt-3">
+              <p className="text-[11px] text-white/50 font-semibold mb-2 flex items-center gap-1">
+                <Package className="w-3.5 h-3.5" />
+                <span>現有庫存商品快速選擇 ({filteredProducts.length})：</span>
+              </p>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                {filteredProducts.map(p => (
+                  <button
+                    key={p.product_id}
+                    type="button"
+                    onClick={() => handleSelectProduct(p)}
+                    className="w-full text-left p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 transition-colors flex items-center justify-between group"
+                  >
+                    <div className="min-w-0 flex-1 mr-2">
+                      <p className="text-xs font-bold text-white truncate group-hover:text-emerald-400">
+                        {p.name}
+                      </p>
+                      <p className="text-[11px] text-white/50 font-mono mt-0.5 truncate">
+                        ID: {p.product_id} {p.barcode ? `| 條碼: ${p.barcode}` : ''}
+                      </p>
+                    </div>
+                    <span className="text-[11px] px-2 py-0.5 bg-emerald-500/10 text-emerald-400 rounded-md font-semibold shrink-0">
+                      選擇
+                    </span>
+                  </button>
+                ))}
+                {filteredProducts.length === 0 && (
+                  <p className="text-center py-4 text-xs text-white/40">查無相符商品，可直接點擊確認帶入自訂編號</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes scan-line {
-          0% { top: 0% }
-          100% { top: 100% }
+          0% { top: 4% }
+          50% { top: 92% }
+          100% { top: 4% }
         }
         .animate-scan-line {
-          animation: scan-line 2s linear infinite;
+          animation: scan-line 2.2s ease-in-out infinite;
         }
         #qr-reader video {
           object-fit: cover !important;
