@@ -260,30 +260,38 @@ export default function Transactions() {
     if (t.batch_tx_id && String(t.batch_tx_id).trim()) {
       return `BATCH_${String(t.batch_tx_id).trim()}`;
     }
-    // 3. Structured Note Matching (order number / batch number)
+    // 3. Structured Note Matching (order number / batch number / invoice number)
     if (t.note) {
       const noteStr = String(t.note);
+      const invMatch = noteStr.match(/單據號\s*[:：]\s*([^\s|/]+)/) || 
+                       noteStr.match(/\[(?:發票|單據|進貨單)\s*[:：]?\s*([^\]]+)\]/);
+      if (invMatch && invMatch[1].trim()) {
+        return `INV_${invMatch[1].trim()}_${normalizeDateToYMD(t.date)}`;
+      }
       const orderMatch = noteStr.match(/訂單(?:號|編號)?\s*[:：]\s*([^\s|]+)/) || 
                          noteStr.match(/\[(?:訂單|網路訂單)\s*[:：]?\s*([^\]]+)\]/);
       if (orderMatch && orderMatch[1].trim()) {
         return `ORDER_${orderMatch[1].trim()}`;
       }
-      const batchMatch = noteStr.match(/\[(?:批次出貨|批次)\s*[:：]?\s*([^\]]+)\]/) || 
+      const batchMatch = noteStr.match(/\[(?:批次出貨|批次進貨|批次)\s*[:：]?\s*([^\]]+)\]/) || 
                          noteStr.match(/批次(?:號|編號)?\s*[:：]\s*([^\s|]+)/);
       if (batchMatch && batchMatch[1].trim()) {
         return `BATCH_${batchMatch[1].trim()}`;
       }
     }
-    // 4. Transaction ID Prefix or Exact Matching
+    // 4. PO ID with date
+    if (t.po_id && String(t.po_id).trim()) {
+      return `PO_${String(t.po_id).trim()}_${normalizeDateToYMD(t.date)}`;
+    }
+    // 5. Transaction ID Prefix or Exact Matching
     const txid = String(t.transaction_id || '').trim();
     if (txid) {
       if (txid.startsWith('TX_ORD_')) {
         const match = txid.match(/^TX_ORD_([^_]+)/);
         if (match) return `ORDER_${match[1]}`;
       }
-      if (txid.startsWith('TX_BATCH_')) {
-        const match = txid.match(/^TX_BATCH_([^_]+)/);
-        if (match) return `BATCH_${match[1]}`;
+      if (txid.startsWith('TX_IN_') || txid.startsWith('TX_BATCH_') || txid.startsWith('TX_BATCHIN_')) {
+        return `BATCH_${txid}`;
       }
       // If transaction_id contains timestamp root like TX_1787543146515 or TX_1787543146515_0
       const tsMatch = txid.match(/^(TX_\d{10,})/);
@@ -935,14 +943,22 @@ export default function Transactions() {
 
             // Batched Transaction Group (When multiple items share an order ID, batch ID, or transaction ID)
             const first = group[0];
+            const isStockIn = group.every(t => t.type === 'stock_in');
             const isOnlineOrder = !!(first.online_order_id && String(first.online_order_id).trim());
             const rawTxId = String(first.transaction_id || '').trim();
             const cleanBatchId = first.batch_id || first.batch_tx_id || (rawTxId.startsWith('TX_') ? rawTxId.replace(/_\d+$/, '') : rawTxId);
+            
+            // Extract invoice number from note if any
+            const invMatch = first.note ? (first.note.match(/單據號\s*[:：]\s*([^\s|/]+)/) || first.note.match(/\[(?:發票|單據|進貨單)\s*[:：]?\s*([^\]]+)\]/)) : null;
+            const invNumber = invMatch ? invMatch[1].trim() : '';
+
             const titleText = isOnlineOrder 
               ? `🌐 網路訂單 #${first.online_order_id}` 
-              : cleanBatchId 
-                ? `📦 批次出貨 #${cleanBatchId}` 
-                : '📦 多品項出貨群組';
+              : isStockIn
+                ? (invNumber ? `📥 單據批次進貨 #${invNumber}` : (first.po_id ? `📥 採購進貨入庫 #${first.po_id}` : (cleanBatchId ? `📥 批次進貨入庫 #${cleanBatchId}` : '📥 批次進貨入庫群組')))
+                : cleanBatchId 
+                  ? `📦 批次出貨 #${cleanBatchId}` 
+                  : '📦 多品項出貨群組';
 
             const totalQuantity = group.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
             const totalAmount = group.reduce((sum, item) => {
@@ -953,8 +969,10 @@ export default function Transactions() {
             return (
               <div key={first.online_order_id || cleanBatchId || first.transaction_id || `tx-group-${idx}`} className="glass-panel border border-[var(--color-glass-border)] rounded-2xl p-4 transition-all hover:border-white/20 shadow-md">
                 <div className="flex items-start mb-2 gap-3">
-                  <div className="mt-1 w-10 h-10 shrink-0 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center shadow-inner">
-                    <Layers className="w-5 h-5 text-purple-400" />
+                  <div className={`mt-1 w-10 h-10 shrink-0 rounded-xl border flex items-center justify-center shadow-inner ${
+                    isStockIn ? 'bg-sky-500/10 border-sky-500/20 text-sky-400' : 'bg-purple-500/10 border-purple-500/20 text-purple-400'
+                  }`}>
+                    {isStockIn ? <ArrowDownToLine className="w-5 h-5" /> : <Layers className="w-5 h-5" />}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-start gap-2">
@@ -972,24 +990,30 @@ export default function Transactions() {
                         <span className="text-[11px] text-[var(--color-text-dim)] font-mono block">
                           {formatTxDate(first.date)}
                         </span>
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-0.5 bg-purple-500/20 text-purple-300">
-                          {group.length} 款商品
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-0.5 ${
+                          isStockIn ? 'bg-sky-500/20 text-sky-300' : 'bg-purple-500/20 text-purple-300'
+                        }`}>
+                          {isStockIn ? '進貨' : '出貨'} {group.length} 款商品
                         </span>
                       </div>
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-2 mt-2 pt-2 border-t border-white/5">
                       <div className="flex items-center gap-3">
-                        <p className="text-xs text-rose-400 font-mono font-bold">總出貨件數: -{totalQuantity} 件</p>
-                        <p className="text-xs text-[var(--color-accent-green)] font-mono font-bold">總金額: ${totalAmount.toLocaleString()}</p>
+                        <p className={`text-xs font-mono font-bold ${isStockIn ? 'text-sky-400' : 'text-rose-400'}`}>
+                          {isStockIn ? '總進貨件數: +' : '總出貨件數: -'}{totalQuantity} 件
+                        </p>
+                        <p className="text-xs text-[var(--color-accent-green)] font-mono font-bold">
+                          {isStockIn ? '進貨總金額: $' : '出貨總金額: $'}{totalAmount.toLocaleString()}
+                        </p>
                       </div>
                       {group.length > 1 && (
                         <button
                           onClick={() => setGroupToDelete({ groupId: first.online_order_id || cleanBatchId || first.transaction_id, group })}
                           className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-500/10 border border-rose-500/20 text-[11px] font-bold text-rose-400 hover:bg-rose-500/20 active:scale-95 transition-all cursor-pointer shadow-sm ml-auto"
-                          title="刪除整批出貨紀錄"
+                          title={isStockIn ? "刪除整批進貨紀錄" : "刪除整張訂單紀錄"}
                         >
                           <Trash2 className="w-3 h-3" />
-                          刪除整張訂單紀錄
+                          {isStockIn ? "刪除整批進貨紀錄" : "刪除整張訂單紀錄"}
                         </button>
                       )}
                     </div>

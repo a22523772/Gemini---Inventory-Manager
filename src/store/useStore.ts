@@ -2130,10 +2130,20 @@ export const useStore = create<AppState>((set, get) => ({
     const nowStr = format(new Date(), 'yyyy-MM-dd HH:mm:ss');
     const { products, purchaseOrders, enqueueAction, updatePurchaseOrder, showToast } = get();
 
+    // Generate ONE unified batch transaction ID for all items in this stock-in session!
+    const batchTxId = `TX_IN_${format(new Date(), 'yyyyMMdd_HHmmss')}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
     // 1. Process each item into inventory
-    for (const item of items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
       const p = products.find(prod => prod.product_id === item.product_id);
       const stockInPayload = {
+        transaction_id: batchTxId, // All items in the same batch share this transaction_id!
+        id: `${batchTxId}_${i + 1}`, // Unique record key for database
+        batch_id: batchTxId,
+        batch_tx_id: batchTxId,
+        po_id: po_id || '',
+        invoice_number: invoice_number || '',
         product_id: item.product_id,
         product_name: item.product_name || p?.name || '',
         name: item.product_name || p?.name || '',
@@ -2144,7 +2154,6 @@ export const useStore = create<AppState>((set, get) => ({
         specification: item.specification || p?.specification || '',
         cost_price: Number(item.cost_price) || p?.cost_price || 0,
         vendor_id: item.vendor_id || p?.vendor_id || '',
-        po_id: po_id || '',
         invoice_image_url: invoice_image_url || '',
         date: nowStr,
         note: invoice_number ? `單據號: ${invoice_number}${item.note ? ' / ' + item.note : ''}` : (item.note || '單據智慧進貨')

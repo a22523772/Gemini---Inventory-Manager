@@ -1,15 +1,20 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { Product, PurchaseOrder, PurchaseOrderItem, Vendor } from '../lib/db';
+import { performLocalInvoiceOcr, calculateSimilarity, optimizeImageForUpload } from '../lib/localOcrEngine';
 import { format } from 'date-fns';
 import { 
   Truck, Camera, Plus, Search, CheckCircle2, Clock, 
   AlertTriangle, Trash2, Edit3, Eye, FileText, Upload, 
   RefreshCw, X, ArrowRight, Check, Sparkles, Building2, 
   Layers, Package, DollarSign, Calendar, ChevronRight, ChevronDown,
-  ExternalLink, ZoomIn, ZoomOut, AlertCircle, ShoppingCart
+  ExternalLink, ZoomIn, ZoomOut, AlertCircle, ShoppingCart, Zap, Cpu,
+  CheckCheck
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import SearchableProductCombobox from '../components/SearchableProductCombobox';
+import StorageLocationSelector from '../components/StorageLocationSelector';
+import EditPurchaseOrderModal from '../components/EditPurchaseOrderModal';
 
 interface ScannedInvoiceItem {
   temp_id: string;
@@ -62,6 +67,10 @@ export default function Purchases() {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState<boolean>(false);
+  const [scanEngineType, setScanEngineType] = useState<'local' | 'ai'>('local');
+  const [ocrProgressText, setOcrProgressText] = useState<string>('');
+  const [ocrProgressPercent, setOcrProgressPercent] = useState<number>(0);
+  const [ocrEngineUsed, setOcrEngineUsed] = useState<'local' | 'ai' | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [showConfirmPanel, setShowConfirmPanel] = useState<boolean>(false);
 
@@ -163,6 +172,28 @@ export default function Purchases() {
     return map;
   }, [stock]);
 
+  // Unique storage locations, floors, and areas across stock and transactions
+  const uniqueLocations = useMemo(() => {
+    const locSet = new Set<string>(['倉庫', '門市', '展示區', '台北倉', '台中倉']);
+    stock.forEach(s => s.location && locSet.add(s.location));
+    transactions.forEach(t => t.location && locSet.add(t.location));
+    return Array.from(locSet).filter(Boolean);
+  }, [stock, transactions]);
+
+  const uniqueFloors = useMemo(() => {
+    const floorSet = new Set<string>(['1F', '2F', '3F', '4F', 'B1']);
+    stock.forEach(s => s.floor && floorSet.add(s.floor));
+    transactions.forEach(t => t.floor && floorSet.add(t.floor));
+    return Array.from(floorSet).filter(Boolean);
+  }, [stock, transactions]);
+
+  const uniqueAreas = useMemo(() => {
+    const areaSet = new Set<string>(['A區', 'B區', 'C區', 'D區', 'E區', '暫存區']);
+    stock.forEach(s => s.area && areaSet.add(s.area));
+    transactions.forEach(t => t.area && areaSet.add(t.area));
+    return Array.from(areaSet).filter(Boolean);
+  }, [stock, transactions]);
+
   // Overall Statistics
   const stats = useMemo(() => {
     let pendingCount = 0;
@@ -239,114 +270,198 @@ export default function Purchases() {
     }
   };
 
-  // Perform AI OCR on the selected image
-  const handleStartOCR = async () => {
+  // Helper to map and populate scanned result into confirmation panel
+  const populateScannedData = (data: any, engine: 'local' | 'ai') => {
+    // 1. Match recognized vendor with existing vendors
+    let detectedVendorId = data.vendor_id || '';
+    const recognizedVendorName = data.vendor_name || '';
+    if (!detectedVendorId && recognizedVendorName) {
+      const matchedV = vendors.find(v => {
+        const vName = v.vendor_name || v.name || '';
+        return vName.toLowerCase().includes(recognizedVendorName.toLowerCase()) || 
+               recognizedVendorName.toLowerCase().includes(vName.toLowerCase());
+      });
+      if (matchedV) {
+        detectedVendorId = matchedV.vendor_id;
+      }
+    }
+
+    // 2. Transform items and match with existing products
+    const parsedItems: ScannedInvoiceItem[] = (data.items || []).map((it: any, idx: number) => {
+      const rawName = String(it.raw_product_name || it.product_name || it.matched_product_name || it.name || '').trim();
+      const rawSpec = String(it.specification || '').trim();
+      const qty = Number(it.quantity) || 1;
+      const price = Number(it.cost_price) || 0;
+
+      // Try to match existing system product by ID, name, or barcode
+      let matchedP = it.matched_product_id ? products.find(p => p.product_id === it.matched_product_id) : undefined;
+      if (!matchedP) {
+        matchedP = products.find(p => p.name && (p.name.toLowerCase() === rawName.toLowerCase() || rawName.toLowerCase().includes(p.name.toLowerCase())));
+      }
+      if (!matchedP && it.barcode) {
+        matchedP = products.find(p => p.barcode === it.barcode);
+      }
+
+      const pid = matchedP ? matchedP.product_id : (it.product_id || `TEMP_${Date.now()}_${idx}`);
+      const prodName = matchedP ? matchedP.name : rawName;
+      const finalSpec = rawSpec || (matchedP?.specification || '');
+      const defLoc = matchedP ? productDefaultLocationMap.get(matchedP.product_id) : undefined;
+
+      return {
+        temp_id: `ITEM_${Date.now()}_${idx}`,
+        product_id: pid,
+        product_name: prodName,
+        matched_system_product: matchedP,
+        specification: finalSpec,
+        quantity: qty,
+        cost_price: price || (matchedP?.cost_price || 0),
+        location: defLoc?.location || '倉庫',
+        floor: defLoc?.floor || '1F',
+        area: defLoc?.area || 'A區',
+        expiry_date: it.expiry_date || '',
+        note: it.note || ''
+      };
+    });
+
+    // 3. Pre-select matching PO if any
+    let matchedPOId = '';
+    if (detectedVendorId || recognizedVendorName) {
+      const candidatePO = purchaseOrders.find(po => 
+        (po.status === 'pending' || po.status === 'partial') &&
+        (po.vendor_id === detectedVendorId || (po.vendor_name && po.vendor_name.includes(recognizedVendorName)))
+      );
+      if (candidatePO) {
+        matchedPOId = candidatePO.po_id;
+      }
+    }
+
+    setConfirmVendorName(recognizedVendorName);
+    setConfirmVendorId(detectedVendorId);
+    setConfirmInvoiceNumber(data.invoice_number || '');
+    setConfirmInvoiceDate(data.invoice_date || format(new Date(), 'yyyy-MM-dd'));
+    setConfirmSelectedPOId(matchedPOId);
+    setConfirmItems(parsedItems);
+    setConfirmImageUrl(imagePreviewUrl || '');
+    setOcrEngineUsed(engine);
+    setShowConfirmPanel(true);
+  };
+
+  // Perform Local Offline OCR on the selected image (Tesseract.js + Canvas pre-processing + Local Fuzzy Matching)
+  const handleStartLocalOCR = async () => {
     if (!imagePreviewUrl) {
       showToast('請先拍攝或選擇進貨單據圖片');
       return;
     }
 
     setIsScanning(true);
+    setScanEngineType('local');
     setScanError(null);
+    setOcrProgressText('正在初始化本地離線 OCR 引擎...');
+    setOcrProgressPercent(5);
 
     try {
-      // 1. Convert image to base64
-      const base64Data = imagePreviewUrl;
+      const result = await performLocalInvoiceOcr(
+        imagePreviewUrl,
+        products,
+        vendors,
+        (status, percent) => {
+          setOcrProgressText(status);
+          setOcrProgressPercent(percent);
+        }
+      );
 
-      // 2. Call backend OCR API
+      if (!result.items || result.items.length === 0) {
+        // If local engine couldn't detect clear rows, notify user they can switch to AI
+        setScanError('本地離線引擎未能辨識出清晰的品項表格（可能因手寫筆跡或折痕干擾）。建議點擊「✨ 雲端 AI 深度解析」獲取更高精度辨識。');
+        showToast('⚠️ 本地辨識品項較少，可改用雲端 AI 深度解析');
+      }
+
+      populateScannedData(result, 'local');
+      showToast('⚡ 本地離線辨識完成！已自動比對商品資料庫');
+    } catch (err: any) {
+      console.error("Local OCR Error:", err);
+      setScanError(`本地離線辨識異常: ${err.message || '未知錯誤'}。您可以直接改用「✨ 雲端 AI 深度解析」。`);
+      showToast(`❌ 本地辨識異常，請嘗試改用雲端 AI`);
+    } finally {
+      setIsScanning(false);
+      setOcrProgressText('');
+      setOcrProgressPercent(0);
+    }
+  };
+
+  // Perform Cloud AI (Gemini) OCR on the selected image
+  const handleStartAIOCR = async () => {
+    if (!imagePreviewUrl) {
+      showToast('請先拍攝或選擇進貨單據圖片');
+      return;
+    }
+
+    setIsScanning(true);
+    setScanEngineType('ai');
+    setScanError(null);
+    setOcrProgressText('正在壓縮影像以最佳化傳輸速度...');
+    setOcrProgressPercent(15);
+
+    try {
+      // Optimize image before API call to reduce latency and prevent timeouts
+      const base64Data = await optimizeImageForUpload(imagePreviewUrl);
+
+      setOcrProgressText('正在呼叫 Google Gemini 雲端多模態視覺 AI 深度解析...');
+      setOcrProgressPercent(40);
+
       const response = await fetch('/api/scan-invoice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: base64Data })
+        body: JSON.stringify({
+          imageBase64: base64Data,
+          products: products.map(p => ({
+            product_id: p.product_id,
+            name: p.name,
+            specification: p.specification || '',
+            cost_price: p.cost_price || 0,
+            vendor_id: p.vendor_id || '',
+          })),
+          vendors: vendors.map(v => ({
+            vendor_id: v.vendor_id,
+            vendor_name: v.vendor_name || v.name || '',
+          }))
+        })
       });
 
-      if (!response.ok) {
-        const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.error || `伺服器辨識異常: ${response.status}`);
-      }
+      setOcrProgressPercent(85);
 
-      const result = await response.json();
-      if (!result.success || !result.data) {
-        throw new Error(result.error || '無法辨識出單據內容');
-      }
+      const contentType = response.headers.get('content-type') || '';
+      let result: any = null;
 
-      const data = result.data;
-
-      // 3. Match recognized vendor with existing vendors
-      let detectedVendorId = '';
-      const recognizedVendorName = data.vendor_name || '';
-      if (recognizedVendorName) {
-        const matchedV = vendors.find(v => {
-          const vName = v.vendor_name || v.name || '';
-          return vName.toLowerCase().includes(recognizedVendorName.toLowerCase()) || 
-                 recognizedVendorName.toLowerCase().includes(vName.toLowerCase());
-        });
-        if (matchedV) {
-          detectedVendorId = matchedV.vendor_id;
+      if (contentType.includes('application/json')) {
+        result = await response.json().catch(() => null);
+      } else {
+        const rawText = await response.text().catch(() => '');
+        if (!response.ok) {
+          throw new Error(`伺服器回應異常 (${response.status})，請稍後重試。`);
+        }
+        try {
+          result = JSON.parse(rawText);
+        } catch {
+          throw new Error('伺服器回傳格式不正確，請稍後重試。');
         }
       }
 
-      // 4. Transform items and match with existing products
-      const parsedItems: ScannedInvoiceItem[] = (data.items || []).map((it: any, idx: number) => {
-        const rawName = String(it.product_name || '').trim();
-        const rawSpec = String(it.specification || '').trim();
-        const qty = Number(it.quantity) || 1;
-        const price = Number(it.cost_price) || 0;
-
-        // Try to match existing system product by name or barcode
-        let matchedP = products.find(p => p.name && (p.name.toLowerCase() === rawName.toLowerCase() || rawName.toLowerCase().includes(p.name.toLowerCase())));
-        if (!matchedP && it.barcode) {
-          matchedP = products.find(p => p.barcode === it.barcode);
-        }
-
-        const pid = matchedP ? matchedP.product_id : `TEMP_${Date.now()}_${idx}`;
-        const prodName = matchedP ? matchedP.name : rawName;
-        const finalSpec = rawSpec || (matchedP?.specification || '');
-        const defLoc = matchedP ? productDefaultLocationMap.get(matchedP.product_id) : undefined;
-
-        return {
-          temp_id: `ITEM_${Date.now()}_${idx}`,
-          product_id: pid,
-          product_name: prodName,
-          matched_system_product: matchedP,
-          specification: finalSpec,
-          quantity: qty,
-          cost_price: price || (matchedP?.cost_price || 0),
-          location: defLoc?.location || '倉庫',
-          floor: defLoc?.floor || '1F',
-          area: defLoc?.area || 'A區',
-          expiry_date: it.expiry_date || '',
-          note: it.note || ''
-        };
-      });
-
-      // 5. Pre-select matching PO if any
-      let matchedPOId = '';
-      if (detectedVendorId || recognizedVendorName) {
-        const candidatePO = purchaseOrders.find(po => 
-          (po.status === 'pending' || po.status === 'partial') &&
-          (po.vendor_id === detectedVendorId || (po.vendor_name && po.vendor_name.includes(recognizedVendorName)))
-        );
-        if (candidatePO) {
-          matchedPOId = candidatePO.po_id;
-        }
+      if (!response.ok || !result || !result.success || !result.data) {
+        throw new Error(result?.error || `辨識失敗 (${response.status})，請稍後重試。`);
       }
 
-      setConfirmVendorName(recognizedVendorName);
-      setConfirmVendorId(detectedVendorId);
-      setConfirmInvoiceNumber(data.invoice_number || '');
-      setConfirmInvoiceDate(data.invoice_date || format(new Date(), 'yyyy-MM-dd'));
-      setConfirmSelectedPOId(matchedPOId);
-      setConfirmItems(parsedItems);
-      setConfirmImageUrl(imagePreviewUrl);
-      setShowConfirmPanel(true);
-      showToast('✨ 單據辨識成功！請核對明細並執行入庫');
+      populateScannedData(result.data, 'ai');
+      showToast('✨ 雲端 AI 單據深度解析成功！');
     } catch (err: any) {
-      console.error("OCR Error:", err);
-      setScanError(err.message || '辨識失敗，請檢查照片清晰度或手動輸入。');
-      showToast(`❌ 辨識失敗: ${err.message}`);
+      console.error("AI OCR Error:", err);
+      const errMsg = err.message || 'AI 辨識失敗，請檢查照片清晰度或改用本地快速辨識。';
+      setScanError(errMsg);
+      showToast(`❌ ${errMsg}`);
     } finally {
       setIsScanning(false);
+      setOcrProgressText('');
+      setOcrProgressPercent(0);
     }
   };
 
@@ -769,7 +884,7 @@ export default function Purchases() {
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         {po.invoice_image_url && (
                           <button
                             onClick={() => setPreviewImage(po.invoice_image_url!)}
@@ -780,6 +895,53 @@ export default function Purchases() {
                             <span>單據照片</span>
                           </button>
                         )}
+
+                        {/* Quick Status Selector */}
+                        <select
+                          value={po.status}
+                          onChange={async (e) => {
+                            const newStatus = e.target.value as any;
+                            await updatePurchaseOrder(po.po_id, { status: newStatus });
+                            showToast(`已將採購單 ${po.po_id} 狀態更新為【${newStatus === 'completed' ? '已結案' : newStatus === 'partial' ? '部分到貨' : newStatus === 'cancelled' ? '已取消' : '待到貨'}】`);
+                          }}
+                          className="bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-bold px-2.5 py-1.5 text-slate-200 cursor-pointer"
+                          title="快速變更採購單狀態"
+                        >
+                          <option value="pending" className="bg-slate-900 text-sky-400">待到貨</option>
+                          <option value="partial" className="bg-slate-900 text-amber-400">部分到貨</option>
+                          <option value="completed" className="bg-slate-900 text-emerald-400">已結案</option>
+                          <option value="cancelled" className="bg-slate-900 text-slate-400">已取消</option>
+                        </select>
+
+                        {/* Quick Close Button */}
+                        {po.status !== 'completed' && (
+                          <button
+                            onClick={async () => {
+                              if (window.confirm(`確定要將採購單 ${po.po_id} 標記為結案嗎？\n（若不再進貨，結案後將清除剩餘 ${remainingOnOrder} 件未到的在途庫存）`)) {
+                                await updatePurchaseOrder(po.po_id, { status: 'completed' });
+                                showToast(`✅ 採購單 ${po.po_id} 已成功結案！`);
+                              }
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                            title="直接將此採購單結案（清除在途庫存）"
+                          >
+                            <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>結案</span>
+                          </button>
+                        )}
+
+                        {/* Edit PO Button */}
+                        <button
+                          onClick={() => {
+                            setSelectedPO(po);
+                            setIsEditingPO(true);
+                          }}
+                          className="flex items-center gap-1 px-2.5 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 rounded-lg text-xs font-bold border border-indigo-500/20 transition-all cursor-pointer"
+                          title="編輯此採購單品項、數量或備註"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>編輯</span>
+                        </button>
 
                         {(po.status === 'pending' || po.status === 'partial') && (
                           <button
@@ -905,7 +1067,7 @@ export default function Purchases() {
         </div>
       )}
 
-      {/* TAB 2: AI SCANNER & INVOICE OCR */}
+      {/* TAB 2: AI / LOCAL SCANNER & INVOICE OCR */}
       {activeTab === 'scan' && (
         <div className="space-y-6" onPaste={handlePasteImage}>
           <div className="bg-[#0f172a] border border-white/10 rounded-2xl p-6 space-y-5">
@@ -913,10 +1075,10 @@ export default function Purchases() {
               <div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
                   <Camera className="w-5 h-5 text-sky-400" />
-                  進貨單據拍照 / AI 智慧辨識
+                  進貨單據拍照 / 雙引擎智慧辨識
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
-                  支援手機即時拍照、圖片上傳或貼上螢幕截圖。AI 將自動提取供應商、單據號碼、品名規格、數量與進價。
+                  支援「⚡ 本地離線辨識（不耗流量、快速）」與「✨ 雲端 AI 深度解析（適合手寫、點陣模糊單據）」，辨識後可立即在預覽面板校對與修改。
                 </p>
               </div>
 
@@ -966,7 +1128,7 @@ export default function Purchases() {
                 </div>
                 <div className="space-y-1">
                   <p className="text-sm font-bold text-white">點擊選取或拖曳進貨單、出貨單、發票圖片至此</p>
-                  <p className="text-xs text-slate-400">支援紙本印刷單、手寫單據、熱感應紙收據（亦可直接按 Ctrl+V 貼上剪貼簿截圖）</p>
+                  <p className="text-xs text-slate-400">支援紙本點陣印刷單、手寫銷貨單、熱感應紙收據（亦可直接按 Ctrl+V 貼上剪貼簿截圖）</p>
                 </div>
               </div>
             ) : (
@@ -989,41 +1151,105 @@ export default function Purchases() {
                   </button>
                 </div>
 
-                {scanError && (
-                  <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl flex items-center gap-2 text-xs text-red-300">
-                    <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
-                    <span>{scanError}</span>
+                {/* Progress bar during scan */}
+                {isScanning && (
+                  <div className="p-4 bg-sky-500/10 border border-sky-500/20 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between text-xs text-sky-300 font-bold">
+                      <span className="flex items-center gap-2">
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        {ocrProgressText || '正在辨識中...'}
+                      </span>
+                      <span>{ocrProgressPercent}%</span>
+                    </div>
+                    <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-gradient-to-r from-sky-400 to-indigo-500 transition-all duration-300 rounded-full"
+                        style={{ width: `${Math.max(8, ocrProgressPercent)}%` }}
+                      />
+                    </div>
                   </div>
                 )}
 
-                <div className="flex justify-end gap-3">
+                {scanError && (
+                  <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-2.5 text-xs text-amber-300">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                    <div className="space-y-1.5 flex-1">
+                      <p>{scanError}</p>
+                      <div className="flex items-center gap-3 pt-0.5 flex-wrap">
+                        <button
+                          onClick={handleStartLocalOCR}
+                          disabled={isScanning}
+                          className="text-xs font-bold text-amber-400 hover:text-amber-300 underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Zap className="w-3.5 h-3.5 fill-current" />
+                          <span>改用「⚡ 本地離線快速辨識」（零延遲、不依賴雲端）</span>
+                        </button>
+
+                        <button
+                          onClick={handleStartAIOCR}
+                          disabled={isScanning}
+                          className="text-xs font-bold text-sky-400 hover:text-sky-300 underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>重試「✨ 雲端 AI 深度解析」</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                   <button
                     onClick={() => {
                       setImageFile(null);
                       setImagePreviewUrl(null);
                     }}
-                    className="px-4 py-2.5 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 rounded-xl text-xs font-bold transition-colors"
+                    className="px-4 py-2.5 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 rounded-xl text-xs font-bold transition-colors cursor-pointer"
                   >
-                    重新選擇
+                    重新選擇圖片
                   </button>
 
-                  <button
-                    onClick={handleStartOCR}
-                    disabled={isScanning}
-                    className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-slate-950 font-extrabold rounded-xl text-sm shadow-lg shadow-sky-500/25 transition-all disabled:opacity-50 cursor-pointer"
-                  >
-                    {isScanning ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>AI 正在精準萃取單據內容...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-4 h-4 stroke-[2.5]" />
-                        <span>開始 AI 智慧辨識</span>
-                      </>
-                    )}
-                  </button>
+                  <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                    {/* Primary Button: Local Offline OCR */}
+                    <button
+                      onClick={handleStartLocalOCR}
+                      disabled={isScanning}
+                      className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-amber-500/20 transition-all disabled:opacity-50 cursor-pointer"
+                      title="在瀏覽器本地離線執行辨識，速度快、不消耗任何網路 AI 額度"
+                    >
+                      {isScanning && scanEngineType === 'local' ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>本地辨識中...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Zap className="w-4 h-4 fill-current stroke-[2.5]" />
+                          <span>⚡ 本地離線快速辨識 (推薦優先)</span>
+                        </>
+                      )}
+                    </button>
+
+                    {/* Secondary Button: Cloud AI Fallback */}
+                    <button
+                      onClick={handleStartAIOCR}
+                      disabled={isScanning}
+                      className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-sky-500/20 transition-all disabled:opacity-50 cursor-pointer"
+                      title="使用 Google Gemini 視覺大模型，專門解析手寫、點陣斷字或複雜版面"
+                    >
+                      {isScanning && scanEngineType === 'ai' ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>AI 解析中...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-4 h-4 stroke-[2.5]" />
+                          <span>✨ 雲端 AI 深度解析 (手寫/模糊推薦)</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1332,30 +1558,61 @@ export default function Purchases() {
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-3 sm:p-6 overflow-y-auto animate-in fade-in duration-200">
           <div className="w-full max-w-5xl bg-[#0f172a] border border-white/15 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
             {/* Panel Header */}
-            <div className="p-4 sm:p-5 bg-gradient-to-r from-sky-950/60 to-indigo-950/40 border-b border-white/10 flex items-center justify-between">
+            <div className="p-4 sm:p-5 bg-gradient-to-r from-sky-950/60 to-indigo-950/40 border-b border-white/10 flex items-center justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
                   <CheckCircle2 className="w-6 h-6" />
                 </div>
                 <div>
-                  <h2 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
-                    進貨入庫前確認預覽面板
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-base sm:text-lg font-black text-white">
+                      進貨入庫前確認預覽面板
+                    </h2>
+                    {ocrEngineUsed === 'local' ? (
+                      <span className="text-xs font-bold px-2 py-0.5 bg-amber-500/20 text-amber-300 rounded border border-amber-500/30 flex items-center gap-1">
+                        <Zap className="w-3 h-3 fill-current" />
+                        本地離線引擎辨識
+                      </span>
+                    ) : ocrEngineUsed === 'ai' ? (
+                      <span className="text-xs font-bold px-2 py-0.5 bg-sky-500/20 text-sky-300 rounded border border-sky-500/30 flex items-center gap-1">
+                        <Sparkles className="w-3 h-3" />
+                        雲端 AI 深度解析
+                      </span>
+                    ) : null}
                     <span className="text-xs font-bold px-2 py-0.5 bg-emerald-500/20 text-emerald-300 rounded border border-emerald-500/30">
                       可即時修改價格/數量/儲位
                     </span>
-                  </h2>
-                  <p className="text-xs text-slate-400">
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
                     請核對廠商送達商品，若廠商臨時改價、缺貨或部分到貨，可直接於下方編輯或刪除品項。
                   </p>
                 </div>
               </div>
 
-              <button
-                onClick={() => setShowConfirmPanel(false)}
-                className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-xl transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                {/* Fallback to Cloud AI button if currently in local mode */}
+                {ocrEngineUsed === 'local' && (
+                  <button
+                    onClick={() => {
+                      setShowConfirmPanel(false);
+                      handleStartAIOCR();
+                    }}
+                    disabled={isScanning}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                    title="若本地辨識有遺漏或字跡模糊，切換由 Google Gemini 雲端視覺大模型重新精準提取"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>辨識不理想？切換為 雲端 AI 深度解析</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => setShowConfirmPanel(false)}
+                  className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Panel Body */}
@@ -1498,11 +1755,11 @@ export default function Purchases() {
                   <table className="w-full text-left text-xs border-collapse">
                     <thead>
                       <tr className="bg-white/5 text-slate-400 font-bold border-b border-white/10">
-                        <th className="py-2.5 px-3 min-w-[200px]">品名 / 系統商品綁定</th>
-                        <th className="py-2.5 px-2 min-w-[100px]">規格</th>
+                        <th className="py-2.5 px-3 min-w-[280px]">品名 / 對應系統商品 (可輸入搜尋)</th>
+                        <th className="py-2.5 px-2 min-w-[110px]">規格</th>
                         <th className="py-2.5 px-2 w-24 text-center">進貨數量</th>
                         <th className="py-2.5 px-2 w-24 text-center">進價 (成本)</th>
-                        <th className="py-2.5 px-2 min-w-[140px]">入庫儲位</th>
+                        <th className="py-2.5 px-2 min-w-[220px]">入庫儲位 (下拉選單)</th>
                         <th className="py-2.5 px-2 text-right">小計</th>
                         <th className="py-2.5 px-2 w-10 text-center">刪除</th>
                       </tr>
@@ -1510,45 +1767,50 @@ export default function Purchases() {
                     <tbody className="divide-y divide-white/5">
                       {confirmItems.map((item, idx) => (
                         <tr key={item.temp_id} className="hover:bg-white/[0.02]">
-                          {/* Product Name & Matching */}
+                          {/* Product Name & Searchable Product Combobox */}
                           <td className="py-2.5 px-3">
-                            <input
-                              type="text"
-                              value={item.product_name}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, product_name: val } : it));
-                              }}
-                              className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white font-bold mb-1"
-                              placeholder="品名"
-                            />
-                            <div className="flex items-center gap-1">
-                              <select
+                            <div className="space-y-1.5">
+                              {/* Scanned/Invoice Product Name */}
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  value={item.product_name}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, product_name: val } : it));
+                                  }}
+                                  className="w-full bg-[#1e293b] border border-white/10 rounded px-2 py-1 text-xs text-white font-bold placeholder-slate-500"
+                                  placeholder="單據品名 (可手動修改)"
+                                />
+                              </div>
+
+                              {/* Searchable System Product Combobox */}
+                              <SearchableProductCombobox
                                 value={item.product_id}
-                                onChange={(e) => {
-                                  const pid = e.target.value;
-                                  const matchedP = products.find(p => p.product_id === pid);
-                                  const defLoc = matchedP ? productDefaultLocationMap.get(matchedP.product_id) : undefined;
+                                products={products}
+                                onSelect={(matchedP) => {
+                                  const defLoc = productDefaultLocationMap.get(matchedP.product_id);
                                   setConfirmItems(prev => prev.map((it, i) => i === idx ? {
                                     ...it,
-                                    product_id: pid,
-                                    product_name: matchedP ? matchedP.name : it.product_name,
-                                    specification: it.specification || matchedP?.specification || '',
-                                    cost_price: it.cost_price || matchedP?.cost_price || 0,
-                                    location: defLoc?.location || it.location,
-                                    floor: defLoc?.floor || it.floor,
-                                    area: defLoc?.area || it.area
+                                    product_id: matchedP.product_id,
+                                    matched_system_product: matchedP,
+                                    product_name: it.product_name || matchedP.name,
+                                    specification: it.specification || matchedP.specification || '',
+                                    cost_price: it.cost_price || matchedP.cost_price || 0,
+                                    location: defLoc?.location || it.location || '倉庫',
+                                    floor: defLoc?.floor || it.floor || '1F',
+                                    area: defLoc?.area || it.area || 'A區'
                                   } : it));
                                 }}
-                                className="bg-[#1e293b] text-[10px] text-slate-300 border border-white/10 rounded px-1.5 py-0.5 max-w-[190px] truncate"
-                              >
-                                <option value="">-- 對應系統商品 --</option>
-                                {products.map(p => (
-                                  <option key={p.product_id} value={p.product_id}>
-                                    {p.name} ({p.product_id})
-                                  </option>
-                                ))}
-                              </select>
+                                onClear={() => {
+                                  setConfirmItems(prev => prev.map((it, i) => i === idx ? {
+                                    ...it,
+                                    product_id: '',
+                                    matched_system_product: undefined
+                                  } : it));
+                                }}
+                                placeholder="🔍 輸入文字搜尋系統商品綁定..."
+                              />
                             </div>
                           </td>
 
@@ -1561,8 +1823,8 @@ export default function Purchases() {
                                 const val = e.target.value;
                                 setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, specification: val } : it));
                               }}
-                              className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white"
-                              placeholder="如：500ml / 黑色"
+                              className="w-full bg-[#1e293b] border border-white/10 rounded px-2 py-1 text-xs text-white"
+                              placeholder="規格 (如: 500ml)"
                             />
                           </td>
 
@@ -1576,7 +1838,7 @@ export default function Purchases() {
                                 const val = Number(e.target.value) || 1;
                                 setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, quantity: val } : it));
                               }}
-                              className="w-20 mx-auto bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-center text-white font-bold"
+                              className="w-20 mx-auto bg-[#1e293b] border border-white/10 rounded px-2 py-1 text-xs text-center text-white font-bold"
                             />
                           </td>
 
@@ -1590,44 +1852,28 @@ export default function Purchases() {
                                 const val = Number(e.target.value) || 0;
                                 setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, cost_price: val } : it));
                               }}
-                              className="w-20 mx-auto bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-center text-white font-mono font-bold text-amber-300"
+                              className="w-20 mx-auto bg-[#1e293b] border border-white/10 rounded px-2 py-1 text-xs text-center text-white font-mono font-bold text-amber-300"
                             />
                           </td>
 
-                          {/* Storage Location */}
+                          {/* Storage Location Dropdown Selector */}
                           <td className="py-2.5 px-2">
-                            <div className="grid grid-cols-3 gap-1">
-                              <input
-                                type="text"
-                                value={item.location}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, location: val } : it));
-                                }}
-                                placeholder="倉庫"
-                                className="bg-white/5 border border-white/10 rounded px-1.5 py-1 text-[11px] text-center text-slate-200"
-                              />
-                              <input
-                                type="text"
-                                value={item.floor}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, floor: val } : it));
-                                }}
-                                placeholder="樓層"
-                                className="bg-white/5 border border-white/10 rounded px-1.5 py-1 text-[11px] text-center text-slate-200"
-                              />
-                              <input
-                                type="text"
-                                value={item.area}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, area: val } : it));
-                                }}
-                                placeholder="區域"
-                                className="bg-white/5 border border-white/10 rounded px-1.5 py-1 text-[11px] text-center text-slate-200"
-                              />
-                            </div>
+                            <StorageLocationSelector
+                              location={item.location}
+                              floor={item.floor}
+                              area={item.area}
+                              availableLocations={uniqueLocations}
+                              availableFloors={uniqueFloors}
+                              availableAreas={uniqueAreas}
+                              onChange={(fields) => {
+                                setConfirmItems(prev => prev.map((it, i) => i === idx ? {
+                                  ...it,
+                                  location: fields.location !== undefined ? fields.location : it.location,
+                                  floor: fields.floor !== undefined ? fields.floor : it.floor,
+                                  area: fields.area !== undefined ? fields.area : it.area
+                                } : it));
+                              }}
+                            />
                           </td>
 
                           {/* Subtotal */}
@@ -1655,18 +1901,25 @@ export default function Purchases() {
               {/* Partial Delivery / Close Remaining Option */}
               {confirmSelectedPOId && (
                 <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-xl space-y-2 text-xs">
-                  <div className="flex items-center gap-2 font-bold text-amber-300">
-                    <AlertCircle className="w-4 h-4" />
-                    <span>採購單在途處理設定 (PO: {confirmSelectedPOId})</span>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 font-bold text-amber-300">
+                      <AlertCircle className="w-4 h-4" />
+                      <span>採購單在途處理設定 (PO: {confirmSelectedPOId})</span>
+                    </div>
+                    <span className="text-[11px] text-slate-400">
+                      提示：忘記勾選亦可隨時在採購列表點擊【結案】
+                    </span>
                   </div>
-                  <label className="flex items-center gap-2 text-slate-300 cursor-pointer">
+                  <label className="flex items-center gap-2 text-slate-200 cursor-pointer select-none">
                     <input
                       type="checkbox"
                       checked={confirmIsCloseRemainingPO}
                       onChange={(e) => setConfirmIsCloseRemainingPO(e.target.checked)}
-                      className="rounded bg-white/10 border-white/20 text-amber-500 focus:ring-0"
+                      className="w-4 h-4 rounded bg-white/10 border-white/20 text-amber-500 focus:ring-0 cursor-pointer"
                     />
-                    <span>廠商通知剩餘數量斷貨/不再補齊，直接將此採購單結案（清除剩餘在途庫存）</span>
+                    <span className="font-medium">
+                      廠商已無後續到貨 / 剩餘數量不再補齊，直接將此採購單標記【結案】（清除剩餘在途庫存計數）
+                    </span>
                   </label>
                 </div>
               )}
@@ -1708,6 +1961,23 @@ export default function Purchases() {
           </div>
         </div>
       )}
+
+      {/* Edit Purchase Order Modal */}
+      <EditPurchaseOrderModal
+        po={selectedPO}
+        isOpen={isEditingPO}
+        onClose={() => {
+          setIsEditingPO(false);
+          setSelectedPO(null);
+        }}
+        onSave={async (poId, updated) => {
+          await updatePurchaseOrder(poId, updated);
+          showToast(`✅ 採購單 ${poId} 已成功更新！`);
+        }}
+        products={products}
+        vendors={vendors}
+        allKnownVendors={allKnownVendors}
+      />
 
       {/* Image Preview Large Modal */}
       {previewImage && (
