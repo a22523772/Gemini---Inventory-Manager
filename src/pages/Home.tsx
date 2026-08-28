@@ -860,13 +860,13 @@ export default function Home() {
 
             <div className="grid grid-cols-2 gap-3">
               <Link 
-                to="/manage?type=stock_in" 
-                className="flex flex-col items-center justify-center p-3.5 bg-gradient-to-br from-sky-500/10 to-sky-600/5 hover:from-sky-500/20 hover:to-sky-600/10 border border-sky-500/20 rounded-xl transition-all active:scale-95 group"
+                to="/purchases" 
+                className="flex flex-col items-center justify-center p-3.5 bg-gradient-to-br from-indigo-500/10 to-indigo-600/5 hover:from-indigo-500/20 hover:to-indigo-600/10 border border-indigo-500/20 rounded-xl transition-all active:scale-95 group"
               >
-                <div className="w-10 h-10 rounded-xl bg-sky-500/20 flex items-center justify-center mb-2 text-sky-400 group-hover:scale-110 transition-transform">
-                  <ArrowDownToLine className="w-5 h-5" />
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center mb-2 text-indigo-400 group-hover:scale-110 transition-transform">
+                  <ShoppingBag className="w-5 h-5" />
                 </div>
-                <span className="text-xs font-bold text-white">快速進貨</span>
+                <span className="text-xs font-bold text-white">採購單管理</span>
               </Link>
 
               <Link 
@@ -880,13 +880,13 @@ export default function Home() {
               </Link>
 
               <Link 
-                to="/transactions" 
-                className="flex flex-col items-center justify-center p-3.5 bg-gradient-to-br from-indigo-500/10 to-indigo-600/5 hover:from-indigo-500/20 hover:to-indigo-600/10 border border-indigo-500/20 rounded-xl transition-all active:scale-95 group"
+                to="/manage?type=stock_in" 
+                className="flex flex-col items-center justify-center p-3.5 bg-gradient-to-br from-sky-500/10 to-sky-600/5 hover:from-sky-500/20 hover:to-sky-600/10 border border-sky-500/20 rounded-xl transition-all active:scale-95 group"
               >
-                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center mb-2 text-indigo-400 group-hover:scale-110 transition-transform">
-                  <FileText className="w-5 h-5" />
+                <div className="w-10 h-10 rounded-xl bg-sky-500/20 flex items-center justify-center mb-2 text-sky-400 group-hover:scale-110 transition-transform">
+                  <ArrowDownToLine className="w-5 h-5" />
                 </div>
-                <span className="text-xs font-bold text-white">交易紀錄</span>
+                <span className="text-xs font-bold text-white">快速進貨</span>
               </Link>
 
               <Link 
@@ -900,14 +900,18 @@ export default function Home() {
               </Link>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 pt-1 border-t border-white/5">
-              <Link to="/reports" className="flex items-center gap-2 p-2.5 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl text-xs font-medium text-slate-300">
-                <BarChart2 className="w-4 h-4 text-sky-400" />
+            <div className="grid grid-cols-3 gap-2 pt-1 border-t border-white/5">
+              <Link to="/transactions" className="flex items-center gap-1.5 p-2.5 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl text-[11px] font-medium text-slate-300 justify-center">
+                <FileText className="w-3.5 h-3.5 text-slate-400" />
+                <span>交易紀錄</span>
+              </Link>
+              <Link to="/reports" className="flex items-center gap-1.5 p-2.5 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl text-[11px] font-medium text-slate-300 justify-center">
+                <BarChart2 className="w-3.5 h-3.5 text-sky-400" />
                 <span>洞察報表</span>
               </Link>
-              <Link to="/vendors" className="flex items-center gap-2 p-2.5 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl text-xs font-medium text-slate-300">
-                <User className="w-4 h-4 text-emerald-400" />
-                <span>供應商資料</span>
+              <Link to="/vendors" className="flex items-center gap-1.5 p-2.5 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl text-[11px] font-medium text-slate-300 justify-center">
+                <User className="w-3.5 h-3.5 text-emerald-400" />
+                <span>供應商</span>
               </Link>
             </div>
           </div>

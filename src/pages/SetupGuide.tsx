@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { Save, Check, RefreshCw, FileCode2, AlertTriangle, X } from 'lucide-react';
+import { Save, Check, RefreshCw, FileCode2, AlertTriangle, X, Key, Eye, EyeOff } from 'lucide-react';
+import { getGeminiAPIKey, setGeminiAPIKey as saveGeminiKey, clearGeminiAPIKey } from '../lib/geminiClient';
 
 export default function SetupGuide() {
   const { gasApiUrl, setGasApiUrl, syncData, syncQueue, operator, setOperator, isLoading, stock, transactions } = useStore();
   const [url, setUrl] = useState(gasApiUrl);
+  const [geminiKey, setGeminiKey] = useState(getGeminiAPIKey() || '');
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [geminiSaved, setGeminiSaved] = useState(false);
   const [tab, setTab] = useState<'settings' | 'docs'>('settings');
 
   const [confirmAction, setConfirmAction] = useState<{
@@ -23,6 +27,17 @@ export default function SetupGuide() {
     await setGasApiUrl(url);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleSaveGeminiKey = () => {
+    if (geminiKey.trim()) {
+      saveGeminiKey(geminiKey.trim());
+    } else {
+      clearGeminiAPIKey();
+    }
+    setGeminiSaved(true);
+    setTimeout(() => setGeminiSaved(false), 2000);
+    useStore.getState().showToast("✅ AI 辨識金鑰已更新");
   };
 
   const handleExecuteOverwrite = async () => {
@@ -135,6 +150,41 @@ export default function SetupGuide() {
               >
                 {saved ? <Check className="w-5 h-5 mr-2" /> : <Save className="w-5 h-5 mr-2" />}
                 {saved ? '已儲存！' : '儲存網址'}
+              </button>
+            </div>
+
+            <div className="glass-panel p-4 rounded-2xl">
+              <h2 className="text-base font-bold text-[var(--color-text-main)] mb-4 flex items-center gap-2">
+                <Key className="w-5 h-5 text-indigo-400" />
+                Google Gemini API 金鑰
+              </h2>
+              <p className="text-xs text-[var(--color-text-dim)] mb-3 leading-relaxed">
+                用於啟用「採購單 AI 智慧辨識」功能。您的金鑰僅會安全地儲存於本機瀏覽器，不會上傳至任何其他伺服器。
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300 ml-1 underline underline-offset-2">
+                  免費申請金鑰
+                </a>
+              </p>
+              <div className="relative">
+                <input
+                  type={showGeminiKey ? 'text' : 'password'}
+                  value={geminiKey}
+                  onChange={(e) => setGeminiKey(e.target.value)}
+                  placeholder="AIzaSy..."
+                  className="w-full rounded-xl border border-white/10 bg-white/5 py-3 pl-3 pr-10 text-sm text-[var(--color-text-main)] placeholder-[var(--color-text-dim)] focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none font-mono"
+                />
+                <button
+                  onClick={() => setShowGeminiKey(!showGeminiKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors"
+                >
+                  {showGeminiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <button
+                onClick={handleSaveGeminiKey}
+                className="mt-4 w-full flex items-center justify-center py-3 px-4 rounded-xl text-sm font-bold text-white bg-indigo-500 hover:bg-indigo-600 active:scale-95 transition-all shadow-[0_0_15px_rgba(99,102,241,0.2)]"
+              >
+                {geminiSaved ? <Check className="w-5 h-5 mr-2" /> : <Save className="w-5 h-5 mr-2" />}
+                {geminiSaved ? '金鑰已儲存！' : '儲存 AI 金鑰'}
               </button>
             </div>
 

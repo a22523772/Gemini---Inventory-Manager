@@ -409,49 +409,74 @@ export default function Purchases() {
       setOcrProgressText('正在呼叫 Google Gemini 雲端多模態視覺 AI 深度解析...');
       setOcrProgressPercent(40);
 
-      const response = await fetch('/api/scan-invoice', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: base64Data,
-          products: products.map(p => ({
-            product_id: p.product_id,
-            name: p.name,
-            specification: p.specification || '',
-            cost_price: p.cost_price || 0,
-            vendor_id: p.vendor_id || '',
-          })),
-          vendors: vendors.map(v => ({
-            vendor_id: v.vendor_id,
-            vendor_name: v.vendor_name || v.name || '',
-          }))
-        })
-      });
+      // System Prompt logic
+      const sysPrompt = `
+      你是一個高精準的進貨單/採購單解析系統。
+      請辨識提供的圖片，並回傳格式為 JSON。
+      
+      已知系統廠商：
+      ${JSON.stringify(vendors.map(v => ({ vendor_id: v.vendor_id, vendor_name: v.vendor_name || v.name || '' })))}
+      
+      已知系統商品 (輔助比對，優先使用 name、specification 對應)：
+      ${JSON.stringify(products.map(p => ({ product_id: p.product_id, name: p.name, specification: p.specification || '', cost_price: p.cost_price || 0, vendor_id: p.vendor_id || '' })))}
+      
+      請盡最大努力從圖片中提取：
+      1. 單據日期 (invoice_date, YYYY-MM-DD 格式，若無則留空)
+      2. 廠商名稱 (vendor_name) 與 對應的廠商 ID (vendor_id)
+      3. 商品項目清單 (items): 
+          - product_name (單據上的品名)
+          - specification (單據上的規格，若無則留空)
+          - quantity (數量，數字)
+          - cost_price (單價/進價，數字)
+          - product_id (嘗試對應已知系統商品ID，若無則留空)
+      
+      請確保回傳純 JSON 格式字串，不可包含 Markdown 語法 (如 \`\`\`json) 也不要包含額外說明。
+      格式範例：
+      {
+        "invoice_date": "2024-03-25",
+        "vendor_name": "ABC 廠商",
+        "vendor_id": "V001",
+        "items": [
+           { "product_name": "商品A", "specification": "紅色", "quantity": 10, "cost_price": 100, "product_id": "P001" }
+        ]
+      }
+      `;
+
+      let rawText = '';
+      try {
+        const { scanInvoiceOCR } = await import('../lib/geminiClient');
+        rawText = await scanInvoiceOCR(base64Data, sysPrompt);
+      } catch (geminiError: any) {
+        // Handle specific error for missing key
+        if (geminiError.message && geminiError.message.includes('未設定')) {
+          setScanError('尚未設定 AI 金鑰，請先至設定頁面完成設定。');
+          showToast('尚未設定 Gemini API 金鑰');
+          return;
+        }
+        throw new Error(geminiError.message || "AI 辨識失敗");
+      }
 
       setOcrProgressPercent(85);
 
-      const contentType = response.headers.get('content-type') || '';
-      let result: any = null;
+      // Clean up markdown wrapping if present
+      rawText = rawText.trim();
+      if (rawText.startsWith('```json')) rawText = rawText.replace(/^```json/, '');
+      if (rawText.startsWith('```')) rawText = rawText.replace(/^```/, '');
+      if (rawText.endsWith('```')) rawText = rawText.replace(/```$/, '');
+      rawText = rawText.trim();
 
-      if (contentType.includes('application/json')) {
-        result = await response.json().catch(() => null);
-      } else {
-        const rawText = await response.text().catch(() => '');
-        if (!response.ok) {
-          throw new Error(`伺服器回應異常 (${response.status})，請稍後重試。`);
-        }
-        try {
-          result = JSON.parse(rawText);
-        } catch {
-          throw new Error('伺服器回傳格式不正確，請稍後重試。');
-        }
+      let parsedData: any = null;
+      try {
+        parsedData = JSON.parse(rawText);
+      } catch {
+        throw new Error('回傳格式不正確，請稍後重試。');
       }
 
-      if (!response.ok || !result || !result.success || !result.data) {
-        throw new Error(result?.error || `辨識失敗 (${response.status})，請稍後重試。`);
+      if (!parsedData || !parsedData.items || parsedData.items.length === 0) {
+        throw new Error('無法從單據中辨識出商品，請確認圖片是否清晰。');
       }
 
-      populateScannedData(result.data, 'ai');
+      populateScannedData(parsedData, 'ai');
       showToast('✨ 雲端 AI 單據深度解析成功！');
     } catch (err: any) {
       console.error("AI OCR Error:", err);
