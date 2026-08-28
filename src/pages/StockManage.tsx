@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useStore } from '../store/useStore';
-import { ArrowLeft, Save, Search, X, Filter, Plus, ScanBarcode, FileText } from 'lucide-react';
+import { ArrowLeft, Save, Search, X, Filter, Plus, ScanBarcode, FileText, ShoppingBag } from 'lucide-react';
 import { format } from 'date-fns';
 import OutboundCart from '../components/OutboundCart';
 import QuantityInput from '../components/QuantityInput';
@@ -334,27 +334,44 @@ export default function StockManage() {
         <h1 className="ml-2 text-xl font-bold text-[var(--color-text-main)]">庫存管理</h1>
       </header>
 
-      <div className="p-4 glass-panel border-x-0 border-t-0 flex items-center justify-between gap-2 overflow-x-auto">
-        <div className="flex gap-2">
-          {['stock_in', 'stock_out', 'adjust'].map((t) => (
+      <div className="px-4 py-3 glass-panel border-x-0 border-t-0 flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth">
+        <div className="flex items-center gap-2 min-w-max">
+          {[
+            { id: 'stock_in', label: '單筆進貨' },
+            { id: 'stock_out', label: '出貨' },
+            { id: 'adjust', label: '調整' }
+          ].map((tab) => (
             <button
-              key={t}
-              onClick={() => setType(t as any)}
-              className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-colors ${
-                type === t ? 'bg-[var(--color-accent-blue)] text-[#0f172a]' : 'glass-panel text-[var(--color-text-dim)] hover:text-white'
+              key={tab.id}
+              onClick={() => setType(tab.id as any)}
+              className={`px-4 py-2 rounded-full text-[13px] font-bold transition-all ${
+                type === tab.id 
+                  ? 'bg-sky-500 text-white shadow-[0_0_12px_rgba(14,165,233,0.4)] border border-sky-400/50' 
+                  : 'bg-white/5 text-slate-400 hover:text-slate-200 hover:bg-white/10 border border-white/5'
               }`}
             >
-              {t === 'stock_in' ? '進貨' : t === 'stock_out' ? '出貨' : '調整'}
+              {tab.label}
             </button>
           ))}
+          
+          <div className="w-px h-5 bg-white/10 mx-1"></div>
+
+          <button
+            onClick={() => navigate('/purchases')}
+            className="px-4 py-2 rounded-full text-[13px] font-bold bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25 border border-indigo-500/30 transition-all flex items-center gap-1.5"
+          >
+            <ShoppingBag className="w-3.5 h-3.5" />
+            <span>批次採購進貨</span>
+          </button>
+
+          <button
+            onClick={() => navigate('/transactions')}
+            className="px-4 py-2 rounded-full text-[13px] font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 border border-white/10 transition-all flex items-center gap-1.5"
+          >
+            <FileText className="w-3.5 h-3.5 text-slate-400" />
+            <span>交易紀錄</span>
+          </button>
         </div>
-        <button
-          onClick={() => navigate('/transactions')}
-          className="px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 transition-all flex items-center gap-1.5 shrink-0"
-        >
-          <FileText className="w-4 h-4" />
-          <span>交易歷史紀錄</span>
-        </button>
       </div>
 
       {type === 'stock_out' ? (

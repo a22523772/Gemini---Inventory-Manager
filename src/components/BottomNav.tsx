@@ -1,19 +1,16 @@
 import { useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { Home, Package, Truck, ArrowRightLeft, Settings } from 'lucide-react';
+import { Home, Package, ScanLine, ArrowRightLeft, Settings } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useStore } from '../store/useStore';
 
 export default function BottomNav() {
   const syncQueue = useStore(state => state.syncQueue);
-  const purchaseOrders = useStore(state => state.purchaseOrders);
   const lastPaths = useStore(state => state.lastPaths);
   const setLastPath = useStore(state => state.setLastPath);
   const location = useLocation();
 
   const currentPath = location.pathname + location.search;
-
-  const pendingPOCount = (purchaseOrders || []).filter(po => po.status === 'pending' || po.status === 'partial').length;
 
   // Track and remember route changes per main sector
   useEffect(() => {
@@ -38,7 +35,7 @@ export default function BottomNav() {
   const navItems = [
     { to: lastPaths.home || '/', activeBase: '/', icon: Home, label: '首頁' },
     { to: lastPaths.products || '/products', activeBase: '/products', icon: Package, label: '商品' },
-    { to: '/purchases', activeBase: '/purchases', icon: Truck, label: '採購進貨', badge: pendingPOCount > 0 ? pendingPOCount : 0 },
+    { to: lastPaths.scan || '/scan', activeBase: '/scan', icon: ScanLine, label: '掃描' },
     { to: lastPaths.manage || '/manage', activeBase: '/manage', icon: ArrowRightLeft, label: '管理' },
     { to: lastPaths.setup || '/setup', activeBase: '/setup', icon: Settings, label: '設定', badge: syncQueue.length > 0 ? syncQueue.length : 0 },
   ];

@@ -3,12 +3,25 @@ import { useStore, calculateOrderStatus, getProductStatusInfo } from '../store/u
 import { 
   Package, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, 
   AlertTriangle, BarChart2, Globe, Truck, Trash2, X, PlusCircle, User, Calendar, CheckCircle, Flame, Search, ArrowRight, FileText,
-  ArrowUpDown, Edit2, Clock, Check, FileSpreadsheet, Download, Copy, Printer, ShoppingBag, Layers, Filter
+  ArrowUpDown, Edit2, Clock, Check, FileSpreadsheet, Download, Copy, Printer, ShoppingBag, Layers, Filter, Scan, Save, Settings,
+  ChevronUp, ChevronDown, GripVertical
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 
 import { normalizePlatformName } from '../lib/platformUtils';
+
+const SHORTCUT_OPTIONS = [
+  { id: 'stock_in', label: '快速進貨', icon: ArrowDownToLine, to: '/manage?type=stock_in', colorClass: 'from-sky-500/10 to-sky-600/5 hover:from-sky-500/20 hover:to-sky-600/10 border-sky-500/20', iconBgClass: 'bg-sky-500/20 text-sky-400', smallTextClass: 'text-sky-400' },
+  { id: 'stock_out', label: '快速出貨', icon: ArrowUpFromLine, to: '/manage?type=stock_out', colorClass: 'from-amber-500/10 to-amber-600/5 hover:from-amber-500/20 hover:to-amber-600/10 border-amber-500/20', iconBgClass: 'bg-amber-500/20 text-amber-400', smallTextClass: 'text-amber-400' },
+  { id: 'scan', label: '智慧掃描', icon: Scan, to: '/scan', colorClass: 'from-indigo-500/10 to-indigo-600/5 hover:from-indigo-500/20 hover:to-indigo-600/10 border-indigo-500/20', iconBgClass: 'bg-indigo-500/20 text-indigo-400', smallTextClass: 'text-indigo-400' },
+  { id: 'adjust', label: '盤點校正', icon: RefreshCcw, to: '/manage?type=adjust', colorClass: 'from-purple-500/10 to-purple-600/5 hover:from-purple-500/20 hover:to-purple-600/10 border-purple-500/20', iconBgClass: 'bg-purple-500/20 text-purple-400', smallTextClass: 'text-purple-400' },
+  { id: 'purchases', label: '批次採購', icon: ShoppingBag, to: '/purchases', colorClass: 'from-emerald-500/10 to-emerald-600/5 hover:from-emerald-500/20 hover:to-emerald-600/10 border-emerald-500/20', iconBgClass: 'bg-emerald-500/20 text-emerald-400', smallTextClass: 'text-emerald-400' },
+  { id: 'products', label: '商品管理', icon: Package, to: '/products', colorClass: 'from-blue-500/10 to-blue-600/5 hover:from-blue-500/20 hover:to-blue-600/10 border-blue-500/20', iconBgClass: 'bg-blue-500/20 text-blue-400', smallTextClass: 'text-blue-400' },
+  { id: 'transactions', label: '交易紀錄', icon: FileText, to: '/transactions', colorClass: 'from-slate-500/10 to-slate-600/5 hover:from-slate-500/20 hover:to-slate-600/10 border-slate-500/20', iconBgClass: 'bg-slate-500/20 text-slate-400', smallTextClass: 'text-slate-400' },
+  { id: 'reports', label: '洞察報表', icon: BarChart2, to: '/reports', colorClass: 'from-cyan-500/10 to-cyan-600/5 hover:from-cyan-500/20 hover:to-cyan-600/10 border-cyan-500/20', iconBgClass: 'bg-cyan-500/20 text-cyan-400', smallTextClass: 'text-cyan-400' },
+  { id: 'vendors', label: '供應商', icon: User, to: '/vendors', colorClass: 'from-teal-500/10 to-teal-600/5 hover:from-teal-500/20 hover:to-teal-600/10 border-teal-500/20', iconBgClass: 'bg-teal-500/20 text-teal-400', smallTextClass: 'text-teal-400' },
+];
 
 export const getOrderPrice = (order: any): number => {
   if (!order) return 0;
@@ -59,6 +72,17 @@ export default function Home() {
     deleteOnlineOrder
   } = useStore();
 
+  const [activeShortcutIds, setActiveShortcutIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('dashboard_shortcuts');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return ['stock_in', 'stock_out', 'scan', 'adjust', 'transactions', 'reports', 'vendors'];
+  });
+  const [isShortcutModalOpen, setIsShortcutModalOpen] = useState(false);
+  const [editingShortcuts, setEditingShortcuts] = useState<string[]>([]);
+  const [draggedShortcutIndex, setDraggedShortcutIndex] = useState<number | null>(null);
+
   const [isOrderDashboardOpen, setIsOrderDashboardOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const [orderErrors, setOrderErrors] = useState<string[]>([]);
@@ -84,6 +108,27 @@ export default function Home() {
 
   // Anti-duplicate shipping in-flight state tracking
   const [shippingOrderIds, setShippingOrderIds] = useState<Set<string>>(new Set());
+
+  const handleOpenShortcutModal = () => {
+    setEditingShortcuts(activeShortcutIds);
+    setIsShortcutModalOpen(true);
+  };
+
+  const handleSaveShortcuts = () => {
+    setActiveShortcutIds(editingShortcuts);
+    localStorage.setItem('dashboard_shortcuts', JSON.stringify(editingShortcuts));
+    setIsShortcutModalOpen(false);
+  };
+
+  const toggleShortcut = (id: string) => {
+    setEditingShortcuts(prev => {
+      if (prev.includes(id)) {
+        if (prev.length <= 1) return prev; // prevent empty
+        return prev.filter(x => x !== id);
+      }
+      return [...prev, id];
+    });
+  };
 
   const getStatusBadgeStyle = (statusText: string) => {
     if (!statusText) {
@@ -855,65 +900,50 @@ export default function Home() {
           <div className="glass-panel border-white/10 rounded-2xl p-4 sm:p-5 space-y-4">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
               <span>捷徑與常用操作</span>
-              <span className="text-[10px] text-sky-400">單擊即可前往</span>
+              <button 
+                onClick={handleOpenShortcutModal} 
+                className="text-[10px] text-sky-400 hover:text-sky-300 flex items-center gap-1 bg-sky-500/10 px-2 py-1 rounded transition-colors"
+              >
+                <Settings className="w-3 h-3" />
+                自訂
+              </button>
             </h3>
 
-            <div className="grid grid-cols-2 gap-3">
-              <Link 
-                to="/purchases" 
-                className="flex flex-col items-center justify-center p-3.5 bg-gradient-to-br from-indigo-500/10 to-indigo-600/5 hover:from-indigo-500/20 hover:to-indigo-600/10 border border-indigo-500/20 rounded-xl transition-all active:scale-95 group"
-              >
-                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center mb-2 text-indigo-400 group-hover:scale-110 transition-transform">
-                  <ShoppingBag className="w-5 h-5" />
-                </div>
-                <span className="text-xs font-bold text-white">採購單管理</span>
-              </Link>
+            {activeShortcutIds.length > 0 && (
+              <div className="grid grid-cols-2 gap-3">
+                {activeShortcutIds.slice(0, 4).map(id => {
+                  const option = SHORTCUT_OPTIONS.find(o => o.id === id);
+                  if (!option) return null;
+                  return (
+                    <Link 
+                      key={option.id}
+                      to={option.to} 
+                      className={`flex flex-col items-center justify-center p-3.5 bg-gradient-to-br ${option.colorClass} border rounded-xl transition-all active:scale-95 group`}
+                    >
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-2 group-hover:scale-110 transition-transform ${option.iconBgClass}`}>
+                        <option.icon className="w-5 h-5" />
+                      </div>
+                      <span className="text-xs font-bold text-white">{option.label}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
 
-              <Link 
-                to="/manage?type=stock_out" 
-                className="flex flex-col items-center justify-center p-3.5 bg-gradient-to-br from-amber-500/10 to-amber-600/5 hover:from-amber-500/20 hover:to-amber-600/10 border border-amber-500/20 rounded-xl transition-all active:scale-95 group"
-              >
-                <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center mb-2 text-amber-400 group-hover:scale-110 transition-transform">
-                  <ArrowUpFromLine className="w-5 h-5" />
-                </div>
-                <span className="text-xs font-bold text-white">快速出貨</span>
-              </Link>
-
-              <Link 
-                to="/manage?type=stock_in" 
-                className="flex flex-col items-center justify-center p-3.5 bg-gradient-to-br from-sky-500/10 to-sky-600/5 hover:from-sky-500/20 hover:to-sky-600/10 border border-sky-500/20 rounded-xl transition-all active:scale-95 group"
-              >
-                <div className="w-10 h-10 rounded-xl bg-sky-500/20 flex items-center justify-center mb-2 text-sky-400 group-hover:scale-110 transition-transform">
-                  <ArrowDownToLine className="w-5 h-5" />
-                </div>
-                <span className="text-xs font-bold text-white">快速進貨</span>
-              </Link>
-
-              <Link 
-                to="/manage?type=adjust" 
-                className="flex flex-col items-center justify-center p-3.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition-all active:scale-95 group"
-              >
-                <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center mb-2 text-purple-400 group-hover:scale-110 transition-transform">
-                  <RefreshCcw className="w-5 h-5" />
-                </div>
-                <span className="text-xs font-bold text-white">盤點校正</span>
-              </Link>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2 pt-1 border-t border-white/5">
-              <Link to="/transactions" className="flex items-center gap-1.5 p-2.5 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl text-[11px] font-medium text-slate-300 justify-center">
-                <FileText className="w-3.5 h-3.5 text-slate-400" />
-                <span>交易紀錄</span>
-              </Link>
-              <Link to="/reports" className="flex items-center gap-1.5 p-2.5 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl text-[11px] font-medium text-slate-300 justify-center">
-                <BarChart2 className="w-3.5 h-3.5 text-sky-400" />
-                <span>洞察報表</span>
-              </Link>
-              <Link to="/vendors" className="flex items-center gap-1.5 p-2.5 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl text-[11px] font-medium text-slate-300 justify-center">
-                <User className="w-3.5 h-3.5 text-emerald-400" />
-                <span>供應商</span>
-              </Link>
-            </div>
+            {activeShortcutIds.length > 4 && (
+              <div className="grid grid-cols-3 gap-2 pt-1 border-t border-white/5">
+                {activeShortcutIds.slice(4).map(id => {
+                  const option = SHORTCUT_OPTIONS.find(o => o.id === id);
+                  if (!option) return null;
+                  return (
+                    <Link key={option.id} to={option.to} className="flex items-center gap-1.5 p-2.5 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl text-[11px] font-medium text-slate-300 justify-center">
+                      <option.icon className={`w-3.5 h-3.5 shrink-0 ${option.smallTextClass}`} />
+                      <span className="truncate">{option.label}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Low Stock Warning List */}
@@ -1814,6 +1844,144 @@ export default function Home() {
                     <Truck className="w-4 h-4" /> ⚠️ 強行繼續出貨 (扣存 & 記錄)
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Shortcut Customization Modal */}
+      {isShortcutModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-[#0f172a] w-full max-w-md rounded-2xl border border-white/10 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="p-4 border-b border-white/10 flex items-center justify-between bg-white/5">
+              <h3 className="font-bold text-white flex items-center gap-2 text-sm">
+                <Settings className="w-4 h-4 text-sky-400" />
+                自訂首頁捷徑
+              </h3>
+              <button onClick={() => setIsShortcutModalOpen(false)} className="text-slate-400 hover:text-white transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto custom-scrollbar flex-1">
+              <p className="text-[11px] text-slate-400 mb-4">
+                請選擇並排序您希望顯示在首頁的捷徑。
+                <br />
+                <span className="text-sky-400">💡 提示：</span> 排序前 4 個將以大按鈕顯示。
+              </p>
+
+              <div className="space-y-4">
+                {/* Selected */}
+                <div>
+                  <h4 className="text-[11px] font-bold text-slate-500 mb-2 uppercase tracking-wider">已啟用的捷徑 (依序排列)</h4>
+                  <div className="space-y-2">
+                    {editingShortcuts.map((id, index) => {
+                      const option = SHORTCUT_OPTIONS.find(o => o.id === id);
+                      if (!option) return null;
+                      const isLarge = index < 4;
+                      return (
+                        <div 
+                          key={option.id} 
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.effectAllowed = 'move';
+                            setDraggedShortcutIndex(index);
+                          }}
+                          onDragEnter={(e) => {
+                            e.preventDefault();
+                            if (draggedShortcutIndex === null || draggedShortcutIndex === index) return;
+                            setEditingShortcuts(prev => {
+                              const next = [...prev];
+                              const item = next.splice(draggedShortcutIndex, 1)[0];
+                              next.splice(index, 0, item);
+                              setDraggedShortcutIndex(index);
+                              return next;
+                            });
+                          }}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDragEnd={() => setDraggedShortcutIndex(null)}
+                          className={`flex items-center justify-between p-2.5 rounded-xl border transition-all cursor-move ${
+                            draggedShortcutIndex === index ? 'opacity-50 scale-[0.98]' : 'opacity-100'
+                          } ${
+                            isLarge ? 'border-sky-500/40 bg-sky-500/10' : 'border-white/10 bg-white/5'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className="cursor-grab active:cursor-grabbing text-slate-500 hover:text-slate-300 transition-colors pl-1">
+                              <GripVertical className="w-4 h-4" />
+                            </div>
+                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isLarge ? option.iconBgClass : 'bg-white/10 text-slate-400'}`}>
+                              <option.icon className="w-4 h-4" />
+                            </div>
+                            <span className={`text-sm font-bold ${isLarge ? 'text-white' : 'text-slate-300'}`}>{option.label}</span>
+                          </div>
+                          
+                          <div className="flex items-center gap-2">
+                            {isLarge ? (
+                              <span className="text-[10px] font-mono text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/20 mr-1">
+                                主按鈕 #{index + 1}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-mono text-slate-400 bg-white/5 px-1.5 py-0.5 rounded border border-white/10 mr-1">
+                                小按鈕
+                              </span>
+                            )}
+                            <button
+                              onClick={(e) => { e.stopPropagation(); toggleShortcut(option.id); }}
+                              className="p-1.5 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Unselected */}
+                {SHORTCUT_OPTIONS.filter(o => !editingShortcuts.includes(o.id)).length > 0 && (
+                  <div>
+                    <h4 className="text-[11px] font-bold text-slate-500 mb-2 uppercase tracking-wider">其他可用功能</h4>
+                    <div className="space-y-2">
+                      {SHORTCUT_OPTIONS.filter(o => !editingShortcuts.includes(o.id)).map(option => (
+                        <div 
+                          key={option.id} 
+                          className="flex items-center justify-between p-2.5 rounded-xl border border-white/5 bg-white/5 hover:bg-white/10 cursor-pointer transition-colors"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            toggleShortcut(option.id);
+                          }}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-white/10 text-slate-400">
+                              <option.icon className="w-4 h-4" />
+                            </div>
+                            <span className="text-sm font-bold text-slate-300">{option.label}</span>
+                          </div>
+                          <div className="pr-2">
+                            <PlusCircle className="w-5 h-5 text-slate-500" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="p-4 border-t border-white/10 bg-slate-900/80 flex gap-3">
+              <button
+                onClick={() => setEditingShortcuts(['stock_in', 'stock_out', 'scan', 'adjust', 'transactions', 'reports', 'vendors'])}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-300 bg-white/5 hover:bg-white/10 border border-white/10 transition-colors"
+              >
+                恢復預設
+              </button>
+              <button
+                onClick={handleSaveShortcuts}
+                className="flex-1 py-2 rounded-xl text-sm font-bold text-slate-900 bg-sky-400 hover:bg-sky-300 transition-colors flex justify-center items-center gap-2 active:scale-95"
+              >
+                <Save className="w-4 h-4" />
+                儲存設定
               </button>
             </div>
           </div>
