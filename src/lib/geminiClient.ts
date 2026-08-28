@@ -34,7 +34,7 @@ export async function scanInvoiceOCR(base64Image: string, prompt: string): Promi
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.6-flash",
       contents: [
         {
           role: "user",
