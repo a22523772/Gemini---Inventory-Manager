@@ -493,6 +493,7 @@ interface AppState {
     invoice_image_url?: string;
     is_close_remaining_po?: boolean;
   }) => Promise<void>;
+  completeAndStockInAllRemainingPO: (poId: string) => Promise<void>;
   updateOnlineOrderStatus: (orderId: string, status: string, productId?: string) => Promise<boolean>;
   deleteOnlineOrder: (orderId: string) => Promise<boolean>;
   addProduct: (product: Omit<Product, 'created_at'>, isManual?: boolean) => Promise<void>;
@@ -812,6 +813,7 @@ export const useStore = create<AppState>((set, get) => ({
         const newTx: Transaction = {
             id: targetUniqueId,
             transaction_id: targetTxId,
+            po_id: updatedPayload.po_id || '',
             online_order_id: updatedPayload.online_order_id || updatedPayload.order_id || '',
             batch_id: updatedPayload.batch_id || updatedPayload.batch_tx_id || '',
             batch_tx_id: updatedPayload.batch_tx_id || updatedPayload.batch_id || '',
@@ -827,6 +829,7 @@ export const useStore = create<AppState>((set, get) => ({
             cost_price: Number(updatedPayload.cost_price) || 0,
             price: Number(updatedPayload.price) || 0,
             vendor_id: updatedPayload.vendor_id || '',
+            invoice_image_url: updatedPayload.invoice_image_url || '',
             date: updatedPayload.date || format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
             note: updatedPayload.note || '',
             operator: get().operator
@@ -1269,6 +1272,13 @@ export const useStore = create<AppState>((set, get) => ({
           seenTxKeys.add(dedupeKey);
 
           const online_order_id = norm.online_order_id || norm['網路訂單編號'] || norm.order_id || '';
+          let poId = norm.po_id || norm['採購單號'] || norm['採購單'] || norm['PO_ID'] || '';
+          if (!poId && txId.startsWith('PO_')) {
+            const parts = txId.split('_');
+            if (parts.length >= 3) {
+              poId = `${parts[0]}_${parts[1]}_${parts[2]}`;
+            }
+          }
           const platformVal = norm.platform || norm['平台'] || norm['銷售平台'] || (norm.type && !['stock_in', 'stock_out', 'adjust'].includes(norm.type) ? norm.type.replace(/^stock_out\s*/, '') : '') || '';
           const product_name = norm.product_name || norm.name || norm['商品名稱'] || norm['名稱'] || '';
           const priceVal = Number(norm.price || norm['金額'] || norm['售價']) || 0;
@@ -1290,6 +1300,7 @@ export const useStore = create<AppState>((set, get) => ({
             ...norm,
             id,
             transaction_id: txId,
+            po_id: String(poId).trim(),
             online_order_id: String(online_order_id).trim(),
             platform: String(platformVal).trim(),
             product_id: pid,
@@ -2131,7 +2142,10 @@ export const useStore = create<AppState>((set, get) => ({
     const { products, purchaseOrders, enqueueAction, updatePurchaseOrder, showToast } = get();
 
     // Generate ONE unified batch transaction ID for all items in this stock-in session!
-    const batchTxId = `TX_IN_${format(new Date(), 'yyyyMMdd_HHmmss')}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+    // If it's linked to a PO, use PO ID as prefix to ensure items from the same PO share the same transaction_id base
+    const batchTxId = po_id 
+      ? `${po_id}_${format(new Date(), 'HHmmss')}` 
+      : `TX_IN_${format(new Date(), 'yyyyMMdd_HHmmss')}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
     // 1. Process each item into inventory
     for (let i = 0; i < items.length; i++) {
@@ -2139,7 +2153,7 @@ export const useStore = create<AppState>((set, get) => ({
       const p = products.find(prod => prod.product_id === item.product_id);
       const stockInPayload = {
         transaction_id: batchTxId, // All items in the same batch share this transaction_id!
-        id: `${batchTxId}_${i + 1}`, // Unique record key for database
+        id: `${batchTxId}_${item.product_id}_${i}`, // Unique record key for database
         batch_id: batchTxId,
         batch_tx_id: batchTxId,
         po_id: po_id || '',
@@ -2205,6 +2219,48 @@ export const useStore = create<AppState>((set, get) => ({
     }
 
     showToast(`🎉 成功完成 ${items.length} 項商品進貨入庫！`);
+  },
+
+  completeAndStockInAllRemainingPO: async (poId: string) => {
+    const { purchaseOrders, batchStockInFromInvoice, showToast } = get();
+    const po = purchaseOrders.find(p => p.po_id === poId);
+    if (!po) {
+      showToast('⚠️ 找不到指定的採購訂單');
+      return;
+    }
+
+    const itemsToStockIn: any[] = [];
+    (po.items || []).forEach(it => {
+      const remaining = Math.max(0, Number(it.ordered_quantity || 0) - Number(it.received_quantity || 0));
+      const qty = remaining > 0 ? remaining : Number(it.ordered_quantity || 1);
+      if (qty > 0) {
+        itemsToStockIn.push({
+          product_id: it.product_id,
+          product_name: it.name || (it as any).product_name || '',
+          specification: it.specification || '',
+          quantity: qty,
+          cost_price: Number(it.cost_price || 0),
+          vendor_id: po.vendor_id || '',
+          location: '倉庫',
+          floor: '1F',
+          area: 'A區',
+          note: `採購單全數結案入庫 (${po.po_id})`
+        });
+      }
+    });
+
+    if (itemsToStockIn.length === 0) {
+      showToast('⚠️ 此採購單無待入庫品項');
+      return;
+    }
+
+    await batchStockInFromInvoice({
+      items: itemsToStockIn,
+      po_id: po.po_id,
+      invoice_number: '',
+      invoice_image_url: po.invoice_image_url || '',
+      is_close_remaining_po: true
+    });
   }
 }));
 

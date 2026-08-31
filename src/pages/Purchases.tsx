@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import { Product, PurchaseOrder, PurchaseOrderItem, Vendor } from '../lib/db';
 import { performLocalInvoiceOcr, calculateSimilarity, optimizeImageForUpload } from '../lib/localOcrEngine';
@@ -9,7 +10,7 @@ import {
   RefreshCw, X, ArrowRight, Check, Sparkles, Building2, 
   Layers, Package, DollarSign, Calendar, ChevronRight, ChevronDown,
   ExternalLink, ZoomIn, ZoomOut, AlertCircle, ShoppingCart, Zap, Cpu,
-  CheckCheck, FileSpreadsheet
+  CheckCheck, FileSpreadsheet, ArrowDownToLine, Boxes, PackageCheck
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import SearchableProductCombobox from '../components/SearchableProductCombobox';
@@ -46,6 +47,7 @@ export default function Purchases() {
     updatePurchaseOrder, 
     deletePurchaseOrder,
     batchStockInFromInvoice,
+    completeAndStockInAllRemainingPO,
     uploadInvoiceImage,
     fetchPurchaseOrders,
     addVendor,
@@ -584,6 +586,7 @@ export default function Purchases() {
 
     const checkInItems: ScannedInvoiceItem[] = (po.items || []).map((it, idx) => {
       const remaining = Math.max(0, Number(it.ordered_quantity || 0) - Number(it.received_quantity || 0));
+      const targetQty = remaining > 0 ? remaining : Number(it.ordered_quantity || 1);
       const defLoc = productDefaultLocationMap.get(it.product_id);
       const matchedP = products.find(p => p.product_id === it.product_id);
 
@@ -593,7 +596,7 @@ export default function Purchases() {
         product_name: it.name,
         matched_system_product: matchedP,
         specification: it.specification || '',
-        quantity: remaining > 0 ? remaining : it.ordered_quantity,
+        quantity: targetQty,
         cost_price: it.cost_price || matchedP?.cost_price || 0,
         location: defLoc?.location || '倉庫',
         floor: defLoc?.floor || '1F',
@@ -1090,15 +1093,31 @@ export default function Purchases() {
                           <span>編輯</span>
                         </button>
 
-                        {(po.status === 'pending' || po.status === 'partial') && (
+                        {/* One-Click Complete & Stock In */}
+                        {po.status !== 'completed' && (
                           <button
-                            onClick={() => handleStartCheckInForPO(po)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg text-xs font-extrabold shadow-md shadow-emerald-500/20 transition-all cursor-pointer"
+                            onClick={async () => {
+                              if (window.confirm(`確定要將採購單 ${po.po_id} 全部品項直接全數驗收入庫並完成結案嗎？\n系統將自動建立對應的進貨交易紀錄並更新庫存！`)) {
+                                await completeAndStockInAllRemainingPO(po.po_id);
+                              }
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-lg text-xs font-black shadow-md shadow-sky-500/20 transition-all cursor-pointer"
+                            title="一鍵將此單全部品項入庫並自動完成結案，確保交易紀錄完整"
                           >
-                            <Check className="w-4 h-4 stroke-[3]" />
-                            <span>驗收入庫</span>
+                            <Boxes className="w-4 h-4 stroke-[2.5]" />
+                            <span>一鍵全數入庫結案</span>
                           </button>
                         )}
+
+                        {/* Check-In / Add Missing Items Button */}
+                        <button
+                          onClick={() => handleStartCheckInForPO(po)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg text-xs font-extrabold shadow-md shadow-emerald-500/20 transition-all cursor-pointer"
+                          title="開啟核對清單，自訂本次入庫數量或補登缺漏商品"
+                        >
+                          <Check className="w-4 h-4 stroke-[3]" />
+                          <span>{po.status === 'completed' ? '補登進貨品項' : '核對入庫'}</span>
+                        </button>
 
                         <button
                           onClick={() => {
@@ -1181,6 +1200,96 @@ export default function Purchases() {
                         </tbody>
                       </table>
                     </div>
+
+                    {/* Linked Transactions Section */}
+                    {(() => {
+                      const relatedTransactions = (transactions || []).filter(t => 
+                        t.po_id === po.po_id || 
+                        (t.note && (t.note.includes(`[採購單: ${po.po_id}]`) || t.note.includes(`採購單號: ${po.po_id}`) || t.note.includes(po.po_id)))
+                      );
+                      const totalTxQty = relatedTransactions.reduce((sum, t) => sum + Number(t.quantity || 0), 0);
+                      const uniqueBatchIds = Array.from(new Set(relatedTransactions.map(t => t.batch_id || t.batch_tx_id || t.transaction_id).filter(Boolean)));
+                      
+                      const checkedProductIds = new Set(relatedTransactions.map(t => t.product_id));
+                      const missingItems = (po.items || []).filter(it => !checkedProductIds.has(it.product_id));
+
+                      return (
+                        <div className="bg-white/[0.02] border border-white/5 rounded-xl p-3 space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                                <ArrowDownToLine className="w-3.5 h-3.5 text-sky-400" />
+                                關聯進貨交易紀錄 ({relatedTransactions.length} 筆明細 / 總入庫 {totalTxQty} 件)
+                              </span>
+                              {uniqueBatchIds.length > 0 && (
+                                <span className="font-mono text-[10px] bg-sky-500/10 text-sky-300 border border-sky-500/20 px-2 py-0.5 rounded">
+                                  批次號: {uniqueBatchIds.join(', ')}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {relatedTransactions.length > 0 && (
+                                <Link
+                                  to="/transactions"
+                                  className="text-[11px] text-sky-400 hover:text-sky-300 font-bold flex items-center gap-1 hover:underline"
+                                >
+                                  <Eye className="w-3 h-3" />
+                                  在交易紀錄查看
+                                </Link>
+                              )}
+                              <button
+                                onClick={() => handleStartCheckInForPO(po)}
+                                className="text-[11px] bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-lg font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                                title="追加或補登此採購單品項入庫"
+                              >
+                                <Plus className="w-3 h-3" />
+                                補登/追加入庫
+                              </button>
+                            </div>
+                          </div>
+
+                          {relatedTransactions.length > 0 ? (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-1.5 pt-1">
+                              {relatedTransactions.map((tx, txIdx) => (
+                                <div key={tx.id || tx.transaction_id || txIdx} className="bg-black/30 border border-white/5 rounded-lg p-2 text-xs flex justify-between items-center">
+                                  <div className="min-w-0 flex-1 pr-2">
+                                    <div className="font-bold text-white truncate">{tx.product_name || tx.product_id}</div>
+                                    <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
+                                      <span>{tx.specification || tx.product_id}</span>
+                                      <span>•</span>
+                                      <span>{tx.date ? String(tx.date).slice(5, 16) : ''}</span>
+                                    </div>
+                                  </div>
+                                  <div className="font-mono font-black text-sky-400 text-sm shrink-0">
+                                    +{tx.quantity}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-slate-500 flex items-center justify-between py-1">
+                              <span>尚無已關聯的入庫交易紀錄。</span>
+                              {po.status === 'completed' && (
+                                <span className="text-amber-400">⚠️ 此單已標記結案但尚未產生進貨紀錄，若需入庫請點擊「補登/追加入庫」或「一鍵全數入庫結案」。</span>
+                              )}
+                            </div>
+                          )}
+
+                          {missingItems.length > 0 && relatedTransactions.length > 0 && (
+                            <div className="text-[11px] text-amber-300/90 bg-amber-500/10 p-2 rounded-lg border border-amber-500/20 flex flex-wrap items-center justify-between gap-2">
+                              <span>⚠️ 提示：此採購單尚有 {missingItems.length} 款商品未登錄至進貨紀錄（{missingItems.map(m => m.name).join('、')}）</span>
+                              <button
+                                onClick={() => handleStartCheckInForPO(po)}
+                                className="text-xs bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-2.5 py-0.5 rounded-lg cursor-pointer shrink-0"
+                              >
+                                立即補登缺漏品項
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* Footer Actions & Note */}
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 text-xs text-slate-400">
@@ -2135,7 +2244,7 @@ export default function Purchases() {
                   />
                 </div>
 
-                <div>
+                <div className="col-span-2">
                   <label className="block text-slate-400 font-bold mb-1">關聯採購訂單 (在途扣抵)</label>
                   <select
                     value={confirmSelectedPOId}
@@ -2145,12 +2254,48 @@ export default function Purchases() {
                     <option value="">無關聯 (獨立進貨)</option>
                     {purchaseOrders
                       .filter(po => po.status === 'pending' || po.status === 'partial')
-                      .map(po => (
-                        <option key={po.po_id} value={po.po_id}>
-                          {po.po_id} - {po.vendor_name || '廠商'} ({po.status === 'pending' ? '待到貨' : '部分到貨'})
-                        </option>
-                      ))}
+                      .map(po => {
+                        const itemsCount = po.items?.length || 0;
+                        const totalQty = po.items?.reduce((sum, item) => sum + Number(item.ordered_quantity || 0), 0) || 0;
+                        const statusLabel = po.status === 'pending' ? '待到貨' : '部分到貨';
+                        return (
+                          <option key={po.po_id} value={po.po_id}>
+                            【{statusLabel}】{po.po_id} - {po.vendor_name || '廠商'} (共 {itemsCount} 款 {totalQty} 件)
+                          </option>
+                        );
+                      })}
                   </select>
+                  
+                  {/* 微型採購單明細卡片 (供人工核對用) */}
+                  {confirmSelectedPOId && (() => {
+                    const selectedPO = purchaseOrders.find(po => po.po_id === confirmSelectedPOId);
+                    if (!selectedPO) return null;
+                    return (
+                      <div className="mt-2 p-2 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-1.5">
+                        <div className="text-[11px] font-bold text-emerald-300 flex items-center justify-between">
+                          <span>📋 採購單預期內容 (供核對參考，不會覆蓋下方辨識結果)</span>
+                          <span>預計到貨: {selectedPO.expected_date}</span>
+                        </div>
+                        <div className="space-y-1 max-h-32 overflow-y-auto pr-1 custom-scrollbar">
+                          {(selectedPO.items || []).map((item, idx) => {
+                            const remaining = Math.max(0, Number(item.ordered_quantity || 0) - Number(item.received_quantity || 0));
+                            return (
+                              <div key={idx} className="flex justify-between items-center text-[11px] bg-black/20 p-1.5 rounded-lg border border-white/5">
+                                <div className="flex-1 truncate pr-2">
+                                  <span className="text-white font-bold">{item.name}</span>
+                                  {item.product_id && <span className="text-slate-400 font-mono ml-1">({item.product_id})</span>}
+                                </div>
+                                <div className="shrink-0 font-mono">
+                                  <span className="text-emerald-300 font-black">待到: {remaining}</span>
+                                  <span className="text-slate-500 ml-1">/ 總定: {item.ordered_quantity}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 

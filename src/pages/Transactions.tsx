@@ -210,6 +210,7 @@ export default function Transactions() {
         const product = productMap.get(t.product_id);
         const productName = (t.product_name || product?.name || '').toLowerCase();
         const onlineOrderId = String(t.online_order_id || '').toLowerCase();
+        const poId = String(t.po_id || '').toLowerCase();
         const platformStr = getTxPlatform(t).toLowerCase();
         const typeStr = (getTypeLabel(t.type) + ' ' + String(t.type || '')).toLowerCase();
         const pid = String(t.product_id || '').toLowerCase();
@@ -224,6 +225,7 @@ export default function Transactions() {
         const matched = productName.includes(s) ||
           pid.includes(s) ||
           onlineOrderId.includes(s) ||
+          poId.includes(s) ||
           platformStr.includes(s) ||
           typeStr.includes(s) ||
           op.includes(s) ||
@@ -854,6 +856,15 @@ export default function Transactions() {
                             訂單: #{t.online_order_id}
                           </span>
                         )}
+                        {t.po_id && (
+                          <span 
+                            onClick={() => setSearchTerm(t.po_id)}
+                            className="bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.5 rounded text-[10px] font-bold font-mono hover:bg-emerald-500/30 cursor-pointer transition-colors"
+                            title="點擊篩選此採購單的所有進貨明細"
+                          >
+                            採購單: #{t.po_id}
+                          </span>
+                        )}
                         <span className="text-[11px] text-[var(--color-text-dim)] font-mono bg-white/5 px-1.5 py-0.5 rounded">
                           PID: {t.product_id || '(非系統商品)'}
                         </span>
@@ -1040,6 +1051,22 @@ export default function Transactions() {
                                     平台: {getTxPlatform(t)}
                                   </span>
                                 )}
+                                {t.online_order_id && (
+                                  <span 
+                                    onClick={() => setSearchTerm(t.online_order_id)}
+                                    className="bg-sky-500/15 text-sky-300 border border-sky-500/30 px-1.5 py-0.5 rounded text-[10px] font-bold font-mono hover:bg-sky-500/30 cursor-pointer transition-colors"
+                                  >
+                                    訂單: #{t.online_order_id}
+                                  </span>
+                                )}
+                                {t.po_id && (
+                                  <span 
+                                    onClick={() => setSearchTerm(t.po_id)}
+                                    className="bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.5 rounded text-[10px] font-bold font-mono hover:bg-emerald-500/30 cursor-pointer transition-colors"
+                                  >
+                                    採購單: #{t.po_id}
+                                  </span>
+                                )}
                                 <span className="bg-white/5 px-1.5 py-0.5 rounded font-mono">
                                   PID: {t.product_id || '(非系統商品)'}
                                 </span>
@@ -1053,8 +1080,14 @@ export default function Transactions() {
                                 )}
                               </div>
                             </div>
-                            <span className={`font-mono font-black shrink-0 text-base ${t.type === 'adjust' ? 'text-amber-400' : 'text-rose-400'}`}>
-                              {t.type === 'adjust' ? formatAdjustQuantity(t).display : `x${t.quantity}`}
+                            <span className={`font-mono font-black shrink-0 text-base ${
+                              t.type === 'adjust' 
+                                ? 'text-amber-400' 
+                                : t.type === 'stock_in' 
+                                  ? 'text-sky-400' 
+                                  : 'text-rose-400'
+                            }`}>
+                              {t.type === 'adjust' ? formatAdjustQuantity(t).display : (t.type === 'stock_in' ? `+${t.quantity}` : `-${t.quantity}`)}
                             </span>
                           </div>
                           <div className="flex justify-end gap-1.5 mt-2">
@@ -1136,6 +1169,17 @@ export default function Transactions() {
                 <span className="text-[var(--color-text-dim)]">交易編號</span>
                 <span className="col-span-2 text-white font-mono break-all">{selectedTxForView.transaction_id || '-'}</span>
               </div>
+              {selectedTxForView.po_id && (
+                <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5 bg-emerald-500/10 p-2 rounded-xl border border-emerald-500/20">
+                  <span className="text-emerald-300 font-bold">關聯採購單</span>
+                  <span className="col-span-2 text-emerald-200 font-mono font-extrabold break-all flex items-center justify-between">
+                    <span>#{selectedTxForView.po_id}</span>
+                    <Link to="/purchases" className="text-[10px] bg-emerald-500/20 hover:bg-emerald-500/30 px-2 py-0.5 rounded text-emerald-300 border border-emerald-500/30 transition-colors">
+                      查看採購訂單
+                    </Link>
+                  </span>
+                </div>
+              )}
               {selectedTxForView.online_order_id && (
                 <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                   <span className="text-[var(--color-text-dim)]">網路訂單號</span>

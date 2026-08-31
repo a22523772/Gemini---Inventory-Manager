@@ -637,11 +637,17 @@ export default function SetupGuide() {
     }
 
     var txIdIdx = transHeaders.indexOf('transaction_id');
+    var prodIdx = transHeaders.indexOf('product_id');
+    var specIdx = transHeaders.indexOf('specification');
     var existingTxRow = -1;
     if (txIdIdx !== -1 && transSheet.getLastRow() > 1) {
       var tVals = transSheet.getDataRange().getValues();
       for (var tr = 1; tr < tVals.length; tr++) {
-        if (tVals[tr][txIdIdx] && String(tVals[tr][txIdIdx]).trim() === String(data.transaction_id).trim()) {
+        var txIdMatch = (tVals[tr][txIdIdx] && String(tVals[tr][txIdIdx]).trim() === String(data.transaction_id).trim());
+        var prodMatch = (prodIdx === -1) || (String(tVals[tr][prodIdx] || '').trim() === String(data.product_id || '').trim());
+        var specMatch = (specIdx === -1) || (String(tVals[tr][specIdx] || '').trim() === String(data.specification || '').trim());
+        
+        if (txIdMatch && prodMatch && specMatch) {
           existingTxRow = tr + 1;
           break;
         }
