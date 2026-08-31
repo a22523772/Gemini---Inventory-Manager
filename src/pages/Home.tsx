@@ -86,8 +86,15 @@ export default function Home() {
   const [isOrderDashboardOpen, setIsOrderDashboardOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const [orderErrors, setOrderErrors] = useState<string[]>([]);
-  const [orderSearchQuery, setOrderSearchQuery] = useState('');
   
+  // Online Orders Dashboard Filtering & Sorting
+  const [orderSearchQuery, setOrderSearchQuery] = useState('');
+  const [orderPlatformFilter, setOrderPlatformFilter] = useState('ALL');
+  const [orderStatusFilter, setOrderStatusFilter] = useState('ALL');
+  const [orderStockFilter, setOrderStockFilter] = useState<'ALL' | 'READY' | 'SHORTFALL'>('ALL');
+  const [orderShippingFilter, setOrderShippingFilter] = useState('ALL');
+  const [orderQuickFilter, setOrderQuickFilter] = useState<'ALL' | 'OVERDUE' | 'DUE_SOON' | 'SHORTFALL' | 'READY'>('ALL');
+
   // Sorting state for online orders board
   const [orderSortType, setOrderSortType] = useState<
     'deadline_asc' | 'deadline_desc' | 'status' | 'amount_desc' | 'amount_asc' | 'created_desc' | 'created_asc'
@@ -218,6 +225,66 @@ export default function Home() {
     });
   }, [products, productTotalStockMap]);
 
+  const totalStock = stock.reduce((acc, curr) => acc + curr.quantity, 0);
+
+  // Helper to validate single item health status (stock checks only)
+  const checkItemHealth = (item: any) => {
+    const product = products.find(p => p.product_id === item.product_id);
+    if (!product) return { ok: false, message: '系統找不到此商品的資料，請先新增商品。' };
+
+    const productStock = stock.filter(s => s.product_id === item.product_id);
+    const totalQty = productStock.reduce((acc, curr) => acc + curr.quantity, 0);
+    if (totalQty < item.quantity) {
+      return { ok: false, message: `庫存量不足！需要 ${item.quantity}，但目前在席庫存僅剩 ${totalQty}。` };
+    }
+
+    const isExpired = (expiryStr?: string) => {
+      if (!expiryStr) return false;
+      const exp = new Date(expiryStr);
+      if (isNaN(exp.getTime())) return false;
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      return exp < today;
+    };
+    const validStock = productStock.filter(s => !isExpired(s.expiry_date));
+    const totalValid = validStock.reduce((acc, curr) => acc + curr.quantity, 0);
+    if (totalValid < item.quantity) {
+      return { ok: false, message: `出貨安全阻擋！雖有庫存 ${totalQty}，但皆已過期！可用健康庫存僅剩 ${totalValid}。` };
+    }
+
+    return { ok: true, message: '正常' };
+  };
+
+  // Helper to validate entire order health (including total cost vs order total price)
+  const checkOrderHealth = (order: any) => {
+    const errors: string[] = [];
+    
+    // Compare total cost vs order price
+    const totalOrderCost = order.items.reduce((sum: number, item: any) => {
+      const p = products.find(prod => prod.product_id === item.product_id);
+      const cp = p ? (Number(p.cost_price) || 0) : 0;
+      return sum + cp * item.quantity;
+    }, 0);
+
+    const price = getOrderPrice(order);
+    if (price > 0 && totalOrderCost > price) {
+      errors.push(`成本警示：訂單總進貨成本 ($${totalOrderCost.toLocaleString()}) 高於 訂單成交總價 ($${price.toLocaleString()})！`);
+    }
+
+    // Check individual items
+    order.items.forEach((item: any) => {
+      const itemHealth = checkItemHealth(item);
+      if (!itemHealth.ok) {
+        errors.push(`${item.product_name}: ${itemHealth.message}`);
+      }
+    });
+
+    return {
+      ok: errors.length === 0,
+      errors
+    };
+  };
+
   const displayOrders = onlineOrders.filter(o => o.status !== '已刪除' && o.order_status !== '已刪除');
 
   // Group displayOrders by order_id
@@ -248,30 +315,111 @@ export default function Home() {
   
   const groupedOrders = Object.values(groupedOrdersMap);
 
-  // Calculate counts
+  // Available unique options for dropdown filters
+  const availablePlatforms = useMemo(() => {
+    const set = new Set<string>();
+    groupedOrders.forEach(o => {
+      if (o.platform) set.add(o.platform);
+    });
+    return Array.from(set);
+  }, [groupedOrders]);
+
+  const availableShippingMethods = useMemo(() => {
+    const set = new Set<string>();
+    groupedOrders.forEach(o => {
+      if (o.shipping_method) set.add(o.shipping_method);
+      o.items.forEach((it: any) => {
+        if (it.shipping_method) set.add(it.shipping_method);
+      });
+    });
+    return Array.from(set);
+  }, [groupedOrders]);
+
+  // Calculate counts for quick filter pills
   const pendingOrdersCount = groupedOrders.length;
   const overdueOrdersCount = groupedOrders.filter(o => o.order_status.includes('逾期')).length;
+  const dueSoonOrdersCount = groupedOrders.filter(o => o.order_status.includes('即將到期')).length;
+  const shortfallOrdersCount = groupedOrders.filter(o => o.items.some((item: any) => !checkItemHealth(item).ok)).length;
+  const readyOrdersCount = groupedOrders.filter(o => o.items.every((item: any) => checkItemHealth(item).ok)).length;
   const shippedOrdersCount = overdueOrdersCount;
 
-  // Filter groupedOrders based on orderSearchQuery
-  const filteredGroupedOrders = groupedOrders.filter(order => {
-    if (!orderSearchQuery.trim()) return true;
-    const q = orderSearchQuery.toLowerCase();
-    
-    if (order.order_id.toLowerCase().includes(q)) return true;
-    if (order.customer_name.toLowerCase().includes(q)) return true;
-    if (order.platform.toLowerCase().includes(q)) return true;
-    if (order.shipping_method && order.shipping_method.toLowerCase().includes(q)) return true;
-    if (order.order_status && order.order_status.toLowerCase().includes(q)) return true;
+  // Filter groupedOrders based on search query, dropdowns, and quick pills
+  const filteredGroupedOrders = useMemo(() => {
+    return groupedOrders.filter(order => {
+      // 1. Quick Pill Filter
+      if (orderQuickFilter === 'OVERDUE' && !order.order_status.includes('逾期')) return false;
+      if (orderQuickFilter === 'DUE_SOON' && !order.order_status.includes('即將到期')) return false;
+      if (orderQuickFilter === 'SHORTFALL' && !order.items.some((item: any) => !checkItemHealth(item).ok)) return false;
+      if (orderQuickFilter === 'READY' && !order.items.every((item: any) => checkItemHealth(item).ok)) return false;
 
-    const matchesItem = order.items.some((item: any) => {
-      const pName = (item.product_name || '').toLowerCase();
-      const spec = (item.specification || '').toLowerCase();
-      return pName.includes(q) || spec.includes(q);
+      // 2. Platform Dropdown Filter
+      if (orderPlatformFilter !== 'ALL' && order.platform !== orderPlatformFilter) {
+        return false;
+      }
+
+      // 3. Order Status Dropdown Filter
+      if (orderStatusFilter !== 'ALL') {
+        if (orderStatusFilter === 'OVERDUE' && !order.order_status.includes('逾期')) return false;
+        if (orderStatusFilter === 'DUE_SOON' && !order.order_status.includes('即將到期')) return false;
+        if (orderStatusFilter === 'PENDING' && !order.order_status.includes('待出貨') && order.order_status !== '正常') return false;
+        if (orderStatusFilter === 'PACKED' && !order.order_status.includes('已包裝')) return false;
+        if (orderStatusFilter === 'PROCESSING' && !order.order_status.includes('處理中')) return false;
+        if (orderStatusFilter === 'HOLD' && !order.order_status.includes('暫緩')) return false;
+        if (!['OVERDUE', 'DUE_SOON', 'PENDING', 'PACKED', 'PROCESSING', 'HOLD'].includes(orderStatusFilter)) {
+          if (order.order_status !== orderStatusFilter && order.raw_order_status !== orderStatusFilter) return false;
+        }
+      }
+
+      // 4. Stock Health Status Filter
+      if (orderStockFilter === 'READY') {
+        const isAllHealthy = order.items.every((item: any) => checkItemHealth(item).ok);
+        if (!isAllHealthy) return false;
+      } else if (orderStockFilter === 'SHORTFALL') {
+        const hasShortfall = order.items.some((item: any) => !checkItemHealth(item).ok);
+        if (!hasShortfall) return false;
+      }
+
+      // 5. Shipping Method Dropdown Filter
+      if (orderShippingFilter !== 'ALL') {
+        const orderShipMatch = order.shipping_method === orderShippingFilter;
+        const itemShipMatch = order.items.some((it: any) => it.shipping_method === orderShippingFilter);
+        if (!orderShipMatch && !itemShipMatch) return false;
+      }
+
+      // 6. Search Query
+      if (orderSearchQuery.trim()) {
+        const q = orderSearchQuery.toLowerCase().trim();
+        const idMatch = order.order_id.toLowerCase().includes(q);
+        const nameMatch = order.customer_name.toLowerCase().includes(q);
+        const platMatch = order.platform.toLowerCase().includes(q);
+        const shipMatch = order.shipping_method && order.shipping_method.toLowerCase().includes(q);
+        const statMatch = order.order_status && order.order_status.toLowerCase().includes(q);
+
+        const itemMatch = order.items.some((item: any) => {
+          const pName = (item.product_name || '').toLowerCase();
+          const spec = (item.specification || '').toLowerCase();
+          const pid = (item.product_id || '').toLowerCase();
+          return pName.includes(q) || spec.includes(q) || pid.includes(q);
+        });
+
+        if (!idMatch && !nameMatch && !platMatch && !shipMatch && !statMatch && !itemMatch) {
+          return false;
+        }
+      }
+
+      return true;
     });
-    
-    return matchesItem;
-  });
+  }, [
+    groupedOrders,
+    orderQuickFilter,
+    orderPlatformFilter,
+    orderStatusFilter,
+    orderStockFilter,
+    orderShippingFilter,
+    orderSearchQuery,
+    products,
+    stock
+  ]);
 
   // Sort grouped orders
   const sortedGroupedOrders = useMemo(() => {
@@ -498,62 +646,6 @@ export default function Home() {
     }).catch(() => {
       showToast("❌ 複製失敗，請手動選取複製");
     });
-  };
-
-  const totalStock = stock.reduce((acc, curr) => acc + curr.quantity, 0);
-
-  // Helper to validate single item health status (stock checks only)
-  const checkItemHealth = (item: any) => {
-    const product = products.find(p => p.product_id === item.product_id);
-    if (!product) return { ok: false, message: '系統找不到此商品的資料，請先新增商品。' };
-
-    const productStock = stock.filter(s => s.product_id === item.product_id);
-    const totalQty = productStock.reduce((acc, curr) => acc + curr.quantity, 0);
-    if (totalQty < item.quantity) {
-      return { ok: false, message: `庫存量不足！需要 ${item.quantity}，但目前在席庫存僅剩 ${totalQty}。` };
-    }
-
-    const isExpired = (expiryStr?: string) => {
-      if (!expiryStr) return false;
-      const exp = new Date(expiryStr);
-      if (isNaN(exp.getTime())) return false;
-      const today = new Date();
-      today.setHours(0,0,0,0);
-      return exp < today;
-    };
-    const validStock = productStock.filter(s => !isExpired(s.expiry_date));
-    const totalValid = validStock.reduce((acc, curr) => acc + curr.quantity, 0);
-    if (totalValid < item.quantity) {
-      return { ok: false, message: `出貨安全阻擋！雖有庫存 ${totalQty}，但皆已過期！可用健康庫存僅剩 ${totalValid}。` };
-    }
-
-    return { ok: true, message: '正常' };
-  };
-
-  // Helper to validate entire order health (including total cost vs order total price)
-  const checkOrderHealth = (order: any) => {
-    const errors: string[] = [];
-    
-    // Compare total cost vs order price
-    const totalOrderCost = order.items.reduce((sum: number, item: any) => {
-      const p = products.find(prod => prod.product_id === item.product_id);
-      const cp = p ? (Number(p.cost_price) || 0) : 0;
-      return sum + cp * item.quantity;
-    }, 0);
-
-    const orderTotalAmount = getOrderPrice(order);
-    if (orderTotalAmount > 0 && totalOrderCost > orderTotalAmount) {
-      errors.push(`整單商品進價成本 $${totalOrderCost} 大於訂單總金額 $${orderTotalAmount}（虧本出貨被安全阻擋）！`);
-    }
-
-    for (const item of order.items) {
-      const itemHealth = checkItemHealth(item);
-      if (!itemHealth.ok) {
-        errors.push(`【${item.product_name}】 ${itemHealth.message}`);
-      }
-    }
-
-    return { ok: errors.length === 0, errors };
   };
 
   const handleShipOrder = async (order: any, isForced: boolean = false) => {
@@ -1083,46 +1175,222 @@ export default function Home() {
               {/* TAB 1: Orders Cards Grid View */}
               {orderDashboardTab === 'orders' && (
                 <div className="space-y-4">
-                  {/* Search & Sort Controls Bar */}
-                  <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between bg-black/30 p-2.5 rounded-xl border border-white/5">
-                    {/* Search Input Bar */}
-                    <div className="relative flex-1">
-                      <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                      <input
-                        type="text"
-                        placeholder="搜尋訂單編號、收件人、商品、規格、狀態..."
-                        value={orderSearchQuery}
-                        onChange={(e) => setOrderSearchQuery(e.target.value)}
-                        className="w-full pl-10 pr-9 py-2 text-xs sm:text-sm bg-black/40 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500/50"
-                      />
-                      {orderSearchQuery && (
-                        <button
-                          onClick={() => setOrderSearchQuery('')}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  {/* Quick Filter Pills */}
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1 custom-scrollbar">
+                    <button
+                      type="button"
+                      onClick={() => setOrderQuickFilter('ALL')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                        orderQuickFilter === 'ALL'
+                          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30 ring-1 ring-indigo-400'
+                          : 'bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white border border-white/5'
+                      }`}
+                    >
+                      <span>全部訂單</span>
+                      <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-black/30 font-mono">
+                        {pendingOrdersCount}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setOrderQuickFilter('OVERDUE')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                        orderQuickFilter === 'OVERDUE'
+                          ? 'bg-red-500 text-white shadow-md shadow-red-500/30 ring-1 ring-red-400'
+                          : 'bg-red-500/10 text-red-300 hover:bg-red-500/20 border border-red-500/20'
+                      }`}
+                    >
+                      <span>🚨 逾期訂單</span>
+                      <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-black/30 font-mono font-black">
+                        {overdueOrdersCount}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setOrderQuickFilter('DUE_SOON')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                        orderQuickFilter === 'DUE_SOON'
+                          ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/30 ring-1 ring-amber-400 font-extrabold'
+                          : 'bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 border border-amber-500/20'
+                      }`}
+                    >
+                      <span>⏰ 即將到期</span>
+                      <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-black/30 font-mono font-bold">
+                        {dueSoonOrdersCount}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setOrderQuickFilter('SHORTFALL')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                        orderQuickFilter === 'SHORTFALL'
+                          ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30 ring-1 ring-rose-400'
+                          : 'bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 border border-rose-500/20'
+                      }`}
+                    >
+                      <span>🔴 缺貨需補貨</span>
+                      <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-black/30 font-mono font-bold">
+                        {shortfallOrdersCount}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setOrderQuickFilter('READY')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                        orderQuickFilter === 'READY'
+                          ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/30 ring-1 ring-emerald-400 font-extrabold'
+                          : 'bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/20'
+                      }`}
+                    >
+                      <span>🟢 可立即出貨</span>
+                      <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-black/30 font-mono font-bold">
+                        {readyOrdersCount}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* Search & Multi-filter Controls Bar */}
+                  <div className="bg-black/40 p-3 rounded-2xl border border-white/10 space-y-3">
+                    <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+                      {/* Search Input Bar */}
+                      <div className="relative flex-1">
+                        <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="搜尋訂單編號、收件人、商品品名、規格、商品編號..."
+                          value={orderSearchQuery}
+                          onChange={(e) => setOrderSearchQuery(e.target.value)}
+                          className="w-full pl-10 pr-9 py-2 text-xs bg-slate-900/90 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500/50"
+                        />
+                        {orderSearchQuery && (
+                          <button
+                            onClick={() => setOrderSearchQuery('')}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Sort Selector */}
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-xs text-slate-400 font-bold flex items-center gap-1">
+                          <ArrowUpDown className="w-3.5 h-3.5 text-indigo-400" /> 排序:
+                        </span>
+                        <select
+                          value={orderSortType}
+                          onChange={(e) => setOrderSortType(e.target.value as any)}
+                          className="bg-slate-900 border border-white/10 rounded-xl text-xs font-medium text-white px-3 py-2 outline-none focus:border-indigo-500 cursor-pointer"
                         >
-                          <X className="w-4 h-4" />
-                        </button>
-                      )}
+                          <option value="deadline_asc">⏰ 最晚出貨期限：近 ➔ 遠 (優先)</option>
+                          <option value="deadline_desc">⏰ 最晚出貨期限：遠 ➔ 近</option>
+                          <option value="status">🚨 訂單狀態 (緊急/逾期優先)</option>
+                          <option value="created_desc">📅 下單時間：最新 ➔ 最舊</option>
+                          <option value="created_asc">📅 下單時間：最舊 ➔ 最新</option>
+                          <option value="amount_desc">💰 訂單金額：高 ➔ 低</option>
+                          <option value="amount_asc">💰 訂單金額：低 ➔ 高</option>
+                        </select>
+                      </div>
                     </div>
 
-                    {/* Sort Selector */}
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-xs text-slate-400 font-bold flex items-center gap-1">
-                        <ArrowUpDown className="w-3.5 h-3.5 text-indigo-400" /> 排序:
-                      </span>
-                      <select
-                        value={orderSortType}
-                        onChange={(e) => setOrderSortType(e.target.value as any)}
-                        className="bg-slate-800 border border-white/10 rounded-xl text-xs font-medium text-white px-3 py-2 outline-none focus:border-indigo-500 cursor-pointer"
-                      >
-                        <option value="deadline_asc">⏰ 最晚出貨期限：近 ➔ 遠 (優先)</option>
-                        <option value="deadline_desc">⏰ 最晚出貨期限：遠 ➔ 近</option>
-                        <option value="status">🚨 訂單狀態 (緊急/逾期優先)</option>
-                        <option value="created_desc">📅 下單時間：最新 ➔ 最舊</option>
-                        <option value="created_asc">📅 下單時間：最舊 ➔ 最新</option>
-                        <option value="amount_desc">💰 訂單金額：高 ➔ 低</option>
-                        <option value="amount_asc">💰 訂單金額：低 ➔ 高</option>
-                      </select>
+                    {/* Detailed Dropdown Filters Row */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-white/5 text-xs">
+                      {/* Platform Filter */}
+                      <div>
+                        <label className="text-[11px] text-slate-400 block mb-1">來源平台</label>
+                        <select
+                          value={orderPlatformFilter}
+                          onChange={(e) => setOrderPlatformFilter(e.target.value)}
+                          className="w-full bg-slate-900 border border-white/10 rounded-xl px-2.5 py-1.5 text-white text-xs outline-none focus:border-indigo-500 cursor-pointer"
+                        >
+                          <option value="ALL">所有平台 ({availablePlatforms.length})</option>
+                          {availablePlatforms.map(p => (
+                            <option key={p} value={p}>{p}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Status Filter */}
+                      <div>
+                        <label className="text-[11px] text-slate-400 block mb-1">訂單狀態</label>
+                        <select
+                          value={orderStatusFilter}
+                          onChange={(e) => setOrderStatusFilter(e.target.value)}
+                          className="w-full bg-slate-900 border border-white/10 rounded-xl px-2.5 py-1.5 text-white text-xs outline-none focus:border-indigo-500 cursor-pointer"
+                        >
+                          <option value="ALL">所有狀態</option>
+                          <option value="OVERDUE">🚨 逾期 / 警告</option>
+                          <option value="DUE_SOON">⏰ 即將到期</option>
+                          <option value="PENDING">✅ 待出貨 (正常)</option>
+                          <option value="PACKED">📦 已包裝</option>
+                          <option value="PROCESSING">⏳ 處理中</option>
+                          <option value="HOLD">⏸️ 暫緩</option>
+                        </select>
+                      </div>
+
+                      {/* Stock Health Filter */}
+                      <div>
+                        <label className="text-[11px] text-slate-400 block mb-1">庫存可否出貨</label>
+                        <select
+                          value={orderStockFilter}
+                          onChange={(e) => setOrderStockFilter(e.target.value as any)}
+                          className="w-full bg-slate-900 border border-white/10 rounded-xl px-2.5 py-1.5 text-white text-xs outline-none focus:border-indigo-500 cursor-pointer"
+                        >
+                          <option value="ALL">全部訂單</option>
+                          <option value="READY">🟢 庫存充足 (可出貨)</option>
+                          <option value="SHORTFALL">🔴 含缺貨品項 (需補貨)</option>
+                        </select>
+                      </div>
+
+                      {/* Shipping Method Filter */}
+                      <div>
+                        <label className="text-[11px] text-slate-400 block mb-1">物流方式</label>
+                        <select
+                          value={orderShippingFilter}
+                          onChange={(e) => setOrderShippingFilter(e.target.value)}
+                          className="w-full bg-slate-900 border border-white/10 rounded-xl px-2.5 py-1.5 text-white text-xs outline-none focus:border-indigo-500 cursor-pointer"
+                        >
+                          <option value="ALL">所有物流 ({availableShippingMethods.length || '全部'})</option>
+                          {availableShippingMethods.map(m => (
+                            <option key={m} value={m}>{m}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Filter Status Summary & Clear Filter button */}
+                    <div className="flex items-center justify-between pt-1 text-[11px] text-slate-400">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span>
+                          顯示 <strong className="text-indigo-400 font-mono font-bold text-xs">{sortedGroupedOrders.length}</strong> / {groupedOrders.length} 筆訂單
+                        </span>
+                        {(orderSearchQuery || orderPlatformFilter !== 'ALL' || orderStatusFilter !== 'ALL' || orderStockFilter !== 'ALL' || orderShippingFilter !== 'ALL' || orderQuickFilter !== 'ALL') && (
+                          <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold">
+                            已套用篩選
+                          </span>
+                        )}
+                      </div>
+
+                      {(orderSearchQuery || orderPlatformFilter !== 'ALL' || orderStatusFilter !== 'ALL' || orderStockFilter !== 'ALL' || orderShippingFilter !== 'ALL' || orderQuickFilter !== 'ALL') && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOrderSearchQuery('');
+                            setOrderPlatformFilter('ALL');
+                            setOrderStatusFilter('ALL');
+                            setOrderStockFilter('ALL');
+                            setOrderShippingFilter('ALL');
+                            setOrderQuickFilter('ALL');
+                          }}
+                          className="text-indigo-400 hover:text-indigo-300 underline font-bold cursor-pointer"
+                        >
+                          重置所有篩選
+                        </button>
+                      )}
                     </div>
                   </div>
 

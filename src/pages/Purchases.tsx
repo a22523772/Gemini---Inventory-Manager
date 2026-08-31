@@ -9,12 +9,14 @@ import {
   RefreshCw, X, ArrowRight, Check, Sparkles, Building2, 
   Layers, Package, DollarSign, Calendar, ChevronRight, ChevronDown,
   ExternalLink, ZoomIn, ZoomOut, AlertCircle, ShoppingCart, Zap, Cpu,
-  CheckCheck
+  CheckCheck, FileSpreadsheet
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import SearchableProductCombobox from '../components/SearchableProductCombobox';
 import StorageLocationSelector from '../components/StorageLocationSelector';
 import EditPurchaseOrderModal from '../components/EditPurchaseOrderModal';
+import ImportExcelOrderModal from '../components/ImportExcelOrderModal';
+import ProductCatalogPickerModal from '../components/ProductCatalogPickerModal';
 
 interface ScannedInvoiceItem {
   temp_id: string;
@@ -95,6 +97,9 @@ export default function Purchases() {
   const [isNewPOCustomVendor, setIsNewPOCustomVendor] = useState<boolean>(false);
   const [newPOExpectedDate, setNewPOExpectedDate] = useState<string>('');
   const [newPONote, setNewPONote] = useState<string>('');
+  const [isExcelImportModalOpen, setIsExcelImportModalOpen] = useState<boolean>(false);
+  const [isProductCatalogModalOpen, setIsProductCatalogModalOpen] = useState<boolean>(false);
+  const [isSearchFocused, setIsSearchFocused] = useState<boolean>(false);
   const [newPOItems, setNewPOItems] = useState<Array<{
     temp_id: string;
     product_id: string;
@@ -106,12 +111,35 @@ export default function Purchases() {
   }>>([]);
   const [productSearchTerm, setProductSearchTerm] = useState<string>('');
 
+  // Map for total stock quantity per product
+  const productTotalStockMap = useMemo(() => {
+    const map = new Map<string, number>();
+    (stock || []).forEach(s => {
+      if (s.product_id) {
+        map.set(s.product_id, (map.get(s.product_id) || 0) + Number(s.quantity || 0));
+      }
+    });
+    return map;
+  }, [stock]);
+
   // Map for quick vendor lookup
   const vendorMap = useMemo(() => {
     const map = new Map<string, string>();
     vendors.forEach(v => map.set(v.vendor_id, v.vendor_name || v.name || v.vendor_id));
     return map;
   }, [vendors]);
+
+  // Products belonging to currently selected vendor (if any)
+  const currentVendorProducts = useMemo(() => {
+    if (!newPOVendorName && !newPOVendorId) return [];
+    const vIdLower = (newPOVendorId || '').toLowerCase();
+    const vNameLower = (newPOVendorName || '').toLowerCase();
+    return (products || []).filter(p => {
+      const pVid = (p.vendor_id || '').toLowerCase();
+      const pVname = (vendorMap.get(p.vendor_id) || (p as any).vendor_name || '').toLowerCase();
+      return (vIdLower && pVid === vIdLower) || (vNameLower && (pVname.includes(vNameLower) || vNameLower.includes(pVname)));
+    });
+  }, [products, newPOVendorId, newPOVendorName, vendorMap]);
 
   // Aggregate all known vendors from vendors store, products, transactions, and existing purchase orders
   const allKnownVendors = useMemo(() => {
@@ -579,27 +607,121 @@ export default function Purchases() {
   };
 
   // Handlers for creating manual PO
-  const handleAddProductToNewPO = (p: Product) => {
-    if (newPOItems.some(it => it.product_id === p.product_id)) {
-      showToast('⚠️ 該商品已在採購清單中');
-      return;
+  const handleAddProductToNewPO = (p: Product, qty: number = 1) => {
+    if (!p) return;
+    const existingIndex = newPOItems.findIndex(it => it.product_id === p.product_id);
+    if (existingIndex >= 0) {
+      setNewPOItems(prev => prev.map((it, idx) => 
+        idx === existingIndex 
+          ? { ...it, ordered_quantity: Math.max(1, Number(it.ordered_quantity || 0) + qty) } 
+          : it
+      ));
+      showToast(`➕ 已累加「${p.name || p.product_id}」訂購數量 (+${qty})`);
+    } else {
+      setNewPOItems(prev => [
+        ...prev,
+        {
+          temp_id: `NEW_PO_ITEM_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          product_id: p.product_id || `P_${Date.now()}`,
+          name: p.name || '未命名商品',
+          specification: p.specification || '',
+          ordered_quantity: Math.max(1, qty),
+          cost_price: Number(p.cost_price) || 0,
+          note: ''
+        }
+      ]);
+      showToast(`✅ 已將「${p.name || p.product_id}」加入採購清單`);
     }
-    setNewPOItems(prev => [
-      ...prev,
-      {
-        temp_id: `NEW_PO_ITEM_${Date.now()}`,
-        product_id: p.product_id,
-        name: p.name,
-        specification: p.specification || '',
-        ordered_quantity: 1,
-        cost_price: Number(p.cost_price) || 0,
-        note: ''
-      }
-    ]);
+
+    // Auto-fill vendor if currently empty and product has vendor
     if (!newPOVendorName && !newPOVendorId && p.vendor_id) {
       const vName = vendorMap.get(p.vendor_id) || p.vendor_id;
       setNewPOVendorId(p.vendor_id);
       setNewPOVendorName(vName);
+    }
+  };
+
+  const handleUpdatePOItemQuantity = (productId: string, delta: number) => {
+    setNewPOItems(prev => {
+      const targetIdx = prev.findIndex(it => it.product_id === productId);
+      if (targetIdx < 0) return prev;
+
+      const currentQty = Number(prev[targetIdx].ordered_quantity) || 1;
+      const newQty = currentQty + delta;
+
+      if (newQty <= 0) {
+        // Remove item if reduced to 0
+        return prev.filter((_, idx) => idx !== targetIdx);
+      } else {
+        return prev.map((it, idx) => idx === targetIdx ? { ...it, ordered_quantity: newQty } : it);
+      }
+    });
+  };
+
+  const handleAddCustomItemToNewPO = () => {
+    const timestamp = Date.now();
+    setNewPOItems(prev => [
+      ...prev,
+      {
+        temp_id: `CUSTOM_PO_ITEM_${timestamp}`,
+        product_id: `CUSTOM_${timestamp.toString().slice(-6)}`,
+        name: '',
+        specification: '',
+        ordered_quantity: 1,
+        cost_price: 0,
+        note: ''
+      }
+    ]);
+    showToast('➕ 已新增自訂採購品項，請直接於下方表格填寫品名與進價');
+  };
+
+  const handleImportExcelOrderItems = (
+    importedItems: Array<{
+      temp_id: string;
+      product_id: string;
+      name: string;
+      specification: string;
+      ordered_quantity: number;
+      cost_price: number;
+      note: string;
+    }>,
+    mode: 'append' | 'replace',
+    detectedVendor?: { vendor_id: string; vendor_name: string },
+    detectedExpectedDate?: string
+  ) => {
+    if (mode === 'replace') {
+      setNewPOItems(importedItems);
+    } else {
+      setNewPOItems(prev => {
+        const nextList = [...prev];
+        importedItems.forEach(item => {
+          const matchIdx = nextList.findIndex(it => 
+            (it.product_id && item.product_id && it.product_id === item.product_id) ||
+            (it.name.trim().toLowerCase() === item.name.trim().toLowerCase() && 
+             (it.specification || '').trim().toLowerCase() === (item.specification || '').trim().toLowerCase())
+          );
+          if (matchIdx >= 0) {
+            nextList[matchIdx] = {
+              ...nextList[matchIdx],
+              ordered_quantity: Number(nextList[matchIdx].ordered_quantity) + Number(item.ordered_quantity),
+              cost_price: item.cost_price > 0 ? item.cost_price : nextList[matchIdx].cost_price
+            };
+          } else {
+            nextList.push(item);
+          }
+        });
+        return nextList;
+      });
+    }
+
+    if (detectedVendor) {
+      setIsNewPOCustomVendor(false);
+      setNewPOVendorId(detectedVendor.vendor_id);
+      setNewPOVendorName(detectedVendor.vendor_name);
+    }
+
+    if (detectedExpectedDate) {
+      setNewPOExpectedDate(detectedExpectedDate);
     }
   };
 
@@ -1286,14 +1408,26 @@ export default function Purchases() {
       {activeTab === 'create' && (
         <div className="space-y-6">
           <div className="bg-[#0f172a] border border-white/10 rounded-2xl p-6 space-y-6">
-            <div>
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Plus className="w-5 h-5 text-indigo-400" />
-                建立供應商採購訂單 (在途庫存登記)
-              </h3>
-              <p className="text-xs text-slate-400 mt-1">
-                向廠商訂貨後建立此紀錄，系統會自動在「網路訂單管理」中計入在途庫存，避免隔天新訂單重複下單採購。
-              </p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Plus className="w-5 h-5 text-indigo-400" />
+                  建立供應商採購訂單 (在途庫存登記)
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  向廠商訂貨後建立此紀錄，系統會自動在「網路訂單管理」中計入在途庫存，避免隔天新訂單重複下單採購。
+                </p>
+              </div>
+
+              {/* Import Excel Order Button */}
+              <button
+                type="button"
+                onClick={() => setIsExcelImportModalOpen(true)}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black rounded-xl text-xs shadow-lg shadow-emerald-600/25 border border-emerald-400/30 transition-all cursor-pointer active:scale-95 shrink-0"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-200" />
+                <span>📊 匯入 EXCEL 訂單</span>
+              </button>
             </div>
 
             {/* Basic Info */}
@@ -1421,154 +1555,428 @@ export default function Purchases() {
               </div>
             </div>
 
-            {/* Product Picker */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-slate-300">挑選商品加入採購清單</label>
-                <span className="text-xs text-slate-500">已加入 {newPOItems.length} 項商品</span>
+            {/* Product Picker Section */}
+            <div className="space-y-3 bg-white/[0.02] border border-white/10 rounded-2xl p-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <Package className="w-4 h-4 text-indigo-400" />
+                  <label className="text-xs font-bold text-white">挑選商品加入採購清單</label>
+                  <span className="text-[11px] px-2 py-0.5 bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 rounded-full font-mono font-bold">
+                    已加入 {newPOItems.length} 項商品
+                  </span>
+                </div>
+
+                {/* Main Action Buttons */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setIsProductCatalogModalOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-600/20 transition-all cursor-pointer"
+                  >
+                    <Search className="w-3.5 h-3.5" />
+                    <span>瀏覽/挑選商品目錄 ({products.length})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleAddCustomItemToNewPO}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/15 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>手動新增自訂品項</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsExcelImportModalOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>匯入 Excel 採購單</span>
+                  </button>
+                </div>
               </div>
 
+              {/* Vendor-associated Quick Chips (if current vendor has known products) */}
+              {currentVendorProducts.length > 0 && (
+                <div className="p-2.5 bg-indigo-950/30 border border-indigo-500/20 rounded-xl space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-[11px] text-indigo-300 font-bold">
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>「{newPOVendorName}」常購商品快速點選加入：</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap max-h-24 overflow-y-auto custom-scrollbar">
+                    {currentVendorProducts.slice(0, 10).map(p => {
+                      const isAdded = newPOItems.some(it => it.product_id === p.product_id);
+                      return (
+                        <button
+                          key={p.product_id}
+                          type="button"
+                          onClick={() => handleAddProductToNewPO(p, 1)}
+                          className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
+                            isAdded
+                              ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 font-bold'
+                              : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300 hover:text-white'
+                          }`}
+                        >
+                          <span>{isAdded ? '✓' : '+'}</span>
+                          <span>{p.name}</span>
+                          {p.specification && <span className="text-[10px] text-slate-400">({p.specification})</span>}
+                          <span className="text-[10px] text-amber-300 font-mono">${p.cost_price || 0}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Real-time Search Box */}
               <div className="relative">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="搜尋要訂購的商品品名、規格、條碼..."
+                  placeholder="輸入關鍵字即時搜尋商品品名、規格、貨號、條碼..."
                   value={productSearchTerm}
-                  onChange={(e) => setProductSearchTerm(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  onFocus={() => setIsSearchFocused(true)}
+                  onChange={(e) => {
+                    setProductSearchTerm(e.target.value);
+                    setIsSearchFocused(true);
+                  }}
+                  className="w-full pl-10 pr-10 py-2.5 bg-slate-900 border border-white/15 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:bg-slate-900/90 transition-all"
                 />
+                {productSearchTerm && (
+                  <button
+                    type="button"
+                    onClick={() => setProductSearchTerm('')}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
               </div>
 
-              {productSearchTerm.trim() && (
-                <div className="max-h-48 overflow-y-auto bg-[#1e293b] border border-white/10 rounded-xl p-2 space-y-1 divide-y divide-white/5">
-                  {products
-                    .filter(p => 
-                      p.name.toLowerCase().includes(productSearchTerm.toLowerCase()) ||
-                      p.product_id.toLowerCase().includes(productSearchTerm.toLowerCase()) ||
-                      (p.barcode && p.barcode.includes(productSearchTerm)) ||
-                      (p.specification && p.specification.toLowerCase().includes(productSearchTerm.toLowerCase()))
-                    )
-                    .slice(0, 8)
-                    .map(p => (
-                      <div
-                        key={p.product_id}
-                        onClick={() => {
-                          handleAddProductToNewPO(p);
-                          setProductSearchTerm('');
-                        }}
-                        className="flex items-center justify-between p-2 hover:bg-indigo-500/10 rounded-lg cursor-pointer transition-colors"
-                      >
-                        <div>
-                          <div className="font-bold text-xs text-white">{p.name}</div>
-                          <div className="text-[10px] text-slate-400">
-                            {p.product_id} {p.specification ? `• 規格: ${p.specification}` : ''} • 進價: ${p.cost_price || 0}
-                          </div>
+              {/* Instant Search Suggestions Dropdown */}
+              {(productSearchTerm.trim() || (isSearchFocused && products.length > 0)) && (
+                <div className="max-h-60 overflow-y-auto bg-slate-900 border border-indigo-500/30 rounded-xl p-2 space-y-1 divide-y divide-white/5 custom-scrollbar shadow-xl animate-in fade-in duration-150">
+                  {(() => {
+                    const term = productSearchTerm.trim().toLowerCase();
+                    const matchedList = products.filter(p => {
+                      if (!term) return true; // Show all / top items if focused
+                      const pName = (p.name || '').toLowerCase();
+                      const pId = (p.product_id || '').toLowerCase();
+                      const pSpec = (p.specification || '').toLowerCase();
+                      const pBarcode = (p.barcode || '').toLowerCase();
+                      const pCategory = (p.category || '').toLowerCase();
+                      return pName.includes(term) || pId.includes(term) || pSpec.includes(term) || pBarcode.includes(term) || pCategory.includes(term);
+                    }).slice(0, 10);
+
+                    if (matchedList.length === 0) {
+                      return (
+                        <div className="p-4 text-center space-y-2">
+                          <p className="text-xs text-slate-400">找不到包含「{productSearchTerm}」的商品</p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleAddCustomItemToNewPO();
+                              setProductSearchTerm('');
+                              setIsSearchFocused(false);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>直接以「{productSearchTerm}」新增為自訂品項</span>
+                          </button>
                         </div>
-                        <button className="px-2 py-1 bg-indigo-600 text-white rounded text-[10px] font-bold">
-                          + 加入
-                        </button>
-                      </div>
-                    ))}
+                      );
+                    }
+
+                    return (
+                      <>
+                        <div className="px-2 py-1 flex items-center justify-between text-[11px] text-slate-400">
+                          <span>{term ? `搜尋到 ${matchedList.length} 筆符合商品：` : '💡 常用庫存商品推薦（點擊即可加入）：'}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsProductCatalogModalOpen(true);
+                              setIsSearchFocused(false);
+                            }}
+                            className="text-indigo-400 hover:underline text-[11px] cursor-pointer"
+                          >
+                            開啟完整目錄 »
+                          </button>
+                        </div>
+                        {matchedList.map(p => {
+                          const existingItem = newPOItems.find(it => it.product_id === p.product_id);
+                          const inStock = productTotalStockMap.get(p.product_id) || 0;
+
+                          return (
+                            <div
+                              key={p.product_id}
+                              onClick={() => {
+                                handleAddProductToNewPO(p, 1);
+                              }}
+                              className="flex items-center justify-between p-2 hover:bg-indigo-500/15 rounded-lg cursor-pointer transition-colors group pt-2"
+                            >
+                              <div className="space-y-0.5 flex-1 pr-3">
+                                <div className="font-bold text-xs text-white group-hover:text-indigo-200 flex items-center gap-2">
+                                  <span>{p.name}</span>
+                                  {existingItem && (
+                                    <span className="text-[10px] px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded font-mono font-bold">
+                                      已加入 x{existingItem.ordered_quantity}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-slate-400 flex items-center gap-2 flex-wrap">
+                                  <span className="font-mono text-slate-500">{p.product_id}</span>
+                                  {p.specification && <span>• 規格: {p.specification}</span>}
+                                  <span>• 現存: {inStock}</span>
+                                  <span className="text-amber-300 font-mono font-bold">• 預設進價: ${p.cost_price || 0}</span>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleAddProductToNewPO(p, 1);
+                                }}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all shrink-0 ${
+                                  existingItem
+                                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm'
+                                    : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm'
+                                }`}
+                              >
+                                {existingItem ? `+ 累加 (${existingItem.ordered_quantity})` : '+ 加入'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </div>
 
             {/* Selected Items Table */}
-            {newPOItems.length > 0 && (
-              <div className="overflow-x-auto border border-white/10 rounded-xl">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-white/5 text-slate-400 font-bold border-b border-white/10">
-                      <th className="py-2.5 px-3">商品品名</th>
-                      <th className="py-2.5 px-2">規格</th>
-                      <th className="py-2.5 px-2 w-28 text-center">訂購數量</th>
-                      <th className="py-2.5 px-2 w-28 text-center">約定進價</th>
-                      <th className="py-2.5 px-2 text-right">小計</th>
-                      <th className="py-2.5 px-2 w-10 text-center">刪除</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {newPOItems.map((item, idx) => (
-                      <tr key={item.temp_id} className="hover:bg-white/[0.02]">
-                        <td className="py-2.5 px-3">
-                          <span className="font-bold text-white">{item.name}</span>
-                          <span className="block text-[10px] font-mono text-slate-500">{item.product_id}</span>
-                        </td>
-                        <td className="py-2.5 px-2">
-                          <input
-                            type="text"
-                            value={item.specification}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, specification: val } : it));
-                            }}
-                            className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white"
-                          />
-                        </td>
-                        <td className="py-2.5 px-2 text-center">
-                          <input
-                            type="number"
-                            min="1"
-                            value={item.ordered_quantity}
-                            onChange={(e) => {
-                              const val = Number(e.target.value) || 1;
-                              setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, ordered_quantity: val } : it));
-                            }}
-                            className="w-20 mx-auto bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-center text-white font-bold"
-                          />
-                        </td>
-                        <td className="py-2.5 px-2 text-center">
-                          <input
-                            type="number"
-                            min="0"
-                            value={item.cost_price}
-                            onChange={(e) => {
-                              const val = Number(e.target.value) || 0;
-                              setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, cost_price: val } : it));
-                            }}
-                            className="w-20 mx-auto bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-center text-white font-mono"
-                          />
-                        </td>
-                        <td className="py-2.5 px-2 text-right font-mono font-bold text-amber-300">
-                          ${(item.ordered_quantity * item.cost_price).toLocaleString()}
-                        </td>
-                        <td className="py-2.5 px-2 text-center">
-                          <button
-                            onClick={() => setNewPOItems(prev => prev.filter((_, i) => i !== idx))}
-                            className="text-slate-500 hover:text-red-400 p-1"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
+            {newPOItems.length === 0 ? (
+              <div className="p-8 border border-dashed border-white/15 rounded-2xl text-center space-y-3 bg-white/[0.01]">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto">
+                  <ShoppingCart className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-slate-300">尚未挑選任何採購商品</h4>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                    您可以點擊上方「<strong className="text-indigo-400">瀏覽/挑選商品目錄</strong>」勾選庫存商品，或透過搜尋框即時加入，亦可直接點擊「<strong className="text-slate-300">手動新增自訂品項</strong>」或「<strong className="text-emerald-400">匯入 Excel 採購單</strong>」。
+                  </p>
+                </div>
+                <div className="flex items-center justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsProductCatalogModalOpen(true)}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/20 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Search className="w-3.5 h-3.5" />
+                    <span>挑選商品目錄 ({products.length})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddCustomItemToNewPO}
+                    className="px-4 py-2 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>手動自訂品項</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="overflow-x-auto border border-white/10 rounded-2xl bg-slate-900/60 shadow-lg">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-white/5 text-slate-400 font-bold border-b border-white/10">
+                        <th className="py-2.5 px-3 w-10 text-center">#</th>
+                        <th className="py-2.5 px-3 min-w-[200px]">商品品名 / 貨號</th>
+                        <th className="py-2.5 px-2 min-w-[120px]">規格 / 型號</th>
+                        <th className="py-2.5 px-2 w-32 text-center">訂購數量</th>
+                        <th className="py-2.5 px-2 w-28 text-center">約定進價(單價)</th>
+                        <th className="py-2.5 px-2 w-28 text-right">小計</th>
+                        <th className="py-2.5 px-2 min-w-[140px]">備註說明</th>
+                        <th className="py-2.5 px-2 w-12 text-center">刪除</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {newPOItems.map((item, idx) => (
+                        <tr key={item.temp_id} className="hover:bg-white/[0.02] transition-colors">
+                          <td className="py-2.5 px-3 text-center text-slate-500 font-mono text-[11px]">
+                            {idx + 1}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <input
+                              type="text"
+                              value={item.name}
+                              placeholder="請輸入品名..."
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, name: val } : it));
+                              }}
+                              className="w-full bg-transparent hover:bg-white/5 focus:bg-white/10 border border-transparent focus:border-white/20 rounded px-1.5 py-1 text-xs text-white font-bold focus:outline-none"
+                            />
+                            <span className="block text-[10px] font-mono text-slate-500 px-1.5">{item.product_id}</span>
+                          </td>
+                          <td className="py-2.5 px-2">
+                            <input
+                              type="text"
+                              value={item.specification}
+                              placeholder="規格 (選填)"
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, specification: val } : it));
+                              }}
+                              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
+                            />
+                          </td>
+                          <td className="py-2.5 px-2">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleUpdatePOItemQuantity(item.product_id, -1)}
+                                className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white flex items-center justify-center font-bold text-xs"
+                              >
+                                -
+                              </button>
+                              <input
+                                type="number"
+                                min="1"
+                                value={item.ordered_quantity}
+                                onChange={(e) => {
+                                  const val = Math.max(1, Number(e.target.value) || 1);
+                                  setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, ordered_quantity: val } : it));
+                                }}
+                                className="w-14 bg-white/5 border border-white/10 rounded-lg px-1.5 py-1 text-xs text-center text-white font-mono font-bold focus:outline-none focus:border-indigo-500"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleUpdatePOItemQuantity(item.product_id, 1)}
+                                className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white flex items-center justify-center font-bold text-xs"
+                              >
+                                +
+                              </button>
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-2 text-center">
+                            <div className="relative">
+                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-500">$</span>
+                              <input
+                                type="number"
+                                min="0"
+                                value={item.cost_price}
+                                onChange={(e) => {
+                                  const val = Math.max(0, Number(e.target.value) || 0);
+                                  setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, cost_price: val } : it));
+                                }}
+                                className="w-22 pl-4 pr-1.5 py-1 bg-white/5 border border-white/10 rounded-lg text-xs text-center text-white font-mono focus:outline-none focus:border-indigo-500"
+                              />
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-2 text-right font-mono font-bold text-amber-300 pr-3">
+                            ${(item.ordered_quantity * item.cost_price).toLocaleString()}
+                          </td>
+                          <td className="py-2.5 px-2">
+                            <input
+                              type="text"
+                              value={item.note || ''}
+                              placeholder="備註說明..."
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, note: val } : it));
+                              }}
+                              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                            />
+                          </td>
+                          <td className="py-2.5 px-2 text-center">
+                            <button
+                              type="button"
+                              onClick={() => setNewPOItems(prev => prev.filter((_, i) => i !== idx))}
+                              className="text-slate-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+                              title="刪除此項"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Table Bottom Quick Actions */}
+                <div className="flex items-center justify-between text-xs pt-1 px-1">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleAddCustomItemToNewPO}
+                      className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-bold cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>+ 繼續新增一行自訂品項</span>
+                    </button>
+                    <span className="text-slate-600">•</span>
+                    <button
+                      type="button"
+                      onClick={() => setIsProductCatalogModalOpen(true)}
+                      className="text-xs text-slate-400 hover:text-white flex items-center gap-1 cursor-pointer"
+                    >
+                      <Search className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>開啟目錄挑選更多</span>
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm('確定要清空已加入的所有採購品項嗎？')) {
+                        setNewPOItems([]);
+                      }
+                    }}
+                    className="text-slate-500 hover:text-red-400 text-[11px] cursor-pointer"
+                  >
+                    清空清單
+                  </button>
+                </div>
               </div>
             )}
 
             {/* Bottom Actions */}
-            <div className="flex justify-between items-center pt-3 border-t border-white/5">
-              <div className="text-xs text-slate-400">
-                預估總金額：
-                <span className="text-sm font-mono font-bold text-amber-300 ml-1">
-                  ${newPOItems.reduce((acc, it) => acc + (it.ordered_quantity * it.cost_price), 0).toLocaleString()}
-                </span>
+            <div className="flex flex-col sm:flex-row justify-between items-center gap-3 pt-3 border-t border-white/5">
+              <div className="flex items-center gap-4 text-xs text-slate-400">
+                <div>
+                  品項數：<span className="font-bold text-white">{newPOItems.length} 種</span>
+                </div>
+                <div>
+                  總訂購數量：<span className="font-bold text-white">{newPOItems.reduce((acc, it) => acc + (Number(it.ordered_quantity) || 0), 0)} 件</span>
+                </div>
+                <div>
+                  預估總金額：
+                  <span className="text-base font-mono font-bold text-amber-300 ml-1">
+                    ${newPOItems.reduce((acc, it) => acc + (it.ordered_quantity * it.cost_price), 0).toLocaleString()}
+                  </span>
+                </div>
               </div>
 
-              <div className="flex gap-3">
+              <div className="flex gap-3 w-full sm:w-auto">
                 <button
+                  type="button"
                   onClick={() => setActiveTab('list')}
-                  className="px-4 py-2 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 rounded-xl text-xs font-bold"
+                  className="flex-1 sm:flex-none px-4 py-2 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 rounded-xl text-xs font-bold cursor-pointer"
                 >
                   取消
                 </button>
                 <button
+                  type="button"
                   onClick={handleSaveNewPO}
-                  className="flex items-center gap-1.5 px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold rounded-xl text-xs shadow-lg shadow-indigo-600/25 cursor-pointer"
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold rounded-xl text-xs shadow-lg shadow-indigo-600/25 cursor-pointer"
                 >
-                  <Check className="w-4 h-4" />
-                  <span>儲存採購單 (計入在途庫存)</span>
+                  <Check className="w-4 h-4 stroke-[3]" />
+                  <span>儲存採購單 (登記在途庫存)</span>
                 </button>
               </div>
             </div>
@@ -2002,6 +2410,32 @@ export default function Purchases() {
         products={products}
         vendors={vendors}
         allKnownVendors={allKnownVendors}
+      />
+
+      {/* Import Excel Order Modal */}
+      <ImportExcelOrderModal
+        isOpen={isExcelImportModalOpen}
+        onClose={() => setIsExcelImportModalOpen(false)}
+        products={products}
+        allKnownVendors={allKnownVendors}
+        currentItemsCount={newPOItems.length}
+        onImportItems={handleImportExcelOrderItems}
+        showToast={showToast}
+      />
+
+      {/* Product Catalog Picker Modal */}
+      <ProductCatalogPickerModal
+        isOpen={isProductCatalogModalOpen}
+        onClose={() => setIsProductCatalogModalOpen(false)}
+        products={products}
+        vendors={vendors}
+        stockMap={productTotalStockMap}
+        vendorMap={vendorMap}
+        selectedItems={newPOItems}
+        onAddProduct={handleAddProductToNewPO}
+        onUpdateQuantity={handleUpdatePOItemQuantity}
+        onAddCustomItem={handleAddCustomItemToNewPO}
+        defaultVendorName={newPOVendorName}
       />
 
       {/* Image Preview Large Modal */}
