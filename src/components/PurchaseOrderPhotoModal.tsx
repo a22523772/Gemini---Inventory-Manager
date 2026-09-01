@@ -260,7 +260,7 @@ export default function PurchaseOrderPhotoModal({
                 {existingUrls.map((url, idx) => (
                   <div 
                     key={idx} 
-                    className="group relative bg-black/40 border border-white/10 rounded-xl overflow-hidden aspect-[4/3] flex flex-col justify-between"
+                    className="relative bg-black/40 border border-white/10 rounded-xl overflow-hidden aspect-[4/3] flex flex-col justify-between shadow-md"
                   >
                     <img
                       src={url}
@@ -268,38 +268,53 @@ export default function PurchaseOrderPhotoModal({
                       className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-200"
                       onClick={() => setZoomImageUrl(url)}
                     />
-                    {/* Hover Overlay Controls */}
-                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 p-2 pointer-events-none">
+                    
+                    {/* Top Left Badge: Photo Number */}
+                    <div className="absolute top-1.5 left-1.5 px-2 py-0.5 bg-black/80 backdrop-blur-sm rounded-md text-[11px] font-mono text-white font-bold border border-white/15 shadow">
+                      第 {idx + 1} 張
+                    </div>
+
+                    {/* Always-Visible Action Controls (Mobile & Desktop Friendly) */}
+                    <div className="absolute top-1.5 right-1.5 flex items-center gap-1 z-10">
                       <button
                         type="button"
-                        onClick={() => setZoomImageUrl(url)}
-                        className="pointer-events-auto p-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-xs flex items-center gap-1"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setZoomImageUrl(url);
+                        }}
+                        className="p-1.5 bg-black/85 hover:bg-sky-600 active:scale-90 text-white rounded-lg text-xs flex items-center justify-center border border-white/20 shadow-lg transition-all cursor-pointer"
                         title="放大檢視"
                       >
-                        <ZoomIn className="w-4 h-4" />
+                        <ZoomIn className="w-3.5 h-3.5 text-sky-300" />
                       </button>
                       {url.startsWith('http') && (
                         <a
                           href={url}
                           target="_blank"
                           rel="noreferrer"
-                          className="pointer-events-auto p-1.5 bg-sky-500/40 hover:bg-sky-500/60 text-sky-200 rounded-lg text-xs"
+                          onClick={(e) => e.stopPropagation()}
+                          className="p-1.5 bg-black/85 hover:bg-sky-600 active:scale-90 text-white rounded-lg text-xs flex items-center justify-center border border-white/20 shadow-lg transition-all cursor-pointer"
                           title="在 Google Drive 開啟"
                         >
-                          <ExternalLink className="w-4 h-4" />
+                          <ExternalLink className="w-3.5 h-3.5 text-sky-300" />
                         </a>
                       )}
                       <button
                         type="button"
-                        onClick={() => handleRemoveExisting(idx)}
-                        className="pointer-events-auto p-1.5 bg-red-500/40 hover:bg-red-500/60 text-red-200 rounded-lg text-xs"
-                        title="移除此張照片"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveExisting(idx);
+                        }}
+                        className="p-1.5 bg-black/85 hover:bg-red-600 active:scale-90 text-white rounded-lg text-xs flex items-center justify-center border border-red-500/40 shadow-lg transition-all cursor-pointer"
+                        title="刪除此張照片"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-3.5 h-3.5 text-red-300 hover:text-white" />
                       </button>
                     </div>
-                    <div className="absolute bottom-1 left-1.5 px-1.5 py-0.5 bg-black/70 rounded text-[10px] font-mono text-slate-300">
-                      第 {idx + 1} 張
+
+                    {/* Bottom Hint */}
+                    <div className="absolute inset-x-0 bottom-0 px-2 py-1 bg-gradient-to-t from-black/80 via-black/40 to-transparent flex items-center justify-between text-[10px] text-slate-300 pointer-events-none">
+                      <span>點圖放大</span>
                     </div>
                   </div>
                 ))}
@@ -321,7 +336,7 @@ export default function PurchaseOrderPhotoModal({
                 {newImagePreviews.map((preview, idx) => (
                   <div 
                     key={idx} 
-                    className="group relative bg-sky-950/20 border border-sky-500/40 rounded-xl overflow-hidden aspect-[4/3]"
+                    className="relative bg-sky-950/20 border border-sky-500/40 rounded-xl overflow-hidden aspect-[4/3] shadow-md"
                   >
                     <img
                       src={preview}
@@ -329,16 +344,41 @@ export default function PurchaseOrderPhotoModal({
                       className="w-full h-full object-cover cursor-pointer"
                       onClick={() => setZoomImageUrl(preview)}
                     />
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveNew(idx)}
-                      className="absolute top-1.5 right-1.5 p-1 bg-black/70 hover:bg-red-600 text-white rounded-lg transition-colors cursor-pointer"
-                      title="移除"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                    <div className="absolute bottom-1 left-1.5 px-1.5 py-0.5 bg-sky-600/80 rounded text-[10px] font-mono text-white font-bold">
+
+                    {/* Top Left Badge */}
+                    <div className="absolute top-1.5 left-1.5 px-2 py-0.5 bg-sky-600/90 backdrop-blur-sm rounded-md text-[11px] font-mono text-white font-bold border border-sky-400/40 shadow">
                       新增 +{idx + 1}
+                    </div>
+
+                    {/* Always-Visible Action Controls */}
+                    <div className="absolute top-1.5 right-1.5 flex items-center gap-1 z-10">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setZoomImageUrl(preview);
+                        }}
+                        className="p-1.5 bg-black/85 hover:bg-sky-600 active:scale-90 text-white rounded-lg text-xs flex items-center justify-center border border-white/20 shadow-lg transition-all cursor-pointer"
+                        title="放大檢視"
+                      >
+                        <ZoomIn className="w-3.5 h-3.5 text-sky-300" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveNew(idx);
+                        }}
+                        className="p-1.5 bg-black/85 hover:bg-red-600 active:scale-90 text-white rounded-lg text-xs flex items-center justify-center border border-red-500/40 shadow-lg transition-all cursor-pointer"
+                        title="刪除此張照片"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-red-300 hover:text-white" />
+                      </button>
+                    </div>
+
+                    {/* Bottom Hint */}
+                    <div className="absolute inset-x-0 bottom-0 px-2 py-1 bg-gradient-to-t from-black/80 via-black/40 to-transparent flex items-center justify-between text-[10px] text-sky-200 pointer-events-none">
+                      <span>待上傳</span>
                     </div>
                   </div>
                 ))}
