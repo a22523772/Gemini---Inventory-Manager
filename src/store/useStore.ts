@@ -1261,10 +1261,10 @@ export const useStore = create<AppState>((set, get) => ({
             }
           }
 
-          // Exact row deduplication key: Only drop if it's the exact same line item
+          // Exact row deduplication key: Only drop if it's the exact same line item index from remote
           const dedupeKey = norm.id 
             ? String(norm.id).trim() 
-            : `${txId}___${pid}___${spec}___${norm.quantity || ''}___${norm.location || ''}___${norm.floor || ''}___${norm.area || ''}___${cleanDate}___${norm.type || ''}`;
+            : `${txId}___${pid}___${spec}___${norm.quantity || ''}___${norm.location || ''}___${norm.floor || ''}___${norm.area || ''}___${cleanDate}___${norm.type || ''}___${idx}`;
           
           if (seenTxKeys.has(dedupeKey)) {
             continue;
@@ -1277,6 +1277,8 @@ export const useStore = create<AppState>((set, get) => ({
             const parts = txId.split('_');
             if (parts.length >= 3) {
               poId = `${parts[0]}_${parts[1]}_${parts[2]}`;
+            } else {
+              poId = txId;
             }
           }
           const platformVal = norm.platform || norm['平台'] || norm['銷售平台'] || (norm.type && !['stock_in', 'stock_out', 'adjust'].includes(norm.type) ? norm.type.replace(/^stock_out\s*/, '') : '') || '';
@@ -2141,22 +2143,23 @@ export const useStore = create<AppState>((set, get) => ({
     const nowStr = format(new Date(), 'yyyy-MM-dd HH:mm:ss');
     const { products, purchaseOrders, enqueueAction, updatePurchaseOrder, showToast } = get();
 
-    // Generate ONE unified batch transaction ID for all items in this stock-in session!
-    // If it's linked to a PO, use PO ID as prefix to ensure items from the same PO share the same transaction_id base
+    // If linked to a PO, use PO ID as the transaction_id!
+    // If not linked to a PO, generate unified TX_IN_... batch ID
     const batchTxId = po_id 
-      ? `${po_id}_${format(new Date(), 'HHmmss')}` 
+      ? po_id 
       : `TX_IN_${format(new Date(), 'yyyyMMdd_HHmmss')}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
     // 1. Process each item into inventory
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       const p = products.find(prod => prod.product_id === item.product_id);
+      const uniqueItemId = `TX_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 7)}`;
       const stockInPayload = {
-        transaction_id: batchTxId, // All items in the same batch share this transaction_id!
-        id: `${batchTxId}_${item.product_id}_${i}`, // Unique record key for database
+        transaction_id: batchTxId, // PO ID or batch ID for spreadsheet
+        id: uniqueItemId, // Unique record key for database & sync queue
         batch_id: batchTxId,
         batch_tx_id: batchTxId,
-        po_id: po_id || '',
+        po_id: po_id || (batchTxId.startsWith('PO_') ? batchTxId : ''),
         invoice_number: invoice_number || '',
         product_id: item.product_id,
         product_name: item.product_name || p?.name || '',
@@ -2266,11 +2269,14 @@ export const useStore = create<AppState>((set, get) => ({
 
 export const getOnOrderStockQty = (purchaseOrders: PurchaseOrder[], productId: string, specification?: string): number => {
   let count = 0;
+  if (!purchaseOrders || !productId) return 0;
   purchaseOrders.forEach(po => {
     if (po.status === 'pending' || po.status === 'partial') {
       (po.items || []).forEach(item => {
-        const matchPid = item.product_id === productId;
-        const matchSpec = specification !== undefined ? (item.specification || '') === specification : true;
+        const matchPid = item.product_id === productId || (item.name && item.name.trim() === productId.trim());
+        const itemSpec = (item.specification || '').trim();
+        const targetSpec = specification !== undefined ? (specification || '').trim() : undefined;
+        const matchSpec = targetSpec !== undefined ? itemSpec === targetSpec : true;
         if (matchPid && matchSpec) {
           const remaining = Math.max(0, Number(item.ordered_quantity || 0) - Number(item.received_quantity || 0));
           count += remaining;

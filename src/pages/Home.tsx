@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useStore, calculateOrderStatus, getProductStatusInfo } from '../store/useStore';
+import { useStore, calculateOrderStatus, getProductStatusInfo, getOnOrderStockQty } from '../store/useStore';
 import { 
   Package, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, 
   AlertTriangle, BarChart2, Globe, Truck, Trash2, X, PlusCircle, User, Calendar, CheckCircle, Flame, Search, ArrowRight, FileText,
@@ -60,6 +60,7 @@ export default function Home() {
     products, 
     stock, 
     vendors,
+    purchaseOrders,
     syncQueue, 
     isLoading, 
     fetchRemoteData, 
@@ -547,14 +548,16 @@ export default function Home() {
 
     const result = Array.from(itemMap.values()).map(item => {
       const shortfall = Math.max(0, item.total_ordered_qty - item.current_stock_qty);
+      const onOrderQty = getOnOrderStockQty(purchaseOrders, item.product_id, item.specification);
       return {
         ...item,
-        shortfall_qty: shortfall
+        shortfall_qty: shortfall,
+        on_order_qty: onOrderQty
       };
     });
 
     return result;
-  }, [displayOrders, productMap, products, productTotalStockMap, vendorsMap]);
+  }, [displayOrders, productMap, products, productTotalStockMap, vendorsMap, purchaseOrders]);
 
   const filteredConsolidatedItems = useMemo(() => {
     return consolidatedOrderItems.filter(item => {
@@ -588,7 +591,7 @@ export default function Home() {
       return;
     }
 
-    const headers = ['商品編號', '商品名稱', '規格', '供應商 / 來源', '單位', '網路訂單需求總量', '目前現有庫存量', '建議訂購數量(缺貨)', '預估進價成本', '預估採購小計', '涉及訂單筆數', '訂單編號列表', '系統建檔狀態'];
+    const headers = ['商品編號', '商品名稱', '規格', '供應商 / 來源', '單位', '網路訂單需求總量', '目前現有庫存量', '在途採購量(未到貨)', '建議訂購數量(缺貨)', '預估進價成本', '預估採購小計', '涉及訂單筆數', '訂單編號列表', '系統建檔狀態'];
     const rows = filteredConsolidatedItems.map(item => {
       const rawSpec = item.specification ? String(item.specification).trim() : '';
       const isBlankSpec = !rawSpec || rawSpec === '預設規格' || rawSpec === '無' || rawSpec === '無規格' || rawSpec === '-' || rawSpec === '預設' || rawSpec === '未指定';
@@ -601,6 +604,7 @@ export default function Home() {
         `"${(item.unit || '個').replace(/"/g, '""')}"`,
         item.total_ordered_qty,
         item.current_stock_qty,
+        item.on_order_qty || 0,
         item.shortfall_qty,
         item.cost_price || 0,
         (item.cost_price || 0) * item.shortfall_qty,
@@ -628,7 +632,7 @@ export default function Home() {
       return;
     }
 
-    const headers = ['商品名稱', '規格', '數量'];
+    const headers = ['商品名稱', '規格', '建議訂購量(缺貨)', '在途採購量'];
     const rows = filteredConsolidatedItems.map(item => {
       const rawSpec = item.specification ? String(item.specification).trim() : '';
       const isBlankSpec = !rawSpec || rawSpec === '預設規格' || rawSpec === '無' || rawSpec === '無規格' || rawSpec === '-' || rawSpec === '預設' || rawSpec === '未指定';
@@ -636,13 +640,14 @@ export default function Home() {
       return [
         item.product_name || '',
         cleanSpec,
-        item.shortfall_qty > 0 ? item.shortfall_qty : item.total_ordered_qty
+        item.shortfall_qty > 0 ? item.shortfall_qty : item.total_ordered_qty,
+        item.on_order_qty || 0
       ];
     });
 
     const tsvContent = [headers.join('\t'), ...rows.map(r => r.join('\t'))].join('\n');
     navigator.clipboard.writeText(tsvContent).then(() => {
-      showToast("📋 已成功複製商品名稱、規格、數量！無規格已留空，可直接在 Excel 中貼上");
+      showToast("📋 已成功複製商品名稱、規格、建議訂購量與在途採購量！可直接在 Excel 中貼上");
     }).catch(() => {
       showToast("❌ 複製失敗，請手動選取複製");
     });
@@ -1684,6 +1689,12 @@ export default function Home() {
                             <th className="p-3 text-right">訂單需求總量</th>
                             <th className="p-3 text-right">目前現有庫存</th>
                             <th className="p-3 text-center">建議訂購量 (缺貨差額)</th>
+                            <th className="p-3 text-center">
+                              <div className="flex items-center justify-center gap-1">
+                                <Truck className="w-3.5 h-3.5 text-amber-400" />
+                                <span>在途採購量</span>
+                              </div>
+                            </th>
                             <th className="p-3 text-right">預估進價成本</th>
                             <th className="p-3 text-right">採購預算小計</th>
                             <th className="p-3 text-center">涉及訂單筆數</th>
@@ -1738,6 +1749,16 @@ export default function Home() {
                                     <span className="inline-block px-2.5 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-[11px] font-bold">
                                       ✅ 庫存充裕
                                     </span>
+                                  )}
+                                </td>
+                                <td className="p-3 text-center">
+                                  {(item.on_order_qty || 0) > 0 ? (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full font-mono text-xs font-bold shadow-sm">
+                                      <Truck className="w-3 h-3 text-amber-400 shrink-0" />
+                                      <span>{item.on_order_qty} {item.unit}</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-600 font-mono text-[11px]">0</span>
                                   )}
                                 </td>
                                 <td className="p-3 text-right font-mono text-slate-300">

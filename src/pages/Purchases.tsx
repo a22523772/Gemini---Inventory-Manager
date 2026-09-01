@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { useStore } from '../store/useStore';
+import { useStore, getOnOrderStockQty } from '../store/useStore';
 import { Product, PurchaseOrder, PurchaseOrderItem, Vendor } from '../lib/db';
 import { performLocalInvoiceOcr, calculateSimilarity, optimizeImageForUpload } from '../lib/localOcrEngine';
 import { format } from 'date-fns';
@@ -10,7 +10,8 @@ import {
   RefreshCw, X, ArrowRight, Check, Sparkles, Building2, 
   Layers, Package, DollarSign, Calendar, ChevronRight, ChevronDown,
   ExternalLink, ZoomIn, ZoomOut, AlertCircle, ShoppingCart, Zap, Cpu,
-  CheckCheck, FileSpreadsheet, ArrowDownToLine, Boxes, PackageCheck
+  CheckCheck, FileSpreadsheet, ArrowDownToLine, Boxes, PackageCheck,
+  Images, Image as ImageIcon
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import SearchableProductCombobox from '../components/SearchableProductCombobox';
@@ -18,6 +19,7 @@ import StorageLocationSelector from '../components/StorageLocationSelector';
 import EditPurchaseOrderModal from '../components/EditPurchaseOrderModal';
 import ImportExcelOrderModal from '../components/ImportExcelOrderModal';
 import ProductCatalogPickerModal from '../components/ProductCatalogPickerModal';
+import PurchaseOrderPhotoModal from '../components/PurchaseOrderPhotoModal';
 
 interface ScannedInvoiceItem {
   temp_id: string;
@@ -60,16 +62,18 @@ export default function Purchases() {
   const [vendorFilter, setVendorFilter] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
-  // Image preview modal
+  // Image preview & PO Photo Upload modals
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [photoModalPO, setPhotoModalPO] = useState<PurchaseOrder | null>(null);
 
   // Detail / Edit PO Modal
   const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
   const [isEditingPO, setIsEditingPO] = useState(false);
 
-  // --- OCR / Scanner States ---
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  // --- OCR / Multi-Image Scanner States ---
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
+  const [imagePreviewUrls, setImagePreviewUrls] = useState<string[]>([]);
+  const [activeImageIndex, setActiveImageIndex] = useState<number>(0);
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [scanEngineType, setScanEngineType] = useState<'local' | 'ai'>('local');
   const [ocrProgressText, setOcrProgressText] = useState<string>('');
@@ -87,7 +91,8 @@ export default function Purchases() {
   const [confirmSelectedPOId, setConfirmSelectedPOId] = useState<string>('');
   const [confirmIsCloseRemainingPO, setConfirmIsCloseRemainingPO] = useState<boolean>(false);
   const [confirmItems, setConfirmItems] = useState<ScannedInvoiceItem[]>([]);
-  const [confirmImageUrl, setConfirmImageUrl] = useState<string>('');
+  const [confirmImageUrls, setConfirmImageUrls] = useState<string[]>([]);
+  const [confirmActiveImageIndex, setConfirmActiveImageIndex] = useState<number>(0);
   const [isSavingStockIn, setIsSavingStockIn] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -271,33 +276,69 @@ export default function Purchases() {
     });
   }, [purchaseOrders, statusFilter, vendorFilter, searchTerm]);
 
-  // --- Handlers for Image Upload / Camera ---
-  const handleSelectImageFile = (file: File) => {
-    if (!file.type.startsWith('image/')) {
+  // --- Handlers for Image Upload / Camera (Supports 1, 2, or multiple images) ---
+  const handleSelectImageFiles = (files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    const validImageFiles = fileArray.filter(f => f.type.startsWith('image/'));
+    
+    if (validImageFiles.length === 0) {
       showToast('❌ 請選擇圖檔格式 (JPG, PNG, WEBP)');
       return;
     }
-    setImageFile(file);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      setImagePreviewUrl(e.target?.result as string);
-    };
-    reader.readAsDataURL(file);
-    setScanError(null);
+
+    const readers = validImageFiles.map(file => {
+      return new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target?.result as string);
+        reader.readAsDataURL(file);
+      });
+    });
+
+    Promise.all(readers).then(newUrls => {
+      setImageFiles(prev => [...prev, ...validImageFiles]);
+      setImagePreviewUrls(prev => {
+        const next = [...prev, ...newUrls];
+        setActiveImageIndex(next.length - 1);
+        return next;
+      });
+      setScanError(null);
+      showToast(`📸 已加入 ${validImageFiles.length} 張單據圖片（目前共 ${imagePreviewUrls.length + validImageFiles.length} 張）`);
+    });
   };
 
   const handlePasteImage = (e: React.ClipboardEvent) => {
     const items = e.clipboardData.items;
+    const pastedFiles: File[] = [];
     for (let i = 0; i < items.length; i++) {
       if (items[i].type.indexOf('image') !== -1) {
         const file = items[i].getAsFile();
         if (file) {
-          handleSelectImageFile(file);
-          showToast('📋 已貼上剪貼簿圖片！');
-          break;
+          pastedFiles.push(file);
         }
       }
     }
+    if (pastedFiles.length > 0) {
+      handleSelectImageFiles(pastedFiles);
+      showToast(`📋 已貼上剪貼簿圖片 (共 ${pastedFiles.length} 張)！`);
+    }
+  };
+
+  const handleRemoveImage = (index: number) => {
+    setImageFiles(prev => prev.filter((_, i) => i !== index));
+    setImagePreviewUrls(prev => {
+      const next = prev.filter((_, i) => i !== index);
+      if (activeImageIndex >= next.length) {
+        setActiveImageIndex(Math.max(0, next.length - 1));
+      }
+      return next;
+    });
+  };
+
+  const handleClearAllImages = () => {
+    setImageFiles([]);
+    setImagePreviewUrls([]);
+    setActiveImageIndex(0);
+    setScanError(null);
   };
 
   // Helper to map and populate scanned result into confirmation panel
@@ -371,14 +412,15 @@ export default function Purchases() {
     setConfirmInvoiceDate(data.invoice_date || format(new Date(), 'yyyy-MM-dd'));
     setConfirmSelectedPOId(matchedPOId);
     setConfirmItems(parsedItems);
-    setConfirmImageUrl(imagePreviewUrl || '');
+    setConfirmImageUrls(imagePreviewUrls);
+    setConfirmActiveImageIndex(0);
     setOcrEngineUsed(engine);
     setShowConfirmPanel(true);
   };
 
-  // Perform Local Offline OCR on the selected image (Tesseract.js + Canvas pre-processing + Local Fuzzy Matching)
+  // Perform Local Offline OCR across all selected images (Tesseract.js + Canvas pre-processing + Local Fuzzy Matching)
   const handleStartLocalOCR = async () => {
-    if (!imagePreviewUrl) {
+    if (imagePreviewUrls.length === 0) {
       showToast('請先拍攝或選擇進貨單據圖片');
       return;
     }
@@ -386,28 +428,62 @@ export default function Purchases() {
     setIsScanning(true);
     setScanEngineType('local');
     setScanError(null);
-    setOcrProgressText('正在初始化本地離線 OCR 引擎...');
+    setOcrProgressText(`正在初始化本地離線 OCR 引擎 (共 ${imagePreviewUrls.length} 張單據)...`);
     setOcrProgressPercent(5);
 
     try {
-      const result = await performLocalInvoiceOcr(
-        imagePreviewUrl,
-        products,
-        vendors,
-        (status, percent) => {
-          setOcrProgressText(status);
-          setOcrProgressPercent(percent);
-        }
-      );
+      let combinedVendorName = '';
+      let combinedVendorId = '';
+      let combinedInvoiceNumber = '';
+      let combinedInvoiceDate = '';
+      let allItems: any[] = [];
+      let allRawText = '';
 
-      if (!result.items || result.items.length === 0) {
-        // If local engine couldn't detect clear rows, notify user they can switch to AI
+      for (let i = 0; i < imagePreviewUrls.length; i++) {
+        const currentUrl = imagePreviewUrls[i];
+        const pageLabel = imagePreviewUrls.length > 1 ? `第 ${i + 1}/${imagePreviewUrls.length} 張` : '';
+        setOcrProgressText(`正在辨識 ${pageLabel} 單據內容...`);
+        setOcrProgressPercent(Math.round(10 + (i / imagePreviewUrls.length) * 80));
+
+        const result = await performLocalInvoiceOcr(
+          currentUrl,
+          products,
+          vendors,
+          (status, percent) => {
+            const pageProgress = Math.round(10 + ((i + (percent / 100)) / imagePreviewUrls.length) * 80);
+            setOcrProgressText(`[${pageLabel || '單據'}] ${status}`);
+            setOcrProgressPercent(pageProgress);
+          }
+        );
+
+        if (!combinedVendorName && result.vendor_name) combinedVendorName = result.vendor_name;
+        if (!combinedVendorId && result.vendor_id) combinedVendorId = result.vendor_id;
+        if (!combinedInvoiceNumber && result.invoice_number) combinedInvoiceNumber = result.invoice_number;
+        if (!combinedInvoiceDate && result.invoice_date) combinedInvoiceDate = result.invoice_date;
+        if (result.items && result.items.length > 0) {
+          allItems.push(...result.items);
+        }
+        allRawText += `\n--- 單據 ${i + 1} ---\n` + (result.raw_text || '');
+      }
+
+      const aggregatedResult = {
+        vendor_name: combinedVendorName,
+        vendor_id: combinedVendorId,
+        invoice_number: combinedInvoiceNumber,
+        invoice_date: combinedInvoiceDate,
+        total_amount: allItems.reduce((sum, it) => sum + (Number(it.total_amount) || 0), 0),
+        items: allItems,
+        raw_text: allRawText,
+        engine: 'local' as const
+      };
+
+      if (!aggregatedResult.items || aggregatedResult.items.length === 0) {
         setScanError('本地離線引擎未能辨識出清晰的品項表格（可能因手寫筆跡或折痕干擾）。建議點擊「✨ 雲端 AI 深度解析」獲取更高精度辨識。');
         showToast('⚠️ 本地辨識品項較少，可改用雲端 AI 深度解析');
       }
 
-      populateScannedData(result, 'local');
-      showToast('⚡ 本地離線辨識完成！已自動比對商品資料庫');
+      populateScannedData(aggregatedResult, 'local');
+      showToast(`⚡ 本地離線辨識完成！已整合 ${imagePreviewUrls.length} 張單據商品資料`);
     } catch (err: any) {
       console.error("Local OCR Error:", err);
       setScanError(`本地離線辨識異常: ${err.message || '未知錯誤'}。您可以直接改用「✨ 雲端 AI 深度解析」。`);
@@ -419,9 +495,9 @@ export default function Purchases() {
     }
   };
 
-  // Perform Cloud AI (Gemini) OCR on the selected image
+  // Perform Cloud AI (Gemini) OCR on all selected images (Joint Multimodal Recognition for Multi-page invoices)
   const handleStartAIOCR = async () => {
-    if (!imagePreviewUrl) {
+    if (imagePreviewUrls.length === 0) {
       showToast('請先拍攝或選擇進貨單據圖片');
       return;
     }
@@ -429,19 +505,26 @@ export default function Purchases() {
     setIsScanning(true);
     setScanEngineType('ai');
     setScanError(null);
-    setOcrProgressText('正在壓縮影像以最佳化傳輸速度...');
+    setOcrProgressText(`正在壓縮最佳化 ${imagePreviewUrls.length} 張影像傳輸速度...`);
     setOcrProgressPercent(15);
 
     try {
-      // Optimize image before API call to reduce latency and prevent timeouts
-      const base64Data = await optimizeImageForUpload(imagePreviewUrl);
+      // Optimize all images before sending to API in parallel
+      const base64List = await Promise.all(
+        imagePreviewUrls.map(url => optimizeImageForUpload(url))
+      );
 
-      setOcrProgressText('正在呼叫 Google Gemini 雲端多模態視覺 AI 深度解析...');
+      setOcrProgressText(`正在呼叫 Google Gemini 多模態視覺 AI 深度聯合解析 ${imagePreviewUrls.length} 張單據...`);
       setOcrProgressPercent(40);
+
+      const countDesc = imagePreviewUrls.length > 1 
+        ? `本次共提供了 ${imagePreviewUrls.length} 張單據圖片（可能為多頁單據如第1頁、第2頁，或同批次的數張進貨單據）。請完整解析所有圖片中的全部品項並整合成一個完整的 items 清單。` 
+        : `本次提供了 1 張進貨單據圖片。`;
 
       // System Prompt logic
       const sysPrompt = `
       你是一個高精準的進貨單/採購單解析系統。
+      ${countDesc}
       請辨識提供的圖片，並回傳格式為 JSON。
       
       已知系統廠商：
@@ -450,11 +533,12 @@ export default function Purchases() {
       已知系統商品 (輔助比對，優先使用 name、specification 對應)：
       ${JSON.stringify(products.map(p => ({ product_id: p.product_id, name: p.name, specification: p.specification || '', cost_price: p.cost_price || 0, vendor_id: p.vendor_id || '' })))}
       
-      請盡最大努力從圖片中提取：
+      請盡最大努力從所有圖片中提取：
       1. 單據日期 (invoice_date, YYYY-MM-DD 格式，若無則留空)
       2. 廠商名稱 (vendor_name) 與 對應的廠商 ID (vendor_id)
-      3. 商品項目清單 (items): 
-          - product_name (單據上的品名)
+      3. 單據號碼 / 發票號 (invoice_number，若有多張可提取主要單號或以逗號連接)
+      4. 商品項目清單 (items): 
+          - product_name (單據上的品名，若有多頁請依序提取全部頁面的所有商品，不要遺漏)
           - specification (單據上的規格，若無則留空)
           - quantity (數量，數字)
           - cost_price (單價/進價，數字)
@@ -466,8 +550,10 @@ export default function Purchases() {
         "invoice_date": "2024-03-25",
         "vendor_name": "ABC 廠商",
         "vendor_id": "V001",
+        "invoice_number": "INV-20240325",
         "items": [
-           { "product_name": "商品A", "specification": "紅色", "quantity": 10, "cost_price": 100, "product_id": "P001" }
+           { "product_name": "商品A", "specification": "紅色", "quantity": 10, "cost_price": 100, "product_id": "P001" },
+           { "product_name": "商品B", "specification": "大號", "quantity": 5, "cost_price": 200, "product_id": "P002" }
         ]
       }
       `;
@@ -475,7 +561,7 @@ export default function Purchases() {
       let rawText = '';
       try {
         const { scanInvoiceOCR } = await import('../lib/geminiClient');
-        rawText = await scanInvoiceOCR(base64Data, sysPrompt);
+        rawText = await scanInvoiceOCR(base64List, sysPrompt);
       } catch (geminiError: any) {
         // Handle specific error for missing key
         if (geminiError.message && geminiError.message.includes('未設定')) {
@@ -507,7 +593,7 @@ export default function Purchases() {
       }
 
       populateScannedData(parsedData, 'ai');
-      showToast('✨ 雲端 AI 單據深度解析成功！');
+      showToast(`✨ 雲端 AI 成功辨識 ${parsedData.items.length} 項進貨商品（共 ${imagePreviewUrls.length} 張單據）！`);
     } catch (err: any) {
       console.error("AI OCR Error:", err);
       const errMsg = err.message || 'AI 辨識失敗，請檢查照片清晰度或改用本地快速辨識。';
@@ -529,13 +615,27 @@ export default function Purchases() {
 
     setIsSavingStockIn(true);
     try {
-      // 1. Upload photo to Google Drive (if configured) or keep base64
-      let finalImageUrl = confirmImageUrl;
-      if (confirmImageUrl.startsWith('data:image')) {
-        const uploadRes = await uploadInvoiceImage(confirmImageUrl, `Invoice_${confirmInvoiceNumber || Date.now()}.jpg`);
-        if (uploadRes.success && uploadRes.url) {
-          finalImageUrl = uploadRes.url;
+      // 1. Upload photos to Google Drive (if configured) or keep base64
+      let finalImageUrl = confirmImageUrls[0] || '';
+      const uploadedUrls: string[] = [];
+
+      for (let i = 0; i < confirmImageUrls.length; i++) {
+        const img = confirmImageUrls[i];
+        if (img.startsWith('data:image')) {
+          const fileName = `Invoice_${confirmInvoiceNumber || Date.now()}_p${i + 1}.jpg`;
+          const uploadRes = await uploadInvoiceImage(img, fileName);
+          if (uploadRes.success && uploadRes.url) {
+            uploadedUrls.push(uploadRes.url);
+          } else {
+            uploadedUrls.push(img);
+          }
+        } else {
+          uploadedUrls.push(img);
         }
+      }
+
+      if (uploadedUrls.length > 0) {
+        finalImageUrl = uploadedUrls.join('\n');
       }
 
       // 2. Format items for stock-in
@@ -564,8 +664,10 @@ export default function Purchases() {
 
       // 4. Reset states & return to list
       setShowConfirmPanel(false);
-      setImageFile(null);
-      setImagePreviewUrl(null);
+      setImageFiles([]);
+      setImagePreviewUrls([]);
+      setActiveImageIndex(0);
+      setConfirmImageUrls([]);
       setActiveTab('list');
     } catch (err: any) {
       console.error("Stock in error:", err);
@@ -582,7 +684,9 @@ export default function Purchases() {
     setConfirmInvoiceNumber('');
     setConfirmInvoiceDate(format(new Date(), 'yyyy-MM-dd'));
     setConfirmSelectedPOId(po.po_id);
-    setConfirmImageUrl(po.invoice_image_url || '');
+    const existingImgs = po.invoice_image_url ? po.invoice_image_url.split('\n').filter(Boolean) : [];
+    setConfirmImageUrls(existingImgs);
+    setConfirmActiveImageIndex(0);
 
     const checkInItems: ScannedInvoiceItem[] = (po.items || []).map((it, idx) => {
       const remaining = Math.max(0, Number(it.ordered_quantity || 0) - Number(it.received_quantity || 0));
@@ -1035,16 +1139,36 @@ export default function Purchases() {
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2">
-                        {po.invoice_image_url && (
-                          <button
-                            onClick={() => setPreviewImage(po.invoice_image_url!)}
-                            className="flex items-center gap-1 px-2.5 py-1.5 bg-white/5 hover:bg-white/10 text-sky-300 rounded-lg text-xs font-bold border border-white/10"
-                            title="查看進貨單據原圖"
-                          >
-                            <Camera className="w-3.5 h-3.5" />
-                            <span>單據照片</span>
-                          </button>
-                        )}
+                        {/* Invoice Photo & Upload Button */}
+                        {(() => {
+                          const photoCount = po.invoice_image_url
+                            ? po.invoice_image_url.split('\n').filter(Boolean).length
+                            : 0;
+                          
+                          if (photoCount > 0) {
+                            return (
+                              <button
+                                onClick={() => setPhotoModalPO(po)}
+                                className="flex items-center gap-1 px-2.5 py-1.5 bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 rounded-lg text-xs font-bold border border-sky-500/30 transition-all cursor-pointer shadow-sm"
+                                title="檢視、管理或補傳單據照片"
+                              >
+                                <Camera className="w-3.5 h-3.5 text-sky-400" />
+                                <span>單據照片 ({photoCount})</span>
+                              </button>
+                            );
+                          } else {
+                            return (
+                              <button
+                                onClick={() => setPhotoModalPO(po)}
+                                className="flex items-center gap-1 px-2.5 py-1.5 bg-white/5 hover:bg-sky-500/10 text-slate-300 hover:text-sky-300 rounded-lg text-xs font-bold border border-dashed border-white/20 hover:border-sky-400/40 transition-all cursor-pointer"
+                                title={po.status === 'completed' ? '此已結案採購單尚未存檔照片，點擊可補傳' : '上傳此採購單單據照片'}
+                              >
+                                <Camera className="w-3.5 h-3.5 text-slate-400" />
+                                <span>補傳單據</span>
+                              </button>
+                            );
+                          }
+                        })()}
 
                         {/* Quick Status Selector */}
                         <select
@@ -1205,6 +1329,9 @@ export default function Purchases() {
                     {(() => {
                       const relatedTransactions = (transactions || []).filter(t => 
                         t.po_id === po.po_id || 
+                        (t.transaction_id && t.transaction_id === po.po_id) ||
+                        (t.transaction_id && t.transaction_id.startsWith(po.po_id)) ||
+                        (t.batch_id && t.batch_id === po.po_id) ||
                         (t.note && (t.note.includes(`[採購單: ${po.po_id}]`) || t.note.includes(`採購單號: ${po.po_id}`) || t.note.includes(po.po_id)))
                       );
                       const totalTxQty = relatedTransactions.reduce((sum, t) => sum + Number(t.quantity || 0), 0);
@@ -1323,7 +1450,7 @@ export default function Purchases() {
         </div>
       )}
 
-      {/* TAB 2: AI / LOCAL SCANNER & INVOICE OCR */}
+      {/* TAB 2: AI / LOCAL SCANNER & INVOICE OCR (MULTI-IMAGE SUPPORT) */}
       {activeTab === 'scan' && (
         <div className="space-y-6" onPaste={handlePasteImage}>
           <div className="bg-[#0f172a] border border-white/10 rounded-2xl p-6 space-y-5">
@@ -1331,10 +1458,10 @@ export default function Purchases() {
               <div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
                   <Camera className="w-5 h-5 text-sky-400" />
-                  進貨單據拍照 / 雙引擎智慧辨識
+                  進貨單據拍照 / 雙引擎智慧辨識（支援多張 / 跨頁單據）
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
-                  支援「⚡ 本地離線辨識（不耗流量、快速）」與「✨ 雲端 AI 深度解析（適合手寫、點陣模糊單據）」，辨識後可立即在預覽面板校對與修改。
+                  支援選取或連續拍攝 <span className="text-sky-300 font-bold">2 張以上多頁進貨單、出貨單、發票</span>。可使用「⚡ 本地離線辨識」或「✨ 雲端 AI 跨頁深度解析」，辨識後自動將所有頁面商品整合入庫。
                 </p>
               </div>
 
@@ -1351,57 +1478,145 @@ export default function Purchases() {
                   className="flex items-center gap-1.5 px-3.5 py-2 bg-white/5 hover:bg-white/10 text-slate-200 border border-white/10 font-bold rounded-xl text-xs cursor-pointer"
                 >
                   <Upload className="w-4 h-4 text-sky-400" />
-                  <span>選取檔案</span>
+                  <span>選取檔案 (可多選)</span>
                 </button>
               </div>
             </div>
 
-            {/* Hidden native inputs */}
+            {/* Hidden native inputs with multiple selection enabled */}
             <input
               type="file"
               ref={cameraInputRef}
               accept="image/*"
               capture="environment"
               className="hidden"
-              onChange={(e) => e.target.files?.[0] && handleSelectImageFile(e.target.files[0])}
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  handleSelectImageFiles(e.target.files);
+                }
+                e.target.value = '';
+              }}
             />
             <input
               type="file"
               ref={fileInputRef}
               accept="image/*"
+              multiple
               className="hidden"
-              onChange={(e) => e.target.files?.[0] && handleSelectImageFile(e.target.files[0])}
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  handleSelectImageFiles(e.target.files);
+                }
+                e.target.value = '';
+              }}
             />
 
-            {/* Upload Area / Image Preview */}
-            {!imagePreviewUrl ? (
+            {/* Upload Area / Image Preview Gallery */}
+            {imagePreviewUrls.length === 0 ? (
               <div 
                 onClick={() => fileInputRef.current?.click()}
                 className="border-2 border-dashed border-white/20 hover:border-sky-500/50 bg-white/[0.02] hover:bg-sky-500/[0.03] rounded-2xl p-10 text-center cursor-pointer transition-all space-y-3"
               >
                 <div className="w-16 h-16 mx-auto rounded-2xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
-                  <Camera className="w-8 h-8" />
+                  <Images className="w-8 h-8" />
                 </div>
                 <div className="space-y-1">
-                  <p className="text-sm font-bold text-white">點擊選取或拖曳進貨單、出貨單、發票圖片至此</p>
-                  <p className="text-xs text-slate-400">支援紙本點陣印刷單、手寫銷貨單、熱感應紙收據（亦可直接按 Ctrl+V 貼上剪貼簿截圖）</p>
+                  <p className="text-sm font-bold text-white">點擊選取或拖曳進貨單據圖片至此（支援一次選取多張圖片）</p>
+                  <p className="text-xs text-slate-400">若有第1頁、第2頁或同批多張單據，可一次選取或連續拍照，AI 將自動統整全部品項（支援 Ctrl+V 貼上截圖）</p>
                 </div>
               </div>
             ) : (
               <div className="space-y-4">
-                <div className="relative rounded-2xl overflow-hidden bg-black/40 border border-white/10 max-h-[450px] flex items-center justify-center">
+                {/* Multi-Image Thumbnail Row */}
+                <div className="flex items-center gap-3 overflow-x-auto pb-2 custom-scrollbar">
+                  {imagePreviewUrls.map((url, idx) => (
+                    <div 
+                      key={idx}
+                      onClick={() => setActiveImageIndex(idx)}
+                      className={cn(
+                        "relative shrink-0 w-24 h-24 rounded-xl overflow-hidden border-2 cursor-pointer transition-all group bg-black/40",
+                        activeImageIndex === idx ? "border-sky-400 shadow-md shadow-sky-500/20 scale-105" : "border-white/10 hover:border-white/30 opacity-70 hover:opacity-100"
+                      )}
+                    >
+                      <img src={url} alt={`單據 ${idx + 1}`} className="w-full h-full object-cover" />
+                      <div className="absolute top-1 left-1 bg-black/80 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded text-white border border-white/10">
+                        #{idx + 1}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveImage(idx);
+                        }}
+                        className="absolute top-1 right-1 p-1 bg-red-600/90 hover:bg-red-600 text-white rounded-full transition-opacity opacity-0 group-hover:opacity-100"
+                        title="移除此張圖片"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+
+                  {/* Add more images button */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-24 h-24 rounded-xl border-2 border-dashed border-sky-500/40 hover:border-sky-400 hover:bg-sky-500/10 flex flex-col items-center justify-center gap-1.5 text-sky-400 text-xs font-bold transition-all cursor-pointer"
+                      title="加選其他單據圖片"
+                    >
+                      <Plus className="w-5 h-5" />
+                      <span>加選圖片</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => cameraInputRef.current?.click()}
+                      className="w-24 h-24 rounded-xl border-2 border-dashed border-emerald-500/40 hover:border-emerald-400 hover:bg-emerald-500/10 flex flex-col items-center justify-center gap-1.5 text-emerald-400 text-xs font-bold transition-all cursor-pointer"
+                      title="拍照追加下一頁"
+                    >
+                      <Camera className="w-5 h-5" />
+                      <span>拍照續拍</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Main Active Image Large Preview */}
+                <div className="relative rounded-2xl overflow-hidden bg-black/50 border border-white/10 max-h-[480px] flex items-center justify-center">
                   <img
-                    src={imagePreviewUrl}
-                    alt="Invoice Preview"
-                    className="max-h-[450px] w-auto object-contain"
+                    src={imagePreviewUrls[activeImageIndex] || imagePreviewUrls[0]}
+                    alt={`單據大圖預覽 ${activeImageIndex + 1}`}
+                    className="max-h-[480px] w-auto object-contain"
                   />
+                  
+                  {/* Overlay badge with page information */}
+                  <div className="absolute top-3 left-3 bg-black/80 backdrop-blur-sm border border-white/10 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-200 flex items-center gap-2">
+                    <Images className="w-3.5 h-3.5 text-sky-400" />
+                    <span>單據第 {activeImageIndex + 1} / {imagePreviewUrls.length} 張</span>
+                  </div>
+
+                  {/* Navigation Arrows if multiple images */}
+                  {imagePreviewUrls.length > 1 && (
+                    <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                      <button
+                        onClick={() => setActiveImageIndex(prev => Math.max(0, prev - 1))}
+                        disabled={activeImageIndex === 0}
+                        className="px-3 py-1.5 bg-black/80 hover:bg-black text-white text-xs font-bold rounded-xl border border-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                      >
+                        ◀ 上一張
+                      </button>
+                      <button
+                        onClick={() => setActiveImageIndex(prev => Math.min(imagePreviewUrls.length - 1, prev + 1))}
+                        disabled={activeImageIndex === imagePreviewUrls.length - 1}
+                        className="px-3 py-1.5 bg-black/80 hover:bg-black text-white text-xs font-bold rounded-xl border border-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                      >
+                        下一張 ▶
+                      </button>
+                    </div>
+                  )}
+
                   <button
-                    onClick={() => {
-                      setImageFile(null);
-                      setImagePreviewUrl(null);
-                    }}
-                    className="absolute top-3 right-3 p-2 bg-black/70 hover:bg-black text-white rounded-full transition-colors"
-                    title="移除圖片重新選取"
+                    onClick={() => handleRemoveImage(activeImageIndex)}
+                    className="absolute top-3 right-3 p-2 bg-black/70 hover:bg-red-600 text-white rounded-full transition-colors"
+                    title="移除目前顯示的單據"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -1455,15 +1670,17 @@ export default function Purchases() {
                 )}
 
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                  <button
-                    onClick={() => {
-                      setImageFile(null);
-                      setImagePreviewUrl(null);
-                    }}
-                    className="px-4 py-2.5 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 rounded-xl text-xs font-bold transition-colors cursor-pointer"
-                  >
-                    重新選擇圖片
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleClearAllImages}
+                      className="px-4 py-2.5 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      清空所有圖片
+                    </button>
+                    <span className="text-xs text-slate-400">
+                      已就緒：<strong className="text-white">{imagePreviewUrls.length}</strong> 張單據
+                    </span>
+                  </div>
 
                   <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
                     {/* Primary Button: Local Offline OCR */}
@@ -1471,17 +1688,17 @@ export default function Purchases() {
                       onClick={handleStartLocalOCR}
                       disabled={isScanning}
                       className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-amber-500/20 transition-all disabled:opacity-50 cursor-pointer"
-                      title="在瀏覽器本地離線執行辨識，速度快、不消耗任何網路 AI 額度"
+                      title="在瀏覽器本地離線執行逐頁辨識，不消耗任何網路 AI 額度"
                     >
                       {isScanning && scanEngineType === 'local' ? (
                         <>
                           <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>本地辨識中...</span>
+                          <span>本地辨識中 ({ocrProgressPercent}%)...</span>
                         </>
                       ) : (
                         <>
                           <Zap className="w-4 h-4 fill-current stroke-[2.5]" />
-                          <span>⚡ 本地離線快速辨識 (推薦優先)</span>
+                          <span>⚡ 本地離線快速辨識 ({imagePreviewUrls.length} 張)</span>
                         </>
                       )}
                     </button>
@@ -1491,17 +1708,17 @@ export default function Purchases() {
                       onClick={handleStartAIOCR}
                       disabled={isScanning}
                       className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-sky-500/20 transition-all disabled:opacity-50 cursor-pointer"
-                      title="使用 Google Gemini 視覺大模型，專門解析手寫、點陣斷字或複雜版面"
+                      title="使用 Google Gemini 視覺大模型，跨頁聯合解析所有圖片"
                     >
                       {isScanning && scanEngineType === 'ai' ? (
                         <>
                           <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>AI 解析中...</span>
+                          <span>AI 跨頁解析中...</span>
                         </>
                       ) : (
                         <>
                           <Sparkles className="w-4 h-4 stroke-[2.5]" />
-                          <span>✨ 雲端 AI 深度解析 (手寫/模糊推薦)</span>
+                          <span>✨ 雲端 AI 深度解析 ({imagePreviewUrls.length} 張單據)</span>
                         </>
                       )}
                     </button>
@@ -1716,12 +1933,14 @@ export default function Purchases() {
                   <div className="flex items-center gap-1.5 flex-wrap max-h-24 overflow-y-auto custom-scrollbar">
                     {currentVendorProducts.slice(0, 10).map(p => {
                       const isAdded = newPOItems.some(it => it.product_id === p.product_id);
+                      const inStock = productTotalStockMap.get(p.product_id) || 0;
+                      const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification);
                       return (
                         <button
                           key={p.product_id}
                           type="button"
                           onClick={() => handleAddProductToNewPO(p, 1)}
-                          className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
+                          className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
                             isAdded
                               ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 font-bold'
                               : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300 hover:text-white'
@@ -1730,6 +1949,14 @@ export default function Purchases() {
                           <span>{isAdded ? '✓' : '+'}</span>
                           <span>{p.name}</span>
                           {p.specification && <span className="text-[10px] text-slate-400">({p.specification})</span>}
+                          <span className="text-[10px] text-sky-300 font-mono">現存:{inStock}</span>
+                          {onOrderQty > 0 ? (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-300 font-mono font-bold bg-amber-500/20 px-1 rounded">
+                              <Truck className="w-2.5 h-2.5" />在途:{onOrderQty}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-500 font-mono">在途:0</span>
+                          )}
                           <span className="text-[10px] text-amber-300 font-mono">${p.cost_price || 0}</span>
                         </button>
                       );
@@ -1816,6 +2043,7 @@ export default function Purchases() {
                         {matchedList.map(p => {
                           const existingItem = newPOItems.find(it => it.product_id === p.product_id);
                           const inStock = productTotalStockMap.get(p.product_id) || 0;
+                          const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification);
 
                           return (
                             <div
@@ -1837,7 +2065,15 @@ export default function Purchases() {
                                 <div className="text-[10px] text-slate-400 flex items-center gap-2 flex-wrap">
                                   <span className="font-mono text-slate-500">{p.product_id}</span>
                                   {p.specification && <span>• 規格: {p.specification}</span>}
-                                  <span>• 現存: {inStock}</span>
+                                  <span>• 現存: <strong className="text-sky-300 font-mono">{inStock}</strong></span>
+                                  {onOrderQty > 0 ? (
+                                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded font-mono font-bold">
+                                      <Truck className="w-2.5 h-2.5 text-amber-400 shrink-0" />
+                                      <span>在途: {onOrderQty}</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-500 font-mono">• 在途: 0</span>
+                                  )}
                                   <span className="text-amber-300 font-mono font-bold">• 預設進價: ${p.cost_price || 0}</span>
                                 </div>
                               </div>
@@ -1903,116 +2139,143 @@ export default function Purchases() {
                     <thead>
                       <tr className="bg-white/5 text-slate-400 font-bold border-b border-white/10">
                         <th className="py-2.5 px-3 w-10 text-center">#</th>
-                        <th className="py-2.5 px-3 min-w-[200px]">商品品名 / 貨號</th>
-                        <th className="py-2.5 px-2 min-w-[120px]">規格 / 型號</th>
+                        <th className="py-2.5 px-3 min-w-[180px]">商品品名 / 貨號</th>
+                        <th className="py-2.5 px-2 min-w-[110px]">規格 / 型號</th>
+                        <th className="py-2.5 px-2 w-20 text-center">現存庫存</th>
+                        <th className="py-2.5 px-2 w-24 text-center">在途採購量</th>
                         <th className="py-2.5 px-2 w-32 text-center">訂購數量</th>
                         <th className="py-2.5 px-2 w-28 text-center">約定進價(單價)</th>
-                        <th className="py-2.5 px-2 w-28 text-right">小計</th>
-                        <th className="py-2.5 px-2 min-w-[140px]">備註說明</th>
+                        <th className="py-2.5 px-2 w-24 text-right">小計</th>
+                        <th className="py-2.5 px-2 min-w-[130px]">備註說明</th>
                         <th className="py-2.5 px-2 w-12 text-center">刪除</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5">
-                      {newPOItems.map((item, idx) => (
-                        <tr key={item.temp_id} className="hover:bg-white/[0.02] transition-colors">
-                          <td className="py-2.5 px-3 text-center text-slate-500 font-mono text-[11px]">
-                            {idx + 1}
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <input
-                              type="text"
-                              value={item.name}
-                              placeholder="請輸入品名..."
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, name: val } : it));
-                              }}
-                              className="w-full bg-transparent hover:bg-white/5 focus:bg-white/10 border border-transparent focus:border-white/20 rounded px-1.5 py-1 text-xs text-white font-bold focus:outline-none"
-                            />
-                            <span className="block text-[10px] font-mono text-slate-500 px-1.5">{item.product_id}</span>
-                          </td>
-                          <td className="py-2.5 px-2">
-                            <input
-                              type="text"
-                              value={item.specification}
-                              placeholder="規格 (選填)"
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, specification: val } : it));
-                              }}
-                              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
-                            />
-                          </td>
-                          <td className="py-2.5 px-2">
-                            <div className="flex items-center justify-center gap-1">
+                      {newPOItems.map((item, idx) => {
+                        const inStock = productTotalStockMap.get(item.product_id) || 0;
+                        const onOrder = getOnOrderStockQty(purchaseOrders, item.product_id, item.specification);
+
+                        return (
+                          <tr key={item.temp_id} className="hover:bg-white/[0.02] transition-colors">
+                            <td className="py-2.5 px-3 text-center text-slate-500 font-mono text-[11px]">
+                              {idx + 1}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <input
+                                type="text"
+                                value={item.name}
+                                placeholder="請輸入品名..."
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, name: val } : it));
+                                }}
+                                className="w-full bg-transparent hover:bg-white/5 focus:bg-white/10 border border-transparent focus:border-white/20 rounded px-1.5 py-1 text-xs text-white font-bold focus:outline-none"
+                              />
+                              <span className="block text-[10px] font-mono text-slate-500 px-1.5">{item.product_id}</span>
+                            </td>
+                            <td className="py-2.5 px-2">
+                              <input
+                                type="text"
+                                value={item.specification}
+                                placeholder="規格 (選填)"
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, specification: val } : it));
+                                }}
+                                className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
+                              />
+                            </td>
+                            {/* In-stock */}
+                            <td className="py-2.5 px-2 text-center">
+                              <span className="font-mono font-bold text-sky-300 text-xs">
+                                {inStock}
+                              </span>
+                            </td>
+                            {/* In-transit / On-order */}
+                            <td className="py-2.5 px-2 text-center">
+                              {onOrder > 0 ? (
+                                <span 
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-full font-mono font-bold text-xs shadow-sm"
+                                  title={`目前未結案採購單中共有 ${onOrder} 件在途中`}
+                                >
+                                  <Truck className="w-3 h-3 text-amber-400 shrink-0" />
+                                  <span>{onOrder}</span>
+                                </span>
+                              ) : (
+                                <span className="text-slate-500 font-mono text-xs">0</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-2">
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdatePOItemQuantity(item.product_id, -1)}
+                                  className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white flex items-center justify-center font-bold text-xs"
+                                >
+                                  -
+                                </button>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={item.ordered_quantity}
+                                  onChange={(e) => {
+                                    const val = Math.max(1, Number(e.target.value) || 1);
+                                    setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, ordered_quantity: val } : it));
+                                  }}
+                                  className="w-14 bg-white/5 border border-white/10 rounded-lg px-1.5 py-1 text-xs text-center text-white font-mono font-bold focus:outline-none focus:border-indigo-500"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdatePOItemQuantity(item.product_id, 1)}
+                                  className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white flex items-center justify-center font-bold text-xs"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-2 text-center">
+                              <div className="relative">
+                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-500">$</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={item.cost_price}
+                                  onChange={(e) => {
+                                    const val = Math.max(0, Number(e.target.value) || 0);
+                                    setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, cost_price: val } : it));
+                                  }}
+                                  className="w-22 pl-4 pr-1.5 py-1 bg-white/5 border border-white/10 rounded-lg text-xs text-center text-white font-mono focus:outline-none focus:border-indigo-500"
+                                />
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-2 text-right font-mono font-bold text-amber-300 pr-3">
+                              ${(item.ordered_quantity * item.cost_price).toLocaleString()}
+                            </td>
+                            <td className="py-2.5 px-2">
+                              <input
+                                type="text"
+                                value={item.note || ''}
+                                placeholder="備註說明..."
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, note: val } : it));
+                                }}
+                                className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                              />
+                            </td>
+                            <td className="py-2.5 px-2 text-center">
                               <button
                                 type="button"
-                                onClick={() => handleUpdatePOItemQuantity(item.product_id, -1)}
-                                className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white flex items-center justify-center font-bold text-xs"
+                                onClick={() => setNewPOItems(prev => prev.filter((_, i) => i !== idx))}
+                                className="text-slate-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+                                title="刪除此項"
                               >
-                                -
+                                <Trash2 className="w-4 h-4" />
                               </button>
-                              <input
-                                type="number"
-                                min="1"
-                                value={item.ordered_quantity}
-                                onChange={(e) => {
-                                  const val = Math.max(1, Number(e.target.value) || 1);
-                                  setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, ordered_quantity: val } : it));
-                                }}
-                                className="w-14 bg-white/5 border border-white/10 rounded-lg px-1.5 py-1 text-xs text-center text-white font-mono font-bold focus:outline-none focus:border-indigo-500"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => handleUpdatePOItemQuantity(item.product_id, 1)}
-                                className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white flex items-center justify-center font-bold text-xs"
-                              >
-                                +
-                              </button>
-                            </div>
-                          </td>
-                          <td className="py-2.5 px-2 text-center">
-                            <div className="relative">
-                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-500">$</span>
-                              <input
-                                type="number"
-                                min="0"
-                                value={item.cost_price}
-                                onChange={(e) => {
-                                  const val = Math.max(0, Number(e.target.value) || 0);
-                                  setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, cost_price: val } : it));
-                                }}
-                                className="w-22 pl-4 pr-1.5 py-1 bg-white/5 border border-white/10 rounded-lg text-xs text-center text-white font-mono focus:outline-none focus:border-indigo-500"
-                              />
-                            </div>
-                          </td>
-                          <td className="py-2.5 px-2 text-right font-mono font-bold text-amber-300 pr-3">
-                            ${(item.ordered_quantity * item.cost_price).toLocaleString()}
-                          </td>
-                          <td className="py-2.5 px-2">
-                            <input
-                              type="text"
-                              value={item.note || ''}
-                              placeholder="備註說明..."
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, note: val } : it));
-                              }}
-                              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-indigo-500"
-                            />
-                          </td>
-                          <td className="py-2.5 px-2 text-center">
-                            <button
-                              type="button"
-                              onClick={() => setNewPOItems(prev => prev.filter((_, i) => i !== idx))}
-                              className="text-slate-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
-                              title="刪除此項"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -2299,6 +2562,49 @@ export default function Purchases() {
                 </div>
               </div>
 
+              {/* Multi-Invoice Source Photos Viewer (Collapsible / Switchable) */}
+              {confirmImageUrls.length > 0 && (
+                <div className="bg-black/30 border border-white/10 rounded-xl p-3.5 space-y-3">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
+                      <Images className="w-4 h-4 text-sky-400" />
+                      <span>進貨單據原圖核對（共 {confirmImageUrls.length} 張單據）</span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {confirmImageUrls.map((_, pIdx) => (
+                        <button
+                          key={pIdx}
+                          type="button"
+                          onClick={() => setConfirmActiveImageIndex(pIdx)}
+                          className={cn(
+                            "px-2.5 py-1 rounded-lg text-xs font-bold font-mono transition-all cursor-pointer",
+                            confirmActiveImageIndex === pIdx 
+                              ? "bg-sky-500 text-slate-950 shadow-md shadow-sky-500/20" 
+                              : "bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10"
+                          )}
+                        >
+                          第 {pIdx + 1} 頁
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="relative rounded-xl overflow-hidden bg-black/60 border border-white/10 max-h-56 flex items-center justify-center group">
+                    <img 
+                      src={confirmImageUrls[confirmActiveImageIndex] || confirmImageUrls[0]} 
+                      alt={`單據原圖 ${confirmActiveImageIndex + 1}`}
+                      className="max-h-56 w-auto object-contain cursor-zoom-in"
+                      onClick={() => setPreviewImage(confirmImageUrls[confirmActiveImageIndex] || confirmImageUrls[0])}
+                    />
+                    <div className="absolute bottom-2 right-2 bg-black/80 px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-300 border border-white/10 flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity pointer-events-none">
+                      <ZoomIn className="w-3.5 h-3.5 text-sky-400" />
+                      <span>點擊放大檢視第 {confirmActiveImageIndex + 1} 頁</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Items Editable Table */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -2581,6 +2887,19 @@ export default function Purchases() {
         onUpdateQuantity={handleUpdatePOItemQuantity}
         onAddCustomItem={handleAddCustomItemToNewPO}
         defaultVendorName={newPOVendorName}
+      />
+
+      {/* PO Invoice Photo Management / Upload Modal */}
+      <PurchaseOrderPhotoModal
+        po={photoModalPO}
+        isOpen={!!photoModalPO}
+        onClose={() => setPhotoModalPO(null)}
+        onSaveImages={async (poId, imageUrls) => {
+          await updatePurchaseOrder(poId, { invoice_image_url: imageUrls });
+        }}
+        uploadInvoiceImage={uploadInvoiceImage}
+        vendorName={photoModalPO ? (photoModalPO.vendor_name || vendorMap.get(photoModalPO.vendor_id || '') || '') : ''}
+        showToast={showToast}
       />
 
       {/* Image Preview Large Modal */}

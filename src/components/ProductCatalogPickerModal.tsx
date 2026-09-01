@@ -1,8 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { Product, Vendor } from '../lib/db';
+import { useStore, getOnOrderStockQty } from '../store/useStore';
 import { 
   Search, X, Plus, Minus, Check, Package, 
-  Layers, Building2, DollarSign, Filter, Sparkles, AlertCircle 
+  Layers, Building2, DollarSign, Filter, Sparkles, AlertCircle, Truck 
 } from 'lucide-react';
 
 interface ProductCatalogPickerModalProps {
@@ -37,6 +38,7 @@ export default function ProductCatalogPickerModal({
   onAddCustomItem,
   defaultVendorName
 }: ProductCatalogPickerModalProps) {
+  const { purchaseOrders } = useStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedVendorFilter, setSelectedVendorFilter] = useState<string>(defaultVendorName || 'ALL');
@@ -249,6 +251,7 @@ export default function ProductCatalogPickerModal({
               {filteredProducts.map(p => {
                 const currentQty = itemQtyMap.get(p.product_id) || 0;
                 const inStock = stockMap.get(p.product_id) || 0;
+                const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification);
                 const vName = vendorMap.get(p.vendor_id) || (p as any).vendor_name || '';
 
                 return (
@@ -294,12 +297,22 @@ export default function ProductCatalogPickerModal({
                       </div>
                     </div>
 
-                    {/* Bottom Row: Stock, Cost Price & Action Controls */}
-                    <div className="flex items-center justify-between pt-2 border-t border-white/5 text-xs">
-                      <div className="flex items-center gap-3">
+                    {/* Bottom Row: Stock, On-Order, Cost Price & Action Controls */}
+                    <div className="flex items-center justify-between pt-2 border-t border-white/5 text-xs flex-wrap gap-2">
+                      <div className="flex items-center gap-2.5 flex-wrap">
                         <span className="text-[11px] text-slate-400">
                           現存: <strong className="text-sky-300 font-mono">{inStock}</strong>
                         </span>
+                        {onOrderQty > 0 ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded font-mono font-bold">
+                            <Truck className="w-3 h-3 text-amber-400" />
+                            <span>在途: {onOrderQty}</span>
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-slate-500">
+                            在途: 0
+                          </span>
+                        )}
                         <span className="text-[11px] text-slate-400">
                           進價: <strong className="text-amber-300 font-mono">${p.cost_price || 0}</strong>
                         </span>

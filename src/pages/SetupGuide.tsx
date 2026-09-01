@@ -636,28 +636,8 @@ export default function SetupGuide() {
       trRow.push(data[kName] !== undefined ? data[kName] : '');
     }
 
-    var txIdIdx = transHeaders.indexOf('transaction_id');
-    var prodIdx = transHeaders.indexOf('product_id');
-    var specIdx = transHeaders.indexOf('specification');
-    var existingTxRow = -1;
-    if (txIdIdx !== -1 && transSheet.getLastRow() > 1) {
-      var tVals = transSheet.getDataRange().getValues();
-      for (var tr = 1; tr < tVals.length; tr++) {
-        var txIdMatch = (tVals[tr][txIdIdx] && String(tVals[tr][txIdIdx]).trim() === String(data.transaction_id).trim());
-        var prodMatch = (prodIdx === -1) || (String(tVals[tr][prodIdx] || '').trim() === String(data.product_id || '').trim());
-        var specMatch = (specIdx === -1) || (String(tVals[tr][specIdx] || '').trim() === String(data.specification || '').trim());
-        
-        if (txIdMatch && prodMatch && specMatch) {
-          existingTxRow = tr + 1;
-          break;
-        }
-      }
-    }
-    if (existingTxRow !== -1) {
-      transSheet.getRange(existingTxRow, 1, 1, trRow.length).setValues([trRow]);
-    } else {
-      transSheet.appendRow(trRow);
-    }
+    // Always append every stock-in event as an independent transaction ledger record
+    transSheet.appendRow(trRow);
     
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
@@ -719,27 +699,8 @@ export default function SetupGuide() {
       trRow.push(data[kName] !== undefined ? data[kName] : '');
     }
 
-    var txIdIdx = transHeaders.indexOf('transaction_id');
-    var existingTxRow = -1;
-    if (txIdIdx !== -1 && transSheet.getLastRow() > 1) {
-      var tVals = transSheet.getDataRange().getValues();
-      var prodIdx = transHeaders.indexOf('product_id');
-      var specIdx = transHeaders.indexOf('specification');
-      for (var tr = 1; tr < tVals.length; tr++) {
-        var txIdMatch = tVals[tr][txIdIdx] && String(tVals[tr][txIdIdx]).trim() === String(data.transaction_id).trim();
-        var prodMatch = (prodIdx === -1) || (String(tVals[tr][prodIdx] || '').trim() === String(data.product_id || '').trim());
-        var specMatch = (specIdx === -1) || (String(tVals[tr][specIdx] || '').trim() === String(data.specification || '').trim());
-        if (txIdMatch && prodMatch && specMatch) {
-          existingTxRow = tr + 1;
-          break;
-        }
-      }
-    }
-    if (existingTxRow !== -1) {
-      transSheet.getRange(existingTxRow, 1, 1, trRow.length).setValues([trRow]);
-    } else {
-      transSheet.appendRow(trRow);
-    }
+    // Always append every stock-out event as an independent transaction ledger record
+    transSheet.appendRow(trRow);
     
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
@@ -799,22 +760,8 @@ export default function SetupGuide() {
       trRow.push(data[kName] !== undefined ? data[kName] : '');
     }
 
-    var txIdIdx = transHeaders.indexOf('transaction_id');
-    var existingTxRow = -1;
-    if (txIdIdx !== -1 && transSheet.getLastRow() > 1) {
-      var tVals = transSheet.getDataRange().getValues();
-      for (var tr = 1; tr < tVals.length; tr++) {
-        if (tVals[tr][txIdIdx] && String(tVals[tr][txIdIdx]).trim() === String(data.transaction_id).trim()) {
-          existingTxRow = tr + 1;
-          break;
-        }
-      }
-    }
-    if (existingTxRow !== -1) {
-      transSheet.getRange(existingTxRow, 1, 1, trRow.length).setValues([trRow]);
-    } else {
-      transSheet.appendRow(trRow);
-    }
+    // Always append inventory adjustments as an independent ledger record
+    transSheet.appendRow(trRow);
 
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { useStore } from '../store/useStore';
+import { useStore, getOnOrderStockQty } from '../store/useStore';
 import { 
   Search, 
   ArrowUpDown, 
@@ -13,12 +13,13 @@ import {
   Filter, 
   RefreshCw,
   PauseCircle,
-  PlayCircle
+  PlayCircle,
+  Truck
 } from 'lucide-react';
 import { subDays } from 'date-fns';
 
 export default function ReplenishmentOverview() {
-  const { products, stock, transactions, vendors, toggleDiscontinued, showToast } = useStore();
+  const { products, stock, transactions, vendors, purchaseOrders, toggleDiscontinued, showToast } = useStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterVendor, setFilterVendor] = useState('');
   const [hideDiscontinued, setHideDiscontinued] = useState(false);
@@ -145,9 +146,12 @@ export default function ReplenishmentOverview() {
         urgencyLevel = 'warning';
       }
 
+      const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification);
+
       return {
         product: p,
         currentStock,
+        onOrderQty,
         costPrice: Number(p.cost_price) || 0,
         sold30d: stat.sold30d,
         totalSold: stat.totalSold,
@@ -163,7 +167,7 @@ export default function ReplenishmentOverview() {
 
     // Sort descending by rankScore
     return items.sort((a, b) => b.rankScore - a.rankScore);
-  }, [products, stockMap, salesStats]);
+  }, [products, stockMap, salesStats, purchaseOrders]);
 
   // Filter the ranked items
   const filteredItems = useMemo(() => {
@@ -185,7 +189,7 @@ export default function ReplenishmentOverview() {
       if (filterVendor && p.vendor_id !== filterVendor) return false;
 
       // Discontinued Filter
-      if (hideDiscontinued && item.isDiscontinued) return false;
+      if (hideDiscontinued && (item as any).isDiscontinued) return false;
 
       // Only items that need replenishment
       if (onlyNeedReplenish && !item.isOutOfStock && !item.isLowStock && item.sold30d === 0) return false;
@@ -202,7 +206,7 @@ export default function ReplenishmentOverview() {
     }
 
     const lines = [
-      ['建議排名', '商品名稱', '規格', '目前庫存', '進價', '供應商', '30天銷量', '備註'].join('\t')
+      ['建議排名', '商品名稱', '規格', '目前庫存', '在途採購量', '進價', '供應商', '30天銷量', '備註'].join('\t')
     ];
 
     filteredItems.forEach((item, idx) => {
@@ -219,6 +223,7 @@ export default function ReplenishmentOverview() {
         p.name,
         p.specification || '無',
         `${item.currentStock} ${p.unit || ''}`,
+        `${item.onOrderQty || 0} ${p.unit || ''}`,
         `$${item.costPrice}`,
         vendorName,
         `${item.sold30d}`,
@@ -333,7 +338,13 @@ export default function ReplenishmentOverview() {
                     <th className="py-3.5 px-4 w-20 text-center">建議排名</th>
                     <th className="py-3.5 px-4">商品名稱</th>
                     <th className="py-3.5 px-4">規格</th>
-                    <th className="py-3.5 px-4 text-center">目前數量</th>
+                    <th className="py-3.5 px-4 text-center">目前庫存</th>
+                    <th className="py-3.5 px-4 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        <Truck className="w-3.5 h-3.5 text-amber-400" />
+                        <span>在途採購量</span>
+                      </div>
+                    </th>
                     <th className="py-3.5 px-4 text-right">進價 (成本)</th>
                     <th className="py-3.5 px-4 text-center">狀態</th>
                     <th className="py-3.5 px-4 text-center">近30天銷量 / 總銷量</th>
@@ -413,6 +424,18 @@ export default function ReplenishmentOverview() {
                           }`}>
                             {item.currentStock} {p.unit || '個'}
                           </span>
+                        </td>
+
+                        {/* 在途採購量 */}
+                        <td className="py-3 px-4 text-center">
+                          {(item.onOrderQty || 0) > 0 ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full font-mono text-xs font-bold shadow-sm">
+                              <Truck className="w-3 h-3 text-amber-400 shrink-0" />
+                              <span>{item.onOrderQty} {p.unit || '個'}</span>
+                            </span>
+                          ) : (
+                            <span className="text-slate-600 font-mono text-xs">0</span>
+                          )}
                         </td>
 
                         {/* 進價 */}

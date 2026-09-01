@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useStore } from '../store/useStore';
+import { useStore, getOnOrderStockQty } from '../store/useStore';
 import { 
   Search, 
   Copy, 
@@ -18,7 +18,8 @@ import {
   ArrowUpDown,
   ExternalLink,
   Pencil,
-  X
+  X,
+  Truck
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -31,6 +32,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
     products, 
     stock, 
     vendors, 
+    purchaseOrders,
     toggleOutOfStock, 
     showToast 
   } = useStore();
@@ -102,6 +104,17 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
         ? Math.max(minStock * 2 - currentStock, minStock > 0 ? minStock : 10)
         : 0;
 
+      // On-order stock (from pending/partial purchase orders)
+      const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification);
+      const activePOs = purchaseOrders.filter(po => 
+        (po.status === 'pending' || po.status === 'partial') &&
+        (po.items || []).some(it => {
+          const matchPid = it.product_id === p.product_id || (!it.product_id && it.name?.trim() === p.name?.trim());
+          const remaining = Math.max(0, Number(it.ordered_quantity || 0) - Number(it.received_quantity || 0));
+          return matchPid && remaining > 0;
+        })
+      );
+
       const costPrice = Number(p.cost_price) || 0;
       const totalCostValue = costPrice * currentStock;
       const vendorName = p.vendor_id ? (vendorMap.get(p.vendor_id) || p.vendor_id) : '未指定廠商';
@@ -125,10 +138,12 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
         is_out: isOut,
         is_low: isLow,
         suggested_order_qty: suggestedOrderQty,
+        on_order_qty: onOrderQty,
+        active_pos_count: activePOs.length,
         total_cost_value: totalCostValue
       };
     });
-  }, [products, stockMap, vendorMap]);
+  }, [products, stockMap, vendorMap, purchaseOrders]);
 
   // Filtered items
   const filteredItems = useMemo(() => {
@@ -203,7 +218,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
       showToast('⚠️ 目前沒有符合條件的商品');
       return;
     }
-    const headers = ['商品編號', '商品名稱', '品牌', '規格', '供應商', '現有庫存', '單位', '安全水位', '進價成本', '建議訂購量', '狀態'];
+    const headers = ['商品編號', '商品名稱', '品牌', '規格', '供應商', '現有庫存', '在途採購量', '單位', '安全水位', '進價成本', '建議訂購量', '狀態'];
     const rows = filteredItems.map(i => [
       i.product_id,
       i.name,
@@ -211,6 +226,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
       i.specification,
       i.vendor_name,
       i.current_stock,
+      i.on_order_qty,
       i.unit,
       i.min_stock,
       i.cost_price,
@@ -245,8 +261,9 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
     targetList.forEach((item, idx) => {
       const specStr = item.specification ? ` (${item.specification})` : '';
       const orderQty = item.suggested_order_qty > 0 ? item.suggested_order_qty : (item.min_stock > 0 ? item.min_stock : 10);
+      const onOrderNote = item.on_order_qty > 0 ? ` [在途採購中: ${item.on_order_qty} ${item.unit}]` : '';
       text += `${idx + 1}. ${item.name}${specStr}\n`;
-      text += `   目前庫存: ${item.current_stock} ${item.unit} ➔ 欲訂購: ${orderQty} ${item.unit}`;
+      text += `   目前庫存: ${item.current_stock} ${item.unit}${onOrderNote} ➔ 欲訂購: ${orderQty} ${item.unit}`;
       if (item.cost_price > 0) {
         text += ` (進價: $${item.cost_price})`;
       }
@@ -270,7 +287,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
       return;
     }
 
-    const headers = ['商品編號', '商品名稱', '品牌', '規格', '條碼', '供應商', '現有庫存', '單位', '安全警示庫存', '進價成本', '庫存總成本', '建議訂購量', '是否缺貨'];
+    const headers = ['商品編號', '商品名稱', '品牌', '規格', '條碼', '供應商', '現有庫存', '在途採購量(未到貨)', '單位', '安全警示庫存', '進價成本', '庫存總成本', '建議訂購量', '是否缺貨'];
     const rows = filteredItems.map(i => [
       `"${i.product_id}"`,
       `"${i.name.replace(/"/g, '""')}"`,
@@ -279,6 +296,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
       `"${i.barcode}"`,
       `"${i.vendor_name.replace(/"/g, '""')}"`,
       i.current_stock,
+      i.on_order_qty,
       `"${i.unit}"`,
       i.min_stock,
       i.cost_price,
@@ -536,7 +554,13 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                   <th className="p-3 text-right min-w-[120px]">現有總庫存</th>
                   <th className="p-3 text-right min-w-[90px]">安全水位</th>
                   <th className="p-3 text-right min-w-[100px]">進價成本</th>
-                  <th className="p-3 text-center min-w-[110px]">建議叫貨量</th>
+                  <th className="p-3 text-center min-w-[120px]">建議叫貨量</th>
+                  <th className="p-3 text-center min-w-[120px]">
+                    <div className="flex items-center justify-center gap-1">
+                      <Truck className="w-3.5 h-3.5 text-amber-400" />
+                      <span>在途採購量</span>
+                    </div>
+                  </th>
                   <th className="p-3 text-center min-w-[120px]">狀態標記</th>
                   <th className="p-3 text-center min-w-[110px]">操作</th>
                 </tr>
@@ -657,6 +681,27 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                         ) : (
                           <span className="text-[11px] text-slate-500 font-mono">
                             庫存充足
+                          </span>
+                        )}
+                      </td>
+
+                      {/* On-Order Quantity (Purchase Orders in progress) */}
+                      <td className="p-3 text-center">
+                        {item.on_order_qty > 0 ? (
+                          <div className="inline-flex flex-col items-center gap-0.5">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full font-mono text-xs font-bold shadow-sm">
+                              <Truck className="w-3 h-3 text-amber-400 shrink-0" />
+                              <span>{item.on_order_qty} {item.unit}</span>
+                            </span>
+                            {item.active_pos_count > 0 && (
+                              <span className="text-[10px] text-slate-400 font-mono">
+                                ({item.active_pos_count} 筆採購單)
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-600 font-mono">
+                            0
                           </span>
                         )}
                       </td>
