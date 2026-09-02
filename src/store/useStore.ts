@@ -449,6 +449,98 @@ const normalizeAndFillOnlineOrders = (rawItems: any[], _products?: Product[]): O
   return result;
 };
 
+export const mergeAndProtectPurchaseOrders = (remotePOs: any[], currentLocalPOs: PurchaseOrder[]): PurchaseOrder[] => {
+  const localPOMap = new Map<string, PurchaseOrder>();
+  (currentLocalPOs || []).forEach(p => {
+    if (p && p.po_id) {
+      localPOMap.set(p.po_id, p);
+    }
+  });
+
+  const processedList: PurchaseOrder[] = (remotePOs || []).map((remote: any) => {
+    const poId = String(remote.po_id || '').trim();
+    const local = localPOMap.get(poId);
+
+    // Extract invoice_number from various possible fields in Sheets
+    let invoiceNumber = String(
+      remote.invoice_number ||
+      remote['發票號碼'] ||
+      remote['單據號'] ||
+      remote['發票號'] ||
+      remote['單號'] ||
+      remote['發票號/單據號'] ||
+      ''
+    ).trim();
+
+    // Extract from note fallback if empty
+    if (!invoiceNumber && remote.note) {
+      const match = String(remote.note).match(/\[(?:單據|發票|單據號|發票號)[:：]\s*([^\]]+)\]/);
+      if (match && match[1]) {
+        invoiceNumber = match[1].trim();
+      }
+    }
+
+    // Protection: If remote has no invoice_number, but local has one, preserve local!
+    if (!invoiceNumber && local && local.invoice_number && local.invoice_number.trim()) {
+      invoiceNumber = local.invoice_number.trim();
+    }
+
+    // Protection: If remote has no invoice_image_url, but local has one, preserve local!
+    let invoiceImageUrl = remote.invoice_image_url || '';
+    if (!invoiceImageUrl && local && local.invoice_image_url) {
+      invoiceImageUrl = local.invoice_image_url;
+    }
+
+    // Build normalized note with invoice number tag
+    let finalNote = remote.note || (local ? local.note : '') || '';
+    if (invoiceNumber) {
+      if (!finalNote.includes(`[單據: ${invoiceNumber}]`) && !finalNote.includes(`[發票: ${invoiceNumber}]`)) {
+        const cleanNote = finalNote.replace(/\[(?:單據|發票|單據號|發票號)[:：]\s*[^\]]+\]/g, '').trim();
+        finalNote = cleanNote ? `[單據: ${invoiceNumber}] ${cleanNote}` : `[單據: ${invoiceNumber}]`;
+      }
+    }
+
+    // Normalize items
+    const rawItems = Array.isArray(remote.items) ? remote.items : [];
+    const items = rawItems.map((it: any) => ({
+      product_id: String(it.product_id || '').trim(),
+      product_name: String(it.product_name || it.name || '').trim(),
+      name: String(it.name || it.product_name || '').trim(),
+      specification: String(it.specification || '').trim(),
+      ordered_quantity: Number(it.ordered_quantity) || 0,
+      received_quantity: Number(it.received_quantity) || 0,
+      cost_price: Number(it.cost_price) || 0,
+      note: String(it.note || '').trim()
+    }));
+
+    return {
+      po_id: poId,
+      vendor_id: String(remote.vendor_id || (local ? local.vendor_id : '') || '').trim(),
+      vendor_name: String(remote.vendor_name || (local ? local.vendor_name : '') || '').trim(),
+      status: (remote.status || (local ? local.status : 'pending')) as PurchaseOrder['status'],
+      order_date: String(remote.order_date || (local ? local.order_date : '') || '').trim(),
+      expected_date: String(remote.expected_date || (local ? local.expected_date : '') || '').trim(),
+      note: finalNote,
+      operator: String(remote.operator || (local ? local.operator : '') || '').trim(),
+      invoice_number: invoiceNumber,
+      invoice_image_url: invoiceImageUrl,
+      items: items.length > 0 ? items : (local ? local.items : []),
+      created_at: remote.created_at || (local ? local.created_at : undefined),
+      updated_at: remote.updated_at || (local ? local.updated_at : undefined)
+    };
+  });
+
+  // Also preserve any local POs that might not yet be in remote (e.g. offline created)
+  const remotePoIds = new Set(processedList.map(p => p.po_id));
+  (currentLocalPOs || []).forEach(localPO => {
+    if (localPO && localPO.po_id && !remotePoIds.has(localPO.po_id)) {
+      processedList.push(localPO);
+    }
+  });
+
+  return processedList;
+};
+
 interface AppState {
   products: Product[];
   stock: Stock[];
@@ -508,6 +600,7 @@ interface AppState {
   reformatDatabase: () => Promise<void>;
   overwriteCloudStock: () => Promise<boolean>;
   overwriteCloudTransactions: () => Promise<boolean>;
+  overwriteCloudPurchaseOrders: () => Promise<boolean>;
   editTransaction: (transactionId: string, updatedFields: Partial<Transaction>) => Promise<void>;
   deleteTransaction: (transactionId: string) => Promise<void>;
   deleteTransactionGroup: (groupIdOrIds: string | string[]) => Promise<void>;
@@ -681,47 +774,66 @@ export const useStore = create<AppState>((set, get) => ({
         expiryThreshold: threshold
       });
 
-      // Load products and stock from cache
+      // Load products and stock from cache in fast concurrent batches
       const pKeys = await dbProducts.keys();
       const pList: Product[] = [];
-      for (const k of pKeys) {
-        const item = await dbProducts.getItem<Product>(k);
-        if (item) pList.push(item);
+      const batchP = 150;
+      for (let i = 0; i < pKeys.length; i += batchP) {
+        const chunk = pKeys.slice(i, i + batchP);
+        const items = await Promise.all(chunk.map(k => dbProducts.getItem<Product>(k)));
+        for (const item of items) {
+          if (item) pList.push(item);
+        }
       }
 
       const sKeys = await dbStock.keys();
       const sList: Stock[] = [];
-      for (const k of sKeys) {
-        const item = await dbStock.getItem<Stock>(k);
-        if (item) sList.push(item);
+      for (let i = 0; i < sKeys.length; i += batchP) {
+        const chunk = sKeys.slice(i, i + batchP);
+        const items = await Promise.all(chunk.map(k => dbStock.getItem<Stock>(k)));
+        for (const item of items) {
+          if (item) sList.push(item);
+        }
       }
 
       const vKeys = await dbVendors.keys();
       const vList: Vendor[] = [];
-      for (const k of vKeys) {
-        const item = await dbVendors.getItem<Vendor>(k);
-        if (item) vList.push(item);
+      for (let i = 0; i < vKeys.length; i += batchP) {
+        const chunk = vKeys.slice(i, i + batchP);
+        const items = await Promise.all(chunk.map(k => dbVendors.getItem<Vendor>(k)));
+        for (const item of items) {
+          if (item) vList.push(item);
+        }
       }
 
       const tKeys = await dbTransactions.keys();
       const tList: Transaction[] = [];
-      for (const k of tKeys) {
-        const item = await dbTransactions.getItem<Transaction>(k);
-        if (item) tList.push(item);
+      for (let i = 0; i < tKeys.length; i += batchP) {
+        const chunk = tKeys.slice(i, i + batchP);
+        const items = await Promise.all(chunk.map(k => dbTransactions.getItem<Transaction>(k)));
+        for (const item of items) {
+          if (item) tList.push(item);
+        }
       }
 
       const oKeys = await dbOnlineOrders.keys();
       const oList: OnlineOrder[] = [];
-      for (const k of oKeys) {
-        const item = await dbOnlineOrders.getItem<OnlineOrder>(k);
-        if (item) oList.push(item);
+      for (let i = 0; i < oKeys.length; i += batchP) {
+        const chunk = oKeys.slice(i, i + batchP);
+        const items = await Promise.all(chunk.map(k => dbOnlineOrders.getItem<OnlineOrder>(k)));
+        for (const item of items) {
+          if (item) oList.push(item);
+        }
       }
 
       const poKeys = await dbPurchaseOrders.keys();
       const poList: PurchaseOrder[] = [];
-      for (const k of poKeys) {
-        const item = await dbPurchaseOrders.getItem<PurchaseOrder>(k);
-        if (item) poList.push(item);
+      for (let i = 0; i < poKeys.length; i += batchP) {
+        const chunk = poKeys.slice(i, i + batchP);
+        const items = await Promise.all(chunk.map(k => dbPurchaseOrders.getItem<PurchaseOrder>(k)));
+        for (const item of items) {
+          if (item) poList.push(item);
+        }
       }
 
       set({ 
@@ -1315,8 +1427,10 @@ export const useStore = create<AppState>((set, get) => ({
           });
         }
         await dbTransactions.clear();
-        for (const t of validT) {
-          await dbTransactions.setItem(t.id, t);
+        const batchT = 150;
+        for (let i = 0; i < validT.length; i += batchT) {
+          const chunk = validT.slice(i, i + batchT);
+          await Promise.all(chunk.map(t => dbTransactions.setItem(t.id, t)));
         }
         set({ transactions: validT.sort((a: any, b: any) => getTxTimestamp(b.date) - getTxTimestamp(a.date)) });
       }
@@ -1346,13 +1460,15 @@ export const useStore = create<AppState>((set, get) => ({
         if (rPO.ok) {
           const dPO = await rPO.json();
           if (Array.isArray(dPO)) {
+            const currentPOs = get().purchaseOrders;
+            const mergedPOs = mergeAndProtectPurchaseOrders(dPO, currentPOs);
             await dbPurchaseOrders.clear();
-            for (const po of dPO) {
+            for (const po of mergedPOs) {
               if (po && po.po_id) {
                 await dbPurchaseOrders.setItem(po.po_id, po);
               }
             }
-            set({ purchaseOrders: dPO });
+            set({ purchaseOrders: mergedPOs });
           }
         }
       } catch (err) {
@@ -2033,7 +2149,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   fetchPurchaseOrders: async () => {
-    const { gasApiUrl, showToast } = get();
+    const { gasApiUrl, showToast, purchaseOrders } = get();
     if (!gasApiUrl || !gasApiUrl.trim() || !gasApiUrl.trim().startsWith('http')) {
       showToast("ℹ️ 尚未設定 Google Apps Script 網址，目前使用本機離線資料");
       return;
@@ -2045,14 +2161,15 @@ export const useStore = create<AppState>((set, get) => ({
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
+          const mergedPOs = mergeAndProtectPurchaseOrders(data, purchaseOrders);
           await dbPurchaseOrders.clear();
-          for (const po of data) {
+          for (const po of mergedPOs) {
             if (po && po.po_id) {
               await dbPurchaseOrders.setItem(po.po_id, po);
             }
           }
-          set({ purchaseOrders: data });
-          showToast(`✨ 成功同步 ${data.length} 筆採購訂貨單！`);
+          set({ purchaseOrders: mergedPOs });
+          showToast(`✨ 成功同步 ${mergedPOs.length} 筆採購訂貨單！`);
         }
       } else {
         throw new Error(`雲端回應狀態碼: ${res.status}`);
@@ -2067,9 +2184,18 @@ export const useStore = create<AppState>((set, get) => ({
 
   addPurchaseOrder: async (poData) => {
     const now = new Date().toISOString();
+    const invNum = (poData.invoice_number || '').trim();
+    let note = poData.note || '';
+    if (invNum && !note.includes(`[單據: ${invNum}]`) && !note.includes(`[發票: ${invNum}]`)) {
+      const cleanNote = note.replace(/\[(?:單據|發票|單據號|發票號)[:：]\s*[^\]]+\]/g, '').trim();
+      note = cleanNote ? `[單據: ${invNum}] ${cleanNote}` : `[單據: ${invNum}]`;
+    }
+
     const po: PurchaseOrder = {
       ...poData,
       po_id: poData.po_id || `PO_${format(new Date(), 'yyyyMMdd')}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+      invoice_number: invNum,
+      note,
       created_at: now,
       updated_at: now
     };
@@ -2084,9 +2210,18 @@ export const useStore = create<AppState>((set, get) => ({
     const target = currentPOs.find(p => p.po_id === poId);
     if (!target) return;
 
+    const invNum = updated.invoice_number !== undefined ? (updated.invoice_number || '').trim() : (target.invoice_number || '').trim();
+    let note = updated.note !== undefined ? updated.note : (target.note || '');
+    if (invNum && !note.includes(`[單據: ${invNum}]`) && !note.includes(`[發票: ${invNum}]`)) {
+      const cleanNote = note.replace(/\[(?:單據|發票|單據號|發票號)[:：]\s*[^\]]+\]/g, '').trim();
+      note = cleanNote ? `[單據: ${invNum}] ${cleanNote}` : `[單據: ${invNum}]`;
+    }
+
     const merged: PurchaseOrder = {
       ...target,
       ...updated,
+      invoice_number: invNum,
+      note,
       updated_at: new Date().toISOString()
     };
 
@@ -2095,6 +2230,77 @@ export const useStore = create<AppState>((set, get) => ({
       purchaseOrders: state.purchaseOrders.map(p => p.po_id === poId ? merged : p)
     }));
     await get().enqueueAction('editPurchaseOrder', merged);
+
+    // If invoice_number was provided or modified, retroactively sync to linked transactions (Option A)
+    if (updated.invoice_number !== undefined && updated.invoice_number !== target.invoice_number) {
+      const currentTx = get().transactions;
+      let txUpdatedCount = 0;
+
+      const newTxList = currentTx.map(t => {
+        const isLinkedToPO = 
+          t.po_id === poId ||
+          (t.transaction_id && t.transaction_id === poId) ||
+          (t.transaction_id && t.transaction_id.startsWith(poId)) ||
+          (t.batch_id && t.batch_id === poId) ||
+          (t.note && (t.note.includes(`[採購單: ${poId}]`) || t.note.includes(`採購單號: ${poId}`) || t.note.includes(poId)));
+
+        if (!isLinkedToPO) return t;
+
+        // Clean existing invoice note tags if any
+        let cleanNote = (t.note || '').replace(/\[(?:單據|發票|單據號|發票號)[:：]\s*[^\]]+\]/g, '').replace(/單據號[:：]\s*[^\s/]+/g, '').trim();
+        if (cleanNote.startsWith('/')) cleanNote = cleanNote.replace(/^\/\s*/, '').trim();
+
+        let updatedNote = cleanNote;
+        if (invNum) {
+          updatedNote = cleanNote ? `[單據: ${invNum}] ${cleanNote}` : `[單據: ${invNum}]`;
+        }
+
+        const modifiedTx: Transaction = {
+          ...t,
+          po_id: poId,
+          ...(invNum ? { invoice_number: invNum } : {}),
+          note: updatedNote
+        };
+
+        // Persist to indexedDB
+        dbTransactions.setItem(modifiedTx.id || modifiedTx.transaction_id, modifiedTx);
+        txUpdatedCount++;
+        return modifiedTx;
+      });
+
+      if (txUpdatedCount > 0) {
+        set({ transactions: newTxList });
+        if (get().gasApiUrl) {
+          get().overwriteCloudTransactions();
+        }
+      }
+    }
+  },
+
+  overwriteCloudPurchaseOrders: async () => {
+    const { gasApiUrl, purchaseOrders } = get();
+    if (!gasApiUrl) return false;
+    set({ isLoading: true, error: null });
+    try {
+      const res = await fetch(`${gasApiUrl}?action=overwritePurchaseOrders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(purchaseOrders)
+      });
+      if (res.ok) {
+        const d = await res.json();
+        if (d.success) {
+          get().showToast(`✅ 採購訂單工作表已同步更新！共覆載了 ${purchaseOrders.length} 筆採購單。`);
+          return true;
+        }
+      }
+      throw new Error('伺服器回應異常，請確認 Web App 已更新為最新代碼！');
+    } catch (e: any) {
+      set({ error: `強行修復採購單表失敗: ${e.message}` });
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
   },
 
   deletePurchaseOrder: async (poId) => {
@@ -2216,7 +2422,8 @@ export const useStore = create<AppState>((set, get) => ({
         await updatePurchaseOrder(po.po_id, {
           status: newStatus,
           items: updatedItems,
-          invoice_image_url: invoice_image_url || po.invoice_image_url
+          invoice_image_url: invoice_image_url || po.invoice_image_url,
+          ...(invoice_number ? { invoice_number } : {})
         });
       }
     }

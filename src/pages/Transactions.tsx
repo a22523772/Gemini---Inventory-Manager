@@ -221,6 +221,7 @@ export default function Transactions() {
         const spec = String(t.specification || product?.specification || '').toLowerCase();
         const loc = `${t.location || ''} ${t.floor || ''} ${t.area || ''}`.toLowerCase();
         const vendor = (vendorMap.get(t.vendor_id) || t.vendor_id || '').toLowerCase();
+        const invoiceNum = String((t as any).invoice_number || '').toLowerCase();
 
         const matched = productName.includes(s) ||
           pid.includes(s) ||
@@ -230,6 +231,7 @@ export default function Transactions() {
           typeStr.includes(s) ||
           op.includes(s) ||
           note.includes(s) ||
+          invoiceNum.includes(s) ||
           txid.includes(s) ||
           batchId.includes(s) ||
           spec.includes(s) ||

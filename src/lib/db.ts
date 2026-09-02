@@ -25,6 +25,7 @@ export type PurchaseOrder = {
   po_id: string;
   vendor_id: string;
   vendor_name?: string;
+  invoice_number?: string; // 單據號碼 / 發票號
   status: 'pending' | 'partial' | 'completed' | 'cancelled';
   order_date: string;
   expected_date?: string;

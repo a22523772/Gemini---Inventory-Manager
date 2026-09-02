@@ -11,7 +11,7 @@ import {
   Layers, Package, DollarSign, Calendar, ChevronRight, ChevronDown,
   ExternalLink, ZoomIn, ZoomOut, AlertCircle, ShoppingCart, Zap, Cpu,
   CheckCheck, FileSpreadsheet, ArrowDownToLine, Boxes, PackageCheck,
-  Images, Image as ImageIcon
+  Images, Image as ImageIcon, ArrowUpDown, Filter, RotateCcw
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import SearchableProductCombobox from '../components/SearchableProductCombobox';
@@ -60,6 +60,9 @@ export default function Purchases() {
   const [activeTab, setActiveTab] = useState<'list' | 'scan' | 'create'>('list');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'pending' | 'partial' | 'completed' | 'cancelled'>('ALL');
   const [vendorFilter, setVendorFilter] = useState<string>('ALL');
+  const [invoiceFilter, setInvoiceFilter] = useState<'ALL' | 'has_invoice' | 'missing_invoice'>('ALL');
+  const [photoFilter, setPhotoFilter] = useState<'ALL' | 'has_photo' | 'no_photo'>('ALL');
+  const [sortBy, setSortBy] = useState<'order_date_desc' | 'order_date_asc' | 'expected_date_asc' | 'expected_date_desc' | 'cost_desc' | 'cost_asc'>('order_date_desc');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
   // Image preview & PO Photo Upload modals
@@ -252,17 +255,33 @@ export default function Purchases() {
     return { pendingCount, partialCount, completedCount, totalOnOrderUnits };
   }, [purchaseOrders]);
 
-  // Filtered PO list
+  // Filtered and Sorted PO list
   const filteredPOs = useMemo(() => {
-    return purchaseOrders.filter(po => {
+    const result = purchaseOrders.filter(po => {
+      // Status filter
       if (statusFilter !== 'ALL' && po.status !== statusFilter) return false;
+
+      // Vendor filter
       if (vendorFilter !== 'ALL') {
         const vMatch = po.vendor_id === vendorFilter || po.vendor_name === vendorFilter;
         if (!vMatch) return false;
       }
+
+      // Invoice / Document Number status filter
+      const hasInvoiceNum = Boolean(po.invoice_number && po.invoice_number.trim());
+      if (invoiceFilter === 'has_invoice' && !hasInvoiceNum) return false;
+      if (invoiceFilter === 'missing_invoice' && hasInvoiceNum) return false;
+
+      // Document Photo status filter
+      const hasPhoto = Boolean(po.invoice_image_url && po.invoice_image_url.trim());
+      if (photoFilter === 'has_photo' && !hasPhoto) return false;
+      if (photoFilter === 'no_photo' && hasPhoto) return false;
+
+      // Search keyword filter
       if (searchTerm.trim()) {
         const term = searchTerm.toLowerCase();
         const poIdMatch = po.po_id.toLowerCase().includes(term);
+        const invNumMatch = (po.invoice_number || '').toLowerCase().includes(term);
         const vNameMatch = (po.vendor_name || '').toLowerCase().includes(term);
         const noteMatch = (po.note || '').toLowerCase().includes(term);
         const itemMatch = (po.items || []).some(it => 
@@ -270,11 +289,42 @@ export default function Purchases() {
           (it.product_id || '').toLowerCase().includes(term) ||
           (it.specification || '').toLowerCase().includes(term)
         );
-        if (!poIdMatch && !vNameMatch && !noteMatch && !itemMatch) return false;
+        if (!poIdMatch && !invNumMatch && !vNameMatch && !noteMatch && !itemMatch) return false;
       }
       return true;
     });
-  }, [purchaseOrders, statusFilter, vendorFilter, searchTerm]);
+
+    // Helper to calculate total cost for a PO
+    const getPOCost = (po: PurchaseOrder) => {
+      return (po.items || []).reduce((sum, it) => sum + (Number(it.ordered_quantity || 0) * Number(it.cost_price || 0)), 0);
+    };
+
+    // Sort order logic
+    result.sort((a, b) => {
+      if (sortBy === 'order_date_desc') {
+        return (b.order_date || '').localeCompare(a.order_date || '');
+      } else if (sortBy === 'order_date_asc') {
+        return (a.order_date || '').localeCompare(b.order_date || '');
+      } else if (sortBy === 'expected_date_asc') {
+        // Near to far (blank/no date goes to the end)
+        if (!a.expected_date) return 1;
+        if (!b.expected_date) return -1;
+        return a.expected_date.localeCompare(b.expected_date);
+      } else if (sortBy === 'expected_date_desc') {
+        // Far to near
+        if (!a.expected_date) return 1;
+        if (!b.expected_date) return -1;
+        return b.expected_date.localeCompare(a.expected_date);
+      } else if (sortBy === 'cost_desc') {
+        return getPOCost(b) - getPOCost(a);
+      } else if (sortBy === 'cost_asc') {
+        return getPOCost(a) - getPOCost(b);
+      }
+      return 0;
+    });
+
+    return result;
+  }, [purchaseOrders, statusFilter, vendorFilter, invoiceFilter, photoFilter, sortBy, searchTerm]);
 
   // --- Handlers for Image Upload / Camera (Supports 1, 2, or multiple images) ---
   const handleSelectImageFiles = (files: FileList | File[]) => {
@@ -962,44 +1012,112 @@ export default function Purchases() {
         </div>
       </div>
 
-      {/* Metric Indicators */}
+      {/* Metric Indicators / Quick Filters */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-[#0f172a] p-4 rounded-xl border border-white/10 flex items-center justify-between">
+        <div 
+          onClick={() => {
+            setActiveTab('list');
+            setStatusFilter('ALL');
+          }}
+          className={cn(
+            "p-4 rounded-xl border flex items-center justify-between transition-all cursor-pointer select-none group",
+            statusFilter === 'ALL'
+              ? "bg-sky-500/15 border-sky-500/50 shadow-lg shadow-sky-500/10 ring-1 ring-sky-500/30"
+              : "bg-[#0f172a] border-white/10 hover:border-sky-500/30 hover:bg-sky-500/5"
+          )}
+          title="點擊切換篩選：全部採購單"
+        >
           <div>
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">採購在途總數量</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">採購在途總數量</span>
+              {statusFilter === 'ALL' && (
+                <span className="text-[10px] px-1.5 py-0.2 bg-sky-500/30 text-sky-200 rounded font-extrabold">全部</span>
+              )}
+            </div>
             <div className="text-2xl font-black text-sky-400 mt-0.5">{stats.totalOnOrderUnits} <span className="text-xs font-normal text-slate-400">件</span></div>
           </div>
-          <div className="p-2.5 bg-sky-500/10 rounded-xl text-sky-400">
+          <div className="p-2.5 bg-sky-500/10 rounded-xl text-sky-400 group-hover:scale-110 transition-transform">
             <Package className="w-5 h-5" />
           </div>
         </div>
 
-        <div className="bg-[#0f172a] p-4 rounded-xl border border-white/10 flex items-center justify-between">
+        <div 
+          onClick={() => {
+            setActiveTab('list');
+            setStatusFilter(statusFilter === 'pending' ? 'ALL' : 'pending');
+          }}
+          className={cn(
+            "p-4 rounded-xl border flex items-center justify-between transition-all cursor-pointer select-none group",
+            statusFilter === 'pending'
+              ? "bg-amber-500/15 border-amber-500/50 shadow-lg shadow-amber-500/10 ring-1 ring-amber-500/30"
+              : "bg-[#0f172a] border-white/10 hover:border-amber-500/30 hover:bg-amber-500/5"
+          )}
+          title="點擊切換篩選：待到貨訂單"
+        >
           <div>
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">待驗收到貨訂單</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">待驗收到貨訂單</span>
+              {statusFilter === 'pending' && (
+                <span className="text-[10px] px-1.5 py-0.2 bg-amber-500/30 text-amber-200 rounded font-extrabold">已選</span>
+              )}
+            </div>
             <div className="text-2xl font-black text-amber-400 mt-0.5">{stats.pendingCount} <span className="text-xs font-normal text-slate-400">單</span></div>
           </div>
-          <div className="p-2.5 bg-amber-500/10 rounded-xl text-amber-400">
+          <div className="p-2.5 bg-amber-500/10 rounded-xl text-amber-400 group-hover:scale-110 transition-transform">
             <Clock className="w-5 h-5" />
           </div>
         </div>
 
-        <div className="bg-[#0f172a] p-4 rounded-xl border border-white/10 flex items-center justify-between">
+        <div 
+          onClick={() => {
+            setActiveTab('list');
+            setStatusFilter(statusFilter === 'partial' ? 'ALL' : 'partial');
+          }}
+          className={cn(
+            "p-4 rounded-xl border flex items-center justify-between transition-all cursor-pointer select-none group",
+            statusFilter === 'partial'
+              ? "bg-indigo-500/15 border-indigo-500/50 shadow-lg shadow-indigo-500/10 ring-1 ring-indigo-500/30"
+              : "bg-[#0f172a] border-white/10 hover:border-indigo-500/30 hover:bg-indigo-500/5"
+          )}
+          title="點擊切換篩選：部分到貨訂單"
+        >
           <div>
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">部分到貨訂單</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">部分到貨訂單</span>
+              {statusFilter === 'partial' && (
+                <span className="text-[10px] px-1.5 py-0.2 bg-indigo-500/30 text-indigo-200 rounded font-extrabold">已選</span>
+              )}
+            </div>
             <div className="text-2xl font-black text-indigo-400 mt-0.5">{stats.partialCount} <span className="text-xs font-normal text-slate-400">單</span></div>
           </div>
-          <div className="p-2.5 bg-indigo-500/10 rounded-xl text-indigo-400">
+          <div className="p-2.5 bg-indigo-500/10 rounded-xl text-indigo-400 group-hover:scale-110 transition-transform">
             <AlertCircle className="w-5 h-5" />
           </div>
         </div>
 
-        <div className="bg-[#0f172a] p-4 rounded-xl border border-white/10 flex items-center justify-between">
+        <div 
+          onClick={() => {
+            setActiveTab('list');
+            setStatusFilter(statusFilter === 'completed' ? 'ALL' : 'completed');
+          }}
+          className={cn(
+            "p-4 rounded-xl border flex items-center justify-between transition-all cursor-pointer select-none group",
+            statusFilter === 'completed'
+              ? "bg-emerald-500/15 border-emerald-500/50 shadow-lg shadow-emerald-500/10 ring-1 ring-emerald-500/30"
+              : "bg-[#0f172a] border-white/10 hover:border-emerald-500/30 hover:bg-emerald-500/5"
+          )}
+          title="點擊切換篩選：已完成結案"
+        >
           <div>
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">已完成結案</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">已完成結案</span>
+              {statusFilter === 'completed' && (
+                <span className="text-[10px] px-1.5 py-0.2 bg-emerald-500/30 text-emerald-200 rounded font-extrabold">已選</span>
+              )}
+            </div>
             <div className="text-2xl font-black text-emerald-400 mt-0.5">{stats.completedCount} <span className="text-xs font-normal text-slate-400">單</span></div>
           </div>
-          <div className="p-2.5 bg-emerald-500/10 rounded-xl text-emerald-400">
+          <div className="p-2.5 bg-emerald-500/10 rounded-xl text-emerald-400 group-hover:scale-110 transition-transform">
             <CheckCircle2 className="w-5 h-5" />
           </div>
         </div>
@@ -1051,13 +1169,14 @@ export default function Purchases() {
       {activeTab === 'list' && (
         <div className="space-y-4">
           {/* Filters & Search */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-[#0f172a] p-3 rounded-xl border border-white/10">
-            <div className="flex flex-wrap items-center gap-2 flex-1">
+          <div className="flex flex-col gap-3 bg-[#0f172a] p-3 rounded-xl border border-white/10">
+            {/* Top Row: Search and Status/Vendor filters */}
+            <div className="flex flex-wrap items-center gap-2">
               <div className="relative flex-1 min-w-[200px]">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="搜尋單號、品名、廠商、備註..."
+                  placeholder="搜尋採購單號、發票單據號、品名、廠商、備註..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="w-full pl-9 pr-3 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
@@ -1067,7 +1186,7 @@ export default function Purchases() {
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as any)}
-                className="bg-[#1e293b] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                className="bg-[#1e293b] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500 font-medium"
               >
                 <option value="ALL">全部狀態 ({purchaseOrders.length})</option>
                 <option value="pending">待到貨 ({stats.pendingCount})</option>
@@ -1079,13 +1198,90 @@ export default function Purchases() {
               <select
                 value={vendorFilter}
                 onChange={(e) => setVendorFilter(e.target.value)}
-                className="bg-[#1e293b] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500 max-w-[180px] truncate"
+                className="bg-[#1e293b] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500 max-w-[180px] truncate font-medium"
               >
                 <option value="ALL">所有供應商 ({allKnownVendors.length})</option>
                 {allKnownVendors.map(v => (
                   <option key={v.vendor_id} value={v.vendor_id}>{v.vendor_name}</option>
                 ))}
               </select>
+            </div>
+
+            {/* Bottom Row: Sorting, Invoice Number Filter, Photo Filter, and Reset */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/5 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Sort Order Selector (No PO ID per request) */}
+                <div className="flex items-center gap-1.5 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/10">
+                  <ArrowUpDown className="w-3.5 h-3.5 text-sky-400" />
+                  <span className="text-[11px] text-slate-400 font-bold">排序:</span>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as any)}
+                    className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer font-medium"
+                  >
+                    <option value="order_date_desc" className="bg-slate-900 text-slate-200">下單日期：新 ➔ 舊 (預設)</option>
+                    <option value="order_date_asc" className="bg-slate-900 text-slate-200">下單日期：舊 ➔ 新</option>
+                    <option value="expected_date_asc" className="bg-slate-900 text-slate-200">預計到貨：近 ➔ 遠</option>
+                    <option value="expected_date_desc" className="bg-slate-900 text-slate-200">預計到貨：遠 ➔ 近</option>
+                    <option value="cost_desc" className="bg-slate-900 text-slate-200">採購金額：高 ➔ 低</option>
+                    <option value="cost_asc" className="bg-slate-900 text-slate-200">採購金額：低 ➔ 高</option>
+                  </select>
+                </div>
+
+                {/* Invoice / Document Number Filter */}
+                <div className="flex items-center gap-1.5 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/10">
+                  <Filter className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="text-[11px] text-slate-400 font-bold">單據/發票號:</span>
+                  <select
+                    value={invoiceFilter}
+                    onChange={(e) => setInvoiceFilter(e.target.value as any)}
+                    className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer font-medium"
+                  >
+                    <option value="ALL" className="bg-slate-900 text-slate-200">全部單據狀態</option>
+                    <option value="missing_invoice" className="bg-slate-900 text-amber-300">⚠️ 缺單據/發票號 (需補充)</option>
+                    <option value="has_invoice" className="bg-slate-900 text-sky-300">✅ 已填單據/發票號</option>
+                  </select>
+                </div>
+
+                {/* Photo Filter */}
+                <div className="flex items-center gap-1.5 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/10">
+                  <Camera className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-[11px] text-slate-400 font-bold">單據照片:</span>
+                  <select
+                    value={photoFilter}
+                    onChange={(e) => setPhotoFilter(e.target.value as any)}
+                    className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer font-medium"
+                  >
+                    <option value="ALL" className="bg-slate-900 text-slate-200">全部</option>
+                    <option value="has_photo" className="bg-slate-900 text-emerald-300">📷 有照片存檔</option>
+                    <option value="no_photo" className="bg-slate-900 text-slate-400">無照片 (待補傳)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Active Filter Count & Reset */}
+              <div className="flex items-center gap-2">
+                {(statusFilter !== 'ALL' || vendorFilter !== 'ALL' || invoiceFilter !== 'ALL' || photoFilter !== 'ALL' || searchTerm.trim() || sortBy !== 'order_date_desc') && (
+                  <button
+                    onClick={() => {
+                      setStatusFilter('ALL');
+                      setVendorFilter('ALL');
+                      setInvoiceFilter('ALL');
+                      setPhotoFilter('ALL');
+                      setSearchTerm('');
+                      setSortBy('order_date_desc');
+                    }}
+                    className="flex items-center gap-1 px-2.5 py-1 bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer text-[11px]"
+                    title="重設所有篩選與排序條件"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>重設條件</span>
+                  </button>
+                )}
+                <span className="text-slate-400 text-xs">
+                  顯示 <strong className="text-white">{filteredPOs.length}</strong> / {purchaseOrders.length} 筆
+                </span>
+              </div>
             </div>
           </div>
 
@@ -1136,6 +1332,34 @@ export default function Purchases() {
                            po.status === 'partial' ? '部分到貨 (繼續在途)' :
                            po.status === 'completed' ? '已全數到貨 / 結案' : '已取消'}
                         </span>
+
+                        {/* Invoice Number Badge / Quick Add */}
+                        {po.invoice_number && po.invoice_number.trim() ? (
+                          <span 
+                            onClick={() => {
+                              setSelectedPO(po);
+                              setIsEditingPO(true);
+                            }}
+                            className="inline-flex items-center gap-1 text-[11px] font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2.5 py-0.5 rounded-full cursor-pointer hover:bg-amber-500/25 transition-colors shadow-sm"
+                            title="發票/單據號碼（點擊可修改並自動同步更新交易紀錄）"
+                          >
+                            <FileText className="w-3 h-3 text-amber-400" />
+                            <span>發票/單據: {po.invoice_number}</span>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedPO(po);
+                              setIsEditingPO(true);
+                            }}
+                            className="inline-flex items-center gap-1 text-[11px] font-bold bg-white/5 hover:bg-amber-500/15 text-slate-400 hover:text-amber-300 border border-dashed border-white/20 hover:border-amber-500/30 px-2 py-0.5 rounded-full transition-colors cursor-pointer"
+                            title={po.status === 'completed' ? '此已結案採購單尚未填寫發票號/單據號，點擊可立即補填並同步交易紀錄' : '補充填寫發票/單據號'}
+                          >
+                            <Plus className="w-3 h-3 text-amber-400" />
+                            <span>補充發票號/單據號</span>
+                          </button>
+                        )}
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2">
@@ -1548,7 +1772,7 @@ export default function Purchases() {
                           e.stopPropagation();
                           handleRemoveImage(idx);
                         }}
-                        className="absolute top-1 right-1 p-1 bg-red-600/90 hover:bg-red-600 text-white rounded-full transition-opacity opacity-0 group-hover:opacity-100"
+                        className="absolute top-1 right-1 p-1 bg-black/80 sm:bg-red-600/90 hover:bg-red-600 text-white rounded-full transition-opacity opacity-100 sm:opacity-0 sm:group-hover:opacity-100 shadow"
                         title="移除此張圖片"
                       >
                         <X className="w-3 h-3" />

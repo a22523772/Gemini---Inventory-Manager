@@ -4,7 +4,7 @@ import { Save, Check, RefreshCw, FileCode2, AlertTriangle, X, Key, Eye, EyeOff }
 import { getGeminiAPIKey, setGeminiAPIKey as saveGeminiKey, clearGeminiAPIKey } from '../lib/geminiClient';
 
 export default function SetupGuide() {
-  const { gasApiUrl, setGasApiUrl, syncData, syncQueue, operator, setOperator, isLoading, stock, transactions } = useStore();
+  const { gasApiUrl, setGasApiUrl, syncData, syncQueue, operator, setOperator, isLoading, stock, transactions, purchaseOrders } = useStore();
   const [url, setUrl] = useState(gasApiUrl);
   const [geminiKey, setGeminiKey] = useState(getGeminiAPIKey() || '');
   const [showGeminiKey, setShowGeminiKey] = useState(false);
@@ -13,7 +13,7 @@ export default function SetupGuide() {
   const [tab, setTab] = useState<'settings' | 'docs'>('settings');
 
   const [confirmAction, setConfirmAction] = useState<{
-    type: 'stock' | 'transactions' | null;
+    type: 'stock' | 'transactions' | 'purchase_orders' | null;
     title: string;
     message: string;
     targetCount: number;
@@ -53,6 +53,11 @@ export default function SetupGuide() {
       const success = await useStore.getState().overwriteCloudTransactions();
       if (success) {
         useStore.getState().showToast("✅ 紀錄還原成功！雲端交易紀錄工作表（transactions）已完全同步補齊。");
+      }
+    } else if (type === 'purchase_orders') {
+      const success = await useStore.getState().overwriteCloudPurchaseOrders();
+      if (success) {
+        useStore.getState().showToast("✅ 採購單同步成功！雲端採購單工作表（purchase_orders）已完全同步補齊。");
       }
     }
   };
@@ -227,7 +232,7 @@ export default function SetupGuide() {
                 如果您的 <strong>stock (庫存)</strong> 或 <strong>transactions (交易紀錄)</strong> 工作表與 APP 顯示的資訊 (APP 目前庫存、紀錄最完整) 不一致，請利用下方工具，以本地快取資料覆寫雲端：
               </p>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 font-semibold text-xs text-emerald-100">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 font-semibold text-xs text-emerald-100">
                 <div className="p-3 bg-black/40 rounded-xl border border-white/5 space-y-2 flex flex-col justify-between">
                   <div>
                     <div className="flex justify-between items-center mb-1">
@@ -273,6 +278,29 @@ export default function SetupGuide() {
                     以本地快取強制還原雲端交易紀錄
                   </button>
                 </div>
+
+                <div className="p-3 bg-black/40 rounded-xl border border-white/5 space-y-2 flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <span>3. 採購單 (purchase_orders) 同步</span>
+                    </div>
+                    <p className="text-[10px] text-zinc-400 font-mono mb-2">APP 本地採購單：{purchaseOrders.length} 筆 (含單據號)</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setConfirmAction({
+                        type: 'purchase_orders',
+                        title: '確定強制同步雲端採購單嗎？',
+                        message: '確定要將雲端試算表的 purchase_orders 採購單工作表完全覆蓋並補齊所有單據號碼與品項嗎？本系統將以本地完整之採購單歷史紀錄覆寫。',
+                        targetCount: purchaseOrders.length
+                      });
+                    }}
+                    disabled={isLoading || !gasApiUrl}
+                    className="w-full flex items-center justify-center py-2 px-3 rounded-lg text-xs font-bold transition-all border border-emerald-500/40 text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/30 disabled:opacity-50 cursor-pointer"
+                  >
+                    以本地快取強制同步雲端採購單
+                  </button>
+                </div>
               </div>
               <p className="text-[10px] text-emerald-300/60 leading-relaxed md:leading-normal">
                 * 提醒：強行覆寫功能需要最新的 Apps Script 代碼。請點選上方「後端代碼與文件」，完整拷貝程式碼至 Apps Script 取代並儲存部署（部署為網頁應用程式 & 權限設定為任何人）。
@@ -297,12 +325,13 @@ export default function SetupGuide() {
 
              <section>
                 <h3 className="text-base font-bold text-[var(--color-text-main)]">1. Google Sheets 結構設定</h3>
-                <p className="text-[var(--color-text-dim)] mt-1">請建立一個新的 Google Sheet，並確保下方有這五個工作表 (區分大小寫)：</p>
+                <p className="text-[var(--color-text-dim)] mt-1">請建立一個新的 Google Sheet，並確保下方有這六個工作表 (區分大小寫，系統亦會於首次寫入時自動建立)：</p>
                 <ul className="list-disc pl-5 mt-2 space-y-1 text-white/80 font-mono text-xs">
                   <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, specification, min_stock, is_discontinued, created_at</li>
                   <li><strong>vendors</strong> (供應商): vendor_id, vendor_name, contact, phone</li>
                   <li><strong>stock</strong> (庫存表): stock_id, product_id, name, location, floor, area, quantity, expiry_date, specification, last_update</li>
                   <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, name, type, quantity, location, floor, area, specification, cost_price, vendor_id, date, note, operator</li>
+                  <li><strong>purchase_orders</strong> (採購單): po_id, vendor_id, vendor_name, product_id, name, specification, ordered_quantity, received_quantity, cost_price, status, order_date, expected_date, note, operator, invoice_number, invoice_image_url</li>
                   <li><strong>網路訂單</strong> (網路訂單): order_id (訂單編號), platform (來源平台), product_id (商品編號), product_name (商品名稱), quantity (數量), price (金額), customer_name (買家), 最晚出貨期限 (shipping_deadline), order_status (訂單狀態), created_at (下單時間), specification (規格), shipping_method (物流方式)</li>
                 </ul>
              </section>
@@ -428,7 +457,21 @@ export default function SetupGuide() {
        }
     }
 
-    return ContentService.createTextOutput(JSON.stringify({success:true, message: 'Database reformatted and transactions cost_price repaired.'})).setMimeType(ContentService.MimeType.JSON);
+    // 3. Fix purchase_orders sheet headers
+    var poSheet = ss.getSheetByName('purchase_orders');
+    if (poSheet && poSheet.getLastRow() > 0) {
+       var poHeaders = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
+       if (poHeaders.indexOf('invoice_number') === -1) {
+         poHeaders.push('invoice_number');
+         poSheet.getRange(1, poHeaders.length).setValue('invoice_number');
+       }
+       if (poHeaders.indexOf('invoice_image_url') === -1) {
+         poHeaders.push('invoice_image_url');
+         poSheet.getRange(1, poHeaders.length).setValue('invoice_image_url');
+       }
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({success:true, message: 'Database reformatted and transactions/purchase_orders repaired.'})).setMimeType(ContentService.MimeType.JSON);
   }
 
   if (action === 'editProduct') {
@@ -874,9 +917,17 @@ export default function SetupGuide() {
     var poSheet = ss.getSheetByName('purchase_orders');
     if (!poSheet) {
       poSheet = ss.insertSheet('purchase_orders');
-      poSheet.appendRow(['po_id', 'vendor_id', 'vendor_name', 'product_id', 'name', 'specification', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_image_url']);
+      poSheet.appendRow(['po_id', 'vendor_id', 'vendor_name', 'product_id', 'name', 'specification', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_number', 'invoice_image_url']);
     }
     var headers = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
+    if (headers.indexOf('invoice_number') === -1) {
+      headers.push('invoice_number');
+      poSheet.getRange(1, headers.length).setValue('invoice_number');
+    }
+    if (headers.indexOf('invoice_image_url') === -1) {
+      headers.push('invoice_image_url');
+      poSheet.getRange(1, headers.length).setValue('invoice_image_url');
+    }
     var poIdIdx = headers.indexOf('po_id');
     
     var poList = Array.isArray(data) ? data : [data];
@@ -921,6 +972,7 @@ export default function SetupGuide() {
           else if (colName === 'expected_date') val = po.expected_date || '';
           else if (colName === 'note') val = item.note || po.note || '';
           else if (colName === 'operator') val = po.operator || '';
+          else if (colName === 'invoice_number' || colName === '發票號碼' || colName === '單據號' || colName === '發票號' || colName === '單號') val = po.invoice_number || '';
           else if (colName === 'invoice_image_url') val = po.invoice_image_url || '';
           row.push(val);
         }
@@ -928,6 +980,62 @@ export default function SetupGuide() {
       }
     }
     return ContentService.createTextOutput(JSON.stringify({success: true})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'overwritePurchaseOrders') {
+    var poSheet = ss.getSheetByName('purchase_orders');
+    if (!poSheet) poSheet = ss.insertSheet('purchase_orders');
+    if (poSheet.getLastRow() > 0) {
+      poSheet.clear();
+      poSheet.clearFormats();
+    }
+    var poHeaders = ['po_id', 'vendor_id', 'vendor_name', 'product_id', 'name', 'specification', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_number', 'invoice_image_url'];
+    poSheet.appendRow(poHeaders);
+    if (data && data.length > 0) {
+      var rows = [];
+      for (var p = 0; p < data.length; p++) {
+        var po = data[p];
+        var items = po.items && po.items.length > 0 ? po.items : [{
+          product_id: po.product_id || '',
+          name: po.name || po.product_name || '',
+          specification: po.specification || '',
+          ordered_quantity: po.ordered_quantity || po.quantity || 1,
+          received_quantity: po.received_quantity || 0,
+          cost_price: po.cost_price || 0,
+          note: po.item_note || ''
+        }];
+        for (var it = 0; it < items.length; it++) {
+          var item = items[it];
+          var row = [];
+          for (var h = 0; h < poHeaders.length; h++) {
+            var colName = poHeaders[h];
+            var val = '';
+            if (colName === 'po_id') val = po.po_id;
+            else if (colName === 'vendor_id') val = po.vendor_id || '';
+            else if (colName === 'vendor_name') val = po.vendor_name || '';
+            else if (colName === 'product_id') val = item.product_id || '';
+            else if (colName === 'name') val = item.name || item.product_name || '';
+            else if (colName === 'specification') val = item.specification || '';
+            else if (colName === 'ordered_quantity') val = Number(item.ordered_quantity) || 0;
+            else if (colName === 'received_quantity') val = Number(item.received_quantity) || 0;
+            else if (colName === 'cost_price') val = Number(item.cost_price) || 0;
+            else if (colName === 'status') val = po.status || 'pending';
+            else if (colName === 'order_date') val = po.order_date || '';
+            else if (colName === 'expected_date') val = po.expected_date || '';
+            else if (colName === 'note') val = item.note || po.note || '';
+            else if (colName === 'operator') val = po.operator || '';
+            else if (colName === 'invoice_number' || colName === '發票號碼' || colName === '單據號' || colName === '發票號' || colName === '單號') val = po.invoice_number || '';
+            else if (colName === 'invoice_image_url') val = po.invoice_image_url || '';
+            row.push(val);
+          }
+          rows.push(row);
+        }
+      }
+      if (rows.length > 0) {
+        poSheet.getRange(2, 1, rows.length, poHeaders.length).setValues(rows);
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({success:true, count: data.length})).setMimeType(ContentService.MimeType.JSON);
   }
 
   if (action === 'deletePurchaseOrder') {
@@ -1077,7 +1185,6 @@ function doGet(e) {
         obj[keys[j]] = val; 
       }
       result.push(obj);
-      if(result.length > 500) break; // Limit records to 500
     }
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
   }
@@ -1123,6 +1230,12 @@ function doGet(e) {
         obj[keys[j]] = val;
       }
       var poid = obj.po_id || ('PO_ROW_' + i);
+      var invNum = obj.invoice_number || obj['發票號碼'] || obj['單據號'] || obj['發票號'] || obj['單號'] || obj['發票號/單據號'] || '';
+      if (!invNum && obj.note) {
+        var m = String(obj.note).match(/\[(?:單據|發票|單據號|發票號)[:：]\s*([^\]]+)\]/);
+        if (m && m[1]) invNum = m[1].trim();
+      }
+
       if (!poMap[poid]) {
         poMap[poid] = {
           po_id: poid,
@@ -1133,10 +1246,14 @@ function doGet(e) {
           expected_date: obj.expected_date || '',
           note: obj.note || '',
           operator: obj.operator || '',
+          invoice_number: invNum,
           invoice_image_url: obj.invoice_image_url || '',
           items: []
         };
+      } else if (!poMap[poid].invoice_number && invNum) {
+        poMap[poid].invoice_number = invNum;
       }
+
       poMap[poid].items.push({
         product_id: obj.product_id || '',
         name: obj.name || '',

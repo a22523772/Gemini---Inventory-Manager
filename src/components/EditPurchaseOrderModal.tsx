@@ -30,6 +30,7 @@ export default function EditPurchaseOrderModal({
   const [expectedDate, setExpectedDate] = useState('');
   const [status, setStatus] = useState<PurchaseOrder['status']>('pending');
   const [note, setNote] = useState('');
+  const [invoiceNumber, setInvoiceNumber] = useState('');
   const [items, setItems] = useState<PurchaseOrderItem[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -41,6 +42,7 @@ export default function EditPurchaseOrderModal({
       setExpectedDate(po.expected_date || '');
       setStatus(po.status || 'pending');
       setNote(po.note || '');
+      setInvoiceNumber(po.invoice_number || '');
       setItems((po.items || []).map(it => ({ ...it })));
     }
   }, [po]);
@@ -100,6 +102,7 @@ export default function EditPurchaseOrderModal({
         expected_date: expectedDate,
         status: status,
         note: note,
+        invoice_number: invoiceNumber.trim(),
         items: items
       });
       onClose();
@@ -241,16 +244,32 @@ export default function EditPurchaseOrderModal({
             </div>
           </div>
 
-          {/* Note */}
-          <div>
-            <label className="text-xs text-slate-400 block mb-1">採購備註</label>
-            <input
-              type="text"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="例如: 預計分兩批進貨、廠商出貨單據號..."
-              className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
-            />
+          {/* Note and Invoice/Document Number */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">採購備註</label>
+              <input
+                type="text"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="例如: 預計分兩批進貨..."
+                className="w-full bg-[#1e293b] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-bold text-sky-400">單據號碼 / 發票號</label>
+                <span className="text-[10px] text-slate-400">儲存後自動同步至關聯交易紀錄</span>
+              </div>
+              <input
+                type="text"
+                value={invoiceNumber}
+                onChange={(e) => setInvoiceNumber(e.target.value)}
+                placeholder="例如: INV-20260301-01 或 28472910"
+                className="w-full bg-[#1e293b] border border-sky-500/30 focus:border-sky-400 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+              />
+            </div>
           </div>
 
           {/* Items Section */}
