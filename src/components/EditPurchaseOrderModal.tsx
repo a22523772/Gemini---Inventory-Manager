@@ -2,8 +2,9 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { PurchaseOrder, PurchaseOrderItem, Product, Vendor } from '../lib/db';
 import { 
   X, Check, Plus, Trash2, Calendar, Building2, 
-  AlertCircle, CheckCircle2, Clock, Ban, Sparkles, Package 
+  AlertCircle, CheckCircle2, Clock, Ban, Sparkles, Package, Copy 
 } from 'lucide-react';
+import { useStore, parseSpecifications, getResolvedPoItems } from '../store/useStore';
 import SearchableProductCombobox from './SearchableProductCombobox';
 
 interface EditPurchaseOrderModalProps {
@@ -24,6 +25,7 @@ export default function EditPurchaseOrderModal({
   products,
   allKnownVendors
 }: EditPurchaseOrderModalProps) {
+  const { transactions } = useStore();
   const [vendorId, setVendorId] = useState('');
   const [vendorName, setVendorName] = useState('');
   const [orderDate, setOrderDate] = useState('');
@@ -43,9 +45,13 @@ export default function EditPurchaseOrderModal({
       setStatus(po.status || 'pending');
       setNote(po.note || '');
       setInvoiceNumber(po.invoice_number || '');
-      setItems((po.items || []).map(it => ({ ...it })));
+      const resolved = getResolvedPoItems(po, transactions || []);
+      setItems(resolved.map(it => ({
+        ...it,
+        received_quantity: it.effective_received_quantity
+      })));
     }
-  }, [po]);
+  }, [po, transactions]);
 
   if (!isOpen || !po) return null;
 
@@ -71,25 +77,55 @@ export default function EditPurchaseOrderModal({
   };
 
   const handleAddItem = (prod: Product) => {
-    setItems(prev => [
-      ...prev,
-      {
-        item_id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    const subSpecs = parseSpecifications(prod.specification);
+    if (subSpecs.length > 1) {
+      const newItems: PurchaseOrderItem[] = subSpecs.map((spec, sIdx) => ({
+        item_id: `item_${Date.now()}_${sIdx}_${Math.random().toString(36).substring(2, 6)}`,
         product_id: prod.product_id,
         product_name: prod.name,
         name: prod.name,
-        specification: prod.specification || '',
+        specification: spec,
         ordered_quantity: 1,
         received_quantity: 0,
         cost_price: prod.cost_price || 0,
         note: ''
-      }
-    ]);
+      }));
+      setItems(prev => [...prev, ...newItems]);
+    } else {
+      setItems(prev => [
+        ...prev,
+        {
+          item_id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          product_id: prod.product_id,
+          product_name: prod.name,
+          name: prod.name,
+          specification: prod.specification || '',
+          ordered_quantity: 1,
+          received_quantity: 0,
+          cost_price: prod.cost_price || 0,
+          note: ''
+        }
+      ]);
+    }
   };
 
   const handleSubmit = async () => {
     if (items.length === 0) {
       alert('採購單至少需要一項商品！');
+      return;
+    }
+
+    // Check if any product has specifications in system product catalog, but the PO item left specification empty!
+    const missingSpecItem = items.find(it => {
+      const catalogProd = products.find(p => p.product_id === it.product_id || (p.name && p.name.trim() === (it.name || it.product_name || '').trim()));
+      const catalogSpec = (catalogProd?.specification || '').trim();
+      const itemSpec = (it.specification || '').trim();
+      return catalogSpec && !itemSpec;
+    });
+
+    if (missingSpecItem) {
+      const catalogProd = products.find(p => p.product_id === missingSpecItem.product_id || (p.name && p.name.trim() === (missingSpecItem.name || missingSpecItem.product_name || '').trim()));
+      alert(`⚠️ 商品「${missingSpecItem.name || missingSpecItem.product_name}」在系統建檔中有設定規格（${catalogProd?.specification}），但目前採購品項規格欄位為空！\n\n為避免在途庫存對齊異常，請填寫規格後再儲存。`);
       return;
     }
 
@@ -318,15 +354,34 @@ export default function EditPurchaseOrderModal({
                         </span>
                       </td>
                       <td className="py-2 px-2">
-                        <input
-                          type="text"
-                          value={item.specification || ''}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setItems(prev => prev.map((it, i) => i === idx ? { ...it, specification: val } : it));
-                          }}
-                          className="w-full bg-[#1e293b] border border-white/10 rounded px-1.5 py-1 text-xs text-white"
-                        />
+                        {(() => {
+                          const catalogProd = products.find(p => p.product_id === item.product_id || (p.name && p.name.trim() === (item.name || item.product_name || '').trim()));
+                          const isSpecRequired = Boolean(catalogProd?.specification && catalogProd.specification.trim());
+                          const isMissing = isSpecRequired && !(item.specification || '').trim();
+
+                          return (
+                            <div>
+                              <input
+                                type="text"
+                                value={item.specification || ''}
+                                placeholder={isSpecRequired ? `必填！建檔規格: ${catalogProd!.specification}` : '規格 (選填)'}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setItems(prev => prev.map((it, i) => i === idx ? { ...it, specification: val } : it));
+                                }}
+                                className={`w-full bg-[#1e293b] border rounded px-1.5 py-1 text-xs text-white transition-colors ${
+                                  isMissing ? 'border-amber-500 bg-amber-500/10 focus:ring-1 focus:ring-amber-500' : 'border-white/10'
+                                }`}
+                              />
+                              {isMissing && (
+                                <p className="text-[10px] text-amber-400 font-bold mt-1 flex items-center gap-1">
+                                  <AlertCircle className="w-3 h-3 shrink-0" />
+                                  <span>此商品建檔有規格，請填寫</span>
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="py-2 px-2 text-center">
                         <input
@@ -368,13 +423,35 @@ export default function EditPurchaseOrderModal({
                         ${(item.ordered_quantity * item.cost_price).toLocaleString()}
                       </td>
                       <td className="py-2 px-2 text-center">
-                        <button
-                          type="button"
-                          onClick={() => setItems(prev => prev.filter((_, i) => i !== idx))}
-                          className="text-slate-500 hover:text-red-400 p-1"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const copy: PurchaseOrderItem = {
+                                ...item,
+                                item_id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                                specification: '',
+                                ordered_quantity: 1,
+                                received_quantity: 0
+                              };
+                              const next = [...items];
+                              next.splice(idx + 1, 0, copy);
+                              setItems(next);
+                            }}
+                            className="text-slate-400 hover:text-indigo-400 p-1 hover:bg-white/5 rounded transition-colors"
+                            title="複製此品項為另一規格"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setItems(prev => prev.filter((_, i) => i !== idx))}
+                            className="text-slate-500 hover:text-red-400 p-1 hover:bg-white/5 rounded transition-colors"
+                            title="刪除"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

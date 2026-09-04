@@ -61,6 +61,7 @@ export default function Home() {
     stock, 
     vendors,
     purchaseOrders,
+    transactions,
     syncQueue, 
     isLoading, 
     fetchRemoteData, 
@@ -548,7 +549,7 @@ export default function Home() {
 
     const result = Array.from(itemMap.values()).map(item => {
       const shortfall = Math.max(0, item.total_ordered_qty - item.current_stock_qty);
-      const onOrderQty = getOnOrderStockQty(purchaseOrders, item.product_id, item.specification);
+      const onOrderQty = getOnOrderStockQty(purchaseOrders, item.product_id, item.specification, transactions);
       return {
         ...item,
         shortfall_qty: shortfall,
@@ -557,7 +558,7 @@ export default function Home() {
     });
 
     return result;
-  }, [displayOrders, productMap, products, productTotalStockMap, vendorsMap, purchaseOrders]);
+  }, [displayOrders, productMap, products, productTotalStockMap, vendorsMap, purchaseOrders, transactions]);
 
   const filteredConsolidatedItems = useMemo(() => {
     return consolidatedOrderItems.filter(item => {

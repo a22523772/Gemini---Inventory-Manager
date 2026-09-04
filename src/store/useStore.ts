@@ -541,6 +541,177 @@ export const mergeAndProtectPurchaseOrders = (remotePOs: any[], currentLocalPOs:
   return processedList;
 };
 
+export interface ResolvedPoItem extends PurchaseOrderItem {
+  effective_received_quantity: number;
+  remaining_quantity: number;
+}
+
+export const parseSpecifications = (specStr?: string): string[] => {
+  if (!specStr || !specStr.trim()) return [];
+  const parts = specStr
+    .split(/[,，、\/|;\n]+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts : [specStr.trim()];
+};
+
+export const normalizeSpecString = (raw?: string): string => {
+  if (!raw) return '';
+  return raw
+    .replace(/[（【［〔]/g, '(')
+    .replace(/[）】］〕]/g, ')')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+};
+
+export const isSpecificationMatch = (itemSpecRaw?: string, targetSpecRaw?: string): boolean => {
+  const norm1 = normalizeSpecString(itemSpecRaw);
+  const norm2 = normalizeSpecString(targetSpecRaw);
+  if (!norm1 && !norm2) return true;
+  if (norm1 === norm2) return true;
+  if (!norm1 || !norm2) return false;
+
+  const clean1 = norm1.replace(/[\(\)]/g, ' ').replace(/\s+/g, ' ').trim();
+  const clean2 = norm2.replace(/[\(\)]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (clean1 === clean2) return true;
+
+  const parts1 = parseSpecifications(norm1).map(s => normalizeSpecString(s));
+  const parts2 = parseSpecifications(norm2).map(s => normalizeSpecString(s));
+
+  if (parts1.some(p1 => parts2.includes(p1) || norm2.includes(p1) || clean2.includes(p1.replace(/[\(\)]/g, ' ').trim()))) return true;
+  if (parts2.some(p2 => parts1.includes(p2) || norm1.includes(p2) || clean1.includes(p2.replace(/[\(\)]/g, ' ').trim()))) return true;
+
+  if (norm1.includes(norm2) || norm2.includes(norm1)) return true;
+  if (clean1.includes(clean2) || clean2.includes(clean1)) return true;
+
+  return false;
+};
+
+export const getResolvedPoItems = (
+  po: PurchaseOrder,
+  transactions: Transaction[]
+): ResolvedPoItem[] => {
+  if (!po || !po.items) return [];
+
+  // Filter stock_in transactions matching this PO
+  const relatedTxs = (transactions || []).filter(t => {
+    if (t.type !== 'stock_in') return false;
+    return (
+      t.po_id === po.po_id ||
+      (t.transaction_id && t.transaction_id === po.po_id) ||
+      (t.transaction_id && t.transaction_id.startsWith(po.po_id)) ||
+      (t.batch_id && t.batch_id === po.po_id) ||
+      (t.note && (
+        t.note.includes(`[採購單: ${po.po_id}]`) ||
+        t.note.includes(`採購單號: ${po.po_id}`) ||
+        t.note.includes(po.po_id)
+      ))
+    );
+  });
+
+  const remainingTxs = [...relatedTxs];
+  const txReceivedByIndex = new Map<number, number>();
+
+  // Pass 1: Exact product_id and exact specification match
+  po.items.forEach((item, idx) => {
+    const itemSpec = (item.specification || '').trim().toLowerCase();
+    for (let i = remainingTxs.length - 1; i >= 0; i--) {
+      const tx = remainingTxs[i];
+      const matchPid = tx.product_id === item.product_id ||
+        (Boolean(tx.product_name) && Boolean(item.name || item.product_name) && (tx.product_name || '').trim() === (item.name || item.product_name || '').trim());
+      const txSpec = (tx.specification || '').trim().toLowerCase();
+
+      if (matchPid && itemSpec === txSpec) {
+        txReceivedByIndex.set(idx, (txReceivedByIndex.get(idx) || 0) + Number(tx.quantity || 0));
+        remainingTxs.splice(i, 1);
+      }
+    }
+  });
+
+  // Pass 2: Inclusive specification match (e.g. item has "黑色、白色", tx has "白色")
+  po.items.forEach((item, idx) => {
+    for (let i = remainingTxs.length - 1; i >= 0; i--) {
+      const tx = remainingTxs[i];
+      const matchPid = tx.product_id === item.product_id ||
+        (Boolean(tx.product_name) && Boolean(item.name || item.product_name) && (tx.product_name || '').trim() === (item.name || item.product_name || '').trim());
+
+      if (matchPid && isSpecificationMatch(item.specification, tx.specification)) {
+        txReceivedByIndex.set(idx, (txReceivedByIndex.get(idx) || 0) + Number(tx.quantity || 0));
+        remainingTxs.splice(i, 1);
+      }
+    }
+  });
+
+  // Pass 3: If only one item in PO matches product_id, attribute any remaining transactions
+  po.items.forEach((item, idx) => {
+    const countWithPid = po.items.filter(it => 
+      it.product_id === item.product_id ||
+      (Boolean(it.name || it.product_name) && Boolean(item.name || item.product_name) && (it.name || it.product_name || '').trim() === (item.name || item.product_name || '').trim())
+    ).length;
+
+    if (countWithPid === 1) {
+      for (let i = remainingTxs.length - 1; i >= 0; i--) {
+        const tx = remainingTxs[i];
+        const matchPid = tx.product_id === item.product_id ||
+          (Boolean(tx.product_name) && Boolean(item.name || item.product_name) && (tx.product_name || '').trim() === (item.name || item.product_name || '').trim());
+
+        if (matchPid) {
+          txReceivedByIndex.set(idx, (txReceivedByIndex.get(idx) || 0) + Number(tx.quantity || 0));
+          remainingTxs.splice(i, 1);
+        }
+      }
+    }
+  });
+
+  return po.items.map((it, idx) => {
+    const fromTx = txReceivedByIndex.get(idx) || 0;
+    const stored = Number(it.received_quantity || 0);
+    const effective = Math.max(stored, fromTx);
+    const ordered = Number(it.ordered_quantity || 0);
+    const remaining = Math.max(0, ordered - effective);
+
+    return {
+      ...it,
+      received_quantity: effective,
+      effective_received_quantity: effective,
+      remaining_quantity: remaining
+    };
+  });
+};
+
+export const reconcilePurchaseOrdersWithTransactions = (
+  pos: PurchaseOrder[],
+  txs: Transaction[]
+): PurchaseOrder[] => {
+  if (!pos || !Array.isArray(pos)) return [];
+  return pos.map(po => {
+    const resolved = getResolvedPoItems(po, txs);
+    if (!resolved || resolved.length === 0) return po;
+
+    const totalOrdered = resolved.reduce((s, it) => s + Number(it.ordered_quantity || 0), 0);
+    const totalReceived = resolved.reduce((s, it) => s + Number(it.effective_received_quantity || 0), 0);
+
+    let status = po.status;
+    if (status !== 'completed' && status !== 'cancelled') {
+      if (totalReceived >= totalOrdered && totalOrdered > 0) {
+        status = 'completed';
+      } else if (totalReceived > 0) {
+        status = 'partial';
+      }
+    }
+
+    return {
+      ...po,
+      status,
+      items: resolved.map(r => ({
+        ...r,
+        received_quantity: r.effective_received_quantity
+      }))
+    };
+  });
+};
+
 interface AppState {
   products: Product[];
   stock: Stock[];
@@ -1337,6 +1508,7 @@ export const useStore = create<AppState>((set, get) => ({
       }
 
       // Transactions
+      let validT: any[] = [];
       const rT = await fetch(`${cleanUrl}?action=getTransactions`);
       if (rT.ok) {
         const dT = await rT.json();
@@ -1349,7 +1521,6 @@ export const useStore = create<AppState>((set, get) => ({
         });
 
         const seenTxKeys = new Set<string>();
-        const validT: any[] = [];
 
         for (let idx = 0; idx < (dT || []).length; idx++) {
           const item = dT[idx];
@@ -1462,13 +1633,15 @@ export const useStore = create<AppState>((set, get) => ({
           if (Array.isArray(dPO)) {
             const currentPOs = get().purchaseOrders;
             const mergedPOs = mergeAndProtectPurchaseOrders(dPO, currentPOs);
+            const currentTxs = (validT && validT.length > 0) ? validT : (get().transactions || []);
+            const reconciledPOs = reconcilePurchaseOrdersWithTransactions(mergedPOs, currentTxs);
             await dbPurchaseOrders.clear();
-            for (const po of mergedPOs) {
+            for (const po of reconciledPOs) {
               if (po && po.po_id) {
                 await dbPurchaseOrders.setItem(po.po_id, po);
               }
             }
-            set({ purchaseOrders: mergedPOs });
+            set({ purchaseOrders: reconciledPOs });
           }
         }
       } catch (err) {
@@ -2389,18 +2562,62 @@ export const useStore = create<AppState>((set, get) => ({
     if (po_id) {
       const po = purchaseOrders.find(p => p.po_id === po_id);
       if (po) {
-        const itemDeliveryMap = new Map<string, number>();
-        items.forEach(it => {
-          const key = `${it.product_id}___${it.specification || ''}`;
-          itemDeliveryMap.set(key, (itemDeliveryMap.get(key) || 0) + Number(it.quantity || 0));
+        // Track delivered quantities per po item index
+        const deliveredByIndex = new Map<number, number>();
+        const unassignedIncoming = [...items];
+
+        // Pass 1: Exact product_id and exact specification match
+        (po.items || []).forEach((poItem, pIdx) => {
+          const poSpec = (poItem.specification || '').trim().toLowerCase();
+          for (let i = unassignedIncoming.length - 1; i >= 0; i--) {
+            const inc = unassignedIncoming[i];
+            const incSpec = (inc.specification || '').trim().toLowerCase();
+            const matchPid = inc.product_id === poItem.product_id || 
+              (Boolean(inc.product_name) && Boolean(poItem.name || poItem.product_name) && (inc.product_name || '').trim() === (poItem.name || poItem.product_name || '').trim());
+            if (matchPid && poSpec === incSpec) {
+              deliveredByIndex.set(pIdx, (deliveredByIndex.get(pIdx) || 0) + Number(inc.quantity || 0));
+              unassignedIncoming.splice(i, 1);
+            }
+          }
+        });
+
+        // Pass 2: Inclusive specification match (e.g. poItem has "黑色、白色", incoming has "白色")
+        (po.items || []).forEach((poItem, pIdx) => {
+          for (let i = unassignedIncoming.length - 1; i >= 0; i--) {
+            const inc = unassignedIncoming[i];
+            const matchPid = inc.product_id === poItem.product_id || 
+              (Boolean(inc.product_name) && Boolean(poItem.name || poItem.product_name) && (inc.product_name || '').trim() === (poItem.name || poItem.product_name || '').trim());
+            if (matchPid && isSpecificationMatch(poItem.specification, inc.specification)) {
+              deliveredByIndex.set(pIdx, (deliveredByIndex.get(pIdx) || 0) + Number(inc.quantity || 0));
+              unassignedIncoming.splice(i, 1);
+            }
+          }
+        });
+
+        // Pass 3: If only one item in PO matches product_id
+        (po.items || []).forEach((poItem, pIdx) => {
+          const countWithSamePid = (po.items || []).filter(it => 
+            it.product_id === poItem.product_id || 
+            (Boolean(it.name || it.product_name) && Boolean(poItem.name || poItem.product_name) && (it.name || it.product_name || '').trim() === (poItem.name || poItem.product_name || '').trim())
+          ).length;
+          if (countWithSamePid === 1) {
+            for (let i = unassignedIncoming.length - 1; i >= 0; i--) {
+              const inc = unassignedIncoming[i];
+              const matchPid = inc.product_id === poItem.product_id || 
+                (Boolean(inc.product_name) && Boolean(poItem.name || poItem.product_name) && (inc.product_name || '').trim() === (poItem.name || poItem.product_name || '').trim());
+              if (matchPid) {
+                deliveredByIndex.set(pIdx, (deliveredByIndex.get(pIdx) || 0) + Number(inc.quantity || 0));
+                unassignedIncoming.splice(i, 1);
+              }
+            }
+          }
         });
 
         let allFullyReceived = true;
         let anyReceived = false;
 
-        const updatedItems = po.items.map(poItem => {
-          const key = `${poItem.product_id}___${poItem.specification || ''}`;
-          const deliveredQty = itemDeliveryMap.get(key) || 0;
+        const updatedItems = (po.items || []).map((poItem, pIdx) => {
+          const deliveredQty = deliveredByIndex.get(pIdx) || 0;
           const currentReceived = (poItem.received_quantity || 0) + deliveredQty;
           
           if (currentReceived > 0) anyReceived = true;
@@ -2474,17 +2691,57 @@ export const useStore = create<AppState>((set, get) => ({
   }
 }));
 
-export const getOnOrderStockQty = (purchaseOrders: PurchaseOrder[], productId: string, specification?: string): number => {
+export const isPurchaseOrderPendingOrPartial = (status?: string): boolean => {
+  if (!status) return true;
+  const s = String(status).trim().toLowerCase();
+  return (
+    s === 'pending' ||
+    s === 'partial' ||
+    s === '待到貨' ||
+    s === '在途中' ||
+    s === '在途' ||
+    s === '部分到貨' ||
+    s === '處理中' ||
+    s === '已下單' ||
+    s === '未到貨'
+  );
+};
+
+export const getOnOrderStockQty = (purchaseOrders: PurchaseOrder[], productId: string, specification?: string, transactions?: Transaction[]): number => {
   let count = 0;
   if (!purchaseOrders || !productId) return 0;
-  purchaseOrders.forEach(po => {
-    if (po.status === 'pending' || po.status === 'partial') {
-      (po.items || []).forEach(item => {
-        const matchPid = item.product_id === productId || (item.name && item.name.trim() === productId.trim());
+
+  const pos = transactions ? reconcilePurchaseOrdersWithTransactions(purchaseOrders, transactions) : purchaseOrders;
+  const cleanPid = String(productId || '').trim().toLowerCase();
+  const cleanTargetSpec = (specification !== undefined && specification !== null) ? String(specification).trim() : undefined;
+
+  pos.forEach(po => {
+    if (isPurchaseOrderPendingOrPartial(po.status)) {
+      const allMatchingItems = (po.items || []).filter(item => {
+        const itemPid = String(item.product_id || '').trim().toLowerCase();
+        const itemName = String(item.name || item.product_name || '').trim().toLowerCase();
+        return (itemPid && itemPid === cleanPid) || (itemName && itemName === cleanPid);
+      });
+
+      allMatchingItems.forEach(item => {
         const itemSpec = (item.specification || '').trim();
-        const targetSpec = specification !== undefined ? (specification || '').trim() : undefined;
-        const matchSpec = targetSpec !== undefined ? itemSpec === targetSpec : true;
-        if (matchPid && matchSpec) {
+        let matchSpec = false;
+
+        if (cleanTargetSpec === undefined || cleanTargetSpec === '') {
+          // Target has no specification
+          // If PO item also has no specification, or this is the only matching item for this product in the PO, count it!
+          matchSpec = !itemSpec || allMatchingItems.length === 1 || isSpecificationMatch(itemSpec, '');
+        } else {
+          // Target has a specification
+          if (isSpecificationMatch(itemSpec, cleanTargetSpec)) {
+            matchSpec = true;
+          } else if (!itemSpec && allMatchingItems.length === 1) {
+            // PO item has no specification, but there is only 1 item for this product in the PO -> attribute as on-order!
+            matchSpec = true;
+          }
+        }
+
+        if (matchSpec) {
           const remaining = Math.max(0, Number(item.ordered_quantity || 0) - Number(item.received_quantity || 0));
           count += remaining;
         }

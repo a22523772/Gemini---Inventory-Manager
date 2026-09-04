@@ -1,9 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { Product, Vendor } from '../lib/db';
-import { useStore, getOnOrderStockQty } from '../store/useStore';
+import { useStore, getOnOrderStockQty, parseSpecifications } from '../store/useStore';
 import { 
   Search, X, Plus, Minus, Check, Package, 
-  Layers, Building2, DollarSign, Filter, Sparkles, AlertCircle, Truck 
+  Layers, Building2, DollarSign, Filter, Sparkles, AlertCircle, Truck, Tag 
 } from 'lucide-react';
 
 interface ProductCatalogPickerModalProps {
@@ -16,11 +16,13 @@ interface ProductCatalogPickerModalProps {
   selectedItems: Array<{
     product_id: string;
     ordered_quantity: number;
-    name: string;
+    name?: string;
+    product_name?: string;
+    specification?: string;
     cost_price: number;
   }>;
-  onAddProduct: (p: Product, qty?: number) => void;
-  onUpdateQuantity: (productId: string, delta: number) => void;
+  onAddProduct: (p: Product, qty?: number, specification?: string) => void;
+  onUpdateQuantity: (productId: string, delta: number, specification?: string) => void;
   onAddCustomItem?: () => void;
   defaultVendorName?: string;
 }
@@ -249,7 +251,11 @@ export default function ProductCatalogPickerModal({
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               {filteredProducts.map(p => {
-                const currentQty = itemQtyMap.get(p.product_id) || 0;
+                const subSpecs = parseSpecifications(p.specification);
+                const hasMultipleSpecs = subSpecs.length > 1;
+                const totalProductQty = selectedItems
+                  .filter(it => it.product_id === p.product_id)
+                  .reduce((sum, it) => sum + (Number(it.ordered_quantity) || 0), 0);
                 const inStock = stockMap.get(p.product_id) || 0;
                 const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification);
                 const vName = vendorMap.get(p.vendor_id) || (p as any).vendor_name || '';
@@ -258,7 +264,7 @@ export default function ProductCatalogPickerModal({
                   <div
                     key={p.product_id}
                     className={`p-3 rounded-xl border transition-all flex flex-col justify-between gap-2.5 ${
-                      currentQty > 0
+                      totalProductQty > 0
                         ? 'bg-indigo-950/30 border-indigo-500/50 shadow-sm shadow-indigo-500/10'
                         : 'bg-white/5 hover:bg-white/[0.08] border-white/10'
                     }`}
@@ -269,9 +275,9 @@ export default function ProductCatalogPickerModal({
                         <span className="font-bold text-xs text-white line-clamp-2 leading-relaxed">
                           {p.name}
                         </span>
-                        {currentQty > 0 && (
+                        {totalProductQty > 0 && (
                           <span className="shrink-0 text-[10px] px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full font-bold">
-                            已挑選 x{currentQty}
+                            已挑選 x{totalProductQty}
                           </span>
                         )}
                       </div>
@@ -297,7 +303,7 @@ export default function ProductCatalogPickerModal({
                       </div>
                     </div>
 
-                    {/* Bottom Row: Stock, On-Order, Cost Price & Action Controls */}
+                    {/* Stock, On-Order & Cost info */}
                     <div className="flex items-center justify-between pt-2 border-t border-white/5 text-xs flex-wrap gap-2">
                       <div className="flex items-center gap-2.5 flex-wrap">
                         <span className="text-[11px] text-slate-400">
@@ -318,40 +324,110 @@ export default function ProductCatalogPickerModal({
                         </span>
                       </div>
 
-                      {/* Add / Adjust buttons */}
-                      {currentQty > 0 ? (
-                        <div className="flex items-center gap-1.5 bg-slate-900 border border-indigo-500/40 rounded-lg p-0.5">
-                          <button
-                            type="button"
-                            onClick={() => onUpdateQuantity(p.product_id, -1)}
-                            className="p-1 hover:bg-white/10 text-slate-300 hover:text-white rounded transition-colors"
-                            title="減少 1"
-                          >
-                            <Minus className="w-3.5 h-3.5" />
-                          </button>
-                          <span className="px-2 font-mono font-bold text-xs text-indigo-300">
-                            {currentQty}
+                      {!hasMultipleSpecs && (
+                        <div>
+                          {totalProductQty > 0 ? (
+                            <div className="flex items-center gap-1.5 bg-slate-900 border border-indigo-500/40 rounded-lg p-0.5">
+                              <button
+                                type="button"
+                                onClick={() => onUpdateQuantity(p.product_id, -1, p.specification)}
+                                className="p-1 hover:bg-white/10 text-slate-300 hover:text-white rounded transition-colors"
+                                title="減少 1"
+                              >
+                                <Minus className="w-3.5 h-3.5" />
+                              </button>
+                              <span className="px-2 font-mono font-bold text-xs text-indigo-300">
+                                {totalProductQty}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => onUpdateQuantity(p.product_id, 1, p.specification)}
+                                className="p-1 hover:bg-white/10 text-indigo-300 hover:text-white rounded transition-colors"
+                                title="增加 1"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => onAddProduct(p, 1, p.specification)}
+                              className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold shadow-sm transition-all cursor-pointer"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>加入清單</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Multi-specification sub-grid */}
+                    {hasMultipleSpecs && (
+                      <div className="space-y-1.5 pt-2 border-t border-white/5 bg-white/[0.02] -mx-3 -mb-3 p-3 rounded-b-xl">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="text-slate-400 flex items-center gap-1 font-medium">
+                            <Tag className="w-3 h-3 text-indigo-400" />
+                            <span>多規格選購 ({subSpecs.length} 款)：</span>
                           </span>
                           <button
                             type="button"
-                            onClick={() => onUpdateQuantity(p.product_id, 1)}
-                            className="p-1 hover:bg-white/10 text-indigo-300 hover:text-white rounded transition-colors"
-                            title="增加 1"
+                            onClick={() => {
+                              subSpecs.forEach(spec => {
+                                onAddProduct(p, 1, spec);
+                              });
+                            }}
+                            className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold px-1.5 py-0.5 rounded hover:bg-white/5 transition-colors"
                           >
-                            <Plus className="w-3.5 h-3.5" />
+                            + 全規格各一
                           </button>
                         </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => onAddProduct(p)}
-                          className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold shadow-sm transition-all cursor-pointer"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>加入清單</span>
-                        </button>
-                      )}
-                    </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {subSpecs.map(spec => {
+                            const specQty = selectedItems
+                              .filter(it => it.product_id === p.product_id && (it.specification || '').trim().toLowerCase() === spec.trim().toLowerCase())
+                              .reduce((sum, it) => sum + (Number(it.ordered_quantity) || 0), 0);
+
+                            return (
+                              <div key={spec} className="flex items-center justify-between bg-white/[0.04] border border-white/5 rounded-lg px-2 py-1 gap-1">
+                                <span className="text-xs text-slate-200 font-medium truncate max-w-[90px]" title={spec}>
+                                  {spec}
+                                </span>
+                                {specQty > 0 ? (
+                                  <div className="flex items-center gap-1 bg-slate-900 border border-indigo-500/40 rounded p-0.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => onUpdateQuantity(p.product_id, -1, spec)}
+                                      className="p-0.5 hover:bg-white/10 text-slate-300 hover:text-white rounded"
+                                    >
+                                      <Minus className="w-3 h-3" />
+                                    </button>
+                                    <span className="px-1 font-mono font-bold text-[11px] text-indigo-300">
+                                      {specQty}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => onUpdateQuantity(p.product_id, 1, spec)}
+                                      className="p-0.5 hover:bg-white/10 text-indigo-300 hover:text-white rounded"
+                                    >
+                                      <Plus className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => onAddProduct(p, 1, spec)}
+                                    className="text-[10px] px-2 py-0.5 bg-indigo-600/80 hover:bg-indigo-600 text-white rounded font-bold transition-colors"
+                                  >
+                                    + 選購
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}

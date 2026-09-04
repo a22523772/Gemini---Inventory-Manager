@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { useStore, getOnOrderStockQty } from '../store/useStore';
+import { useStore, getOnOrderStockQty, parseSpecifications, isSpecificationMatch, getResolvedPoItems } from '../store/useStore';
 import { Product, PurchaseOrder, PurchaseOrderItem, Vendor } from '../lib/db';
 import { performLocalInvoiceOcr, calculateSimilarity, optimizeImageForUpload } from '../lib/localOcrEngine';
 import { format } from 'date-fns';
@@ -11,7 +11,7 @@ import {
   Layers, Package, DollarSign, Calendar, ChevronRight, ChevronDown,
   ExternalLink, ZoomIn, ZoomOut, AlertCircle, ShoppingCart, Zap, Cpu,
   CheckCheck, FileSpreadsheet, ArrowDownToLine, Boxes, PackageCheck,
-  Images, Image as ImageIcon, ArrowUpDown, Filter, RotateCcw
+  Images, Image as ImageIcon, ArrowUpDown, Filter, RotateCcw, Copy
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import SearchableProductCombobox from '../components/SearchableProductCombobox';
@@ -240,20 +240,31 @@ export default function Purchases() {
     let totalOnOrderUnits = 0;
 
     purchaseOrders.forEach(po => {
-      if (po.status === 'pending') pendingCount++;
-      else if (po.status === 'partial') partialCount++;
-      else if (po.status === 'completed') completedCount++;
+      const resolvedItems = getResolvedPoItems(po, transactions || []);
+      const totalOrdered = resolvedItems.reduce((acc, it) => acc + Number(it.ordered_quantity || 0), 0);
+      const totalReceived = resolvedItems.reduce((acc, it) => acc + Number(it.effective_received_quantity || 0), 0);
+      const remaining = Math.max(0, totalOrdered - totalReceived);
 
-      if (po.status === 'pending' || po.status === 'partial') {
-        (po.items || []).forEach(it => {
-          const remaining = Math.max(0, Number(it.ordered_quantity || 0) - Number(it.received_quantity || 0));
-          totalOnOrderUnits += remaining;
-        });
+      let effectiveStatus = po.status;
+      if (po.status !== 'completed' && po.status !== 'cancelled') {
+        if (totalReceived > 0 && remaining > 0) {
+          effectiveStatus = 'partial';
+        } else if (remaining === 0 && totalOrdered > 0) {
+          effectiveStatus = 'completed';
+        }
+      }
+
+      if (effectiveStatus === 'pending') pendingCount++;
+      else if (effectiveStatus === 'partial') partialCount++;
+      else if (effectiveStatus === 'completed') completedCount++;
+
+      if (effectiveStatus === 'pending' || effectiveStatus === 'partial') {
+        totalOnOrderUnits += remaining;
       }
     });
 
     return { pendingCount, partialCount, completedCount, totalOnOrderUnits };
-  }, [purchaseOrders]);
+  }, [purchaseOrders, transactions]);
 
   // Filtered and Sorted PO list
   const filteredPOs = useMemo(() => {
@@ -738,13 +749,39 @@ export default function Purchases() {
     setConfirmImageUrls(existingImgs);
     setConfirmActiveImageIndex(0);
 
-    const checkInItems: ScannedInvoiceItem[] = (po.items || []).map((it, idx) => {
-      const remaining = Math.max(0, Number(it.ordered_quantity || 0) - Number(it.received_quantity || 0));
+    const resolvedItems = getResolvedPoItems(po, transactions || []);
+    const checkInItems: ScannedInvoiceItem[] = resolvedItems.flatMap((it, idx) => {
+      const remaining = it.remaining_quantity;
       const targetQty = remaining > 0 ? remaining : Number(it.ordered_quantity || 1);
       const defLoc = productDefaultLocationMap.get(it.product_id);
       const matchedP = products.find(p => p.product_id === it.product_id);
 
-      return {
+      const subSpecs = parseSpecifications(it.specification);
+      if (subSpecs.length > 1) {
+        return subSpecs.map((subSpec, sIdx) => {
+          const subReceived = (transactions || [])
+            .filter(t => (t.po_id === po.po_id || (t.note && t.note.includes(po.po_id))) &&
+                         t.product_id === it.product_id &&
+                         isSpecificationMatch(t.specification, subSpec))
+            .reduce((sum, t) => sum + Number(t.quantity || 0), 0);
+          
+          return {
+            temp_id: `PO_CHK_${Date.now()}_${idx}_${sIdx}`,
+            product_id: it.product_id,
+            product_name: it.name,
+            matched_system_product: matchedP,
+            specification: subSpec,
+            quantity: Math.max(0, targetQty - subReceived),
+            cost_price: it.cost_price || matchedP?.cost_price || 0,
+            location: defLoc?.location || '倉庫',
+            floor: defLoc?.floor || '1F',
+            area: defLoc?.area || 'A區',
+            note: it.note || ''
+          };
+        });
+      }
+
+      return [{
         temp_id: `PO_CHK_${Date.now()}_${idx}`,
         product_id: it.product_id,
         product_name: it.name,
@@ -756,7 +793,7 @@ export default function Purchases() {
         floor: defLoc?.floor || '1F',
         area: defLoc?.area || 'A區',
         note: it.note || ''
-      };
+      }];
     });
 
     setConfirmItems(checkInItems);
@@ -764,16 +801,31 @@ export default function Purchases() {
   };
 
   // Handlers for creating manual PO
-  const handleAddProductToNewPO = (p: Product, qty: number = 1) => {
+  const handleAddProductToNewPO = (p: Product, qty: number = 1, specification?: string) => {
     if (!p) return;
-    const existingIndex = newPOItems.findIndex(it => it.product_id === p.product_id);
+    const targetSpec = specification !== undefined ? specification : (p.specification || '');
+    const subSpecs = parseSpecifications(targetSpec);
+
+    // If specification not explicitly chosen and product has multiple specs, expand them!
+    if (specification === undefined && subSpecs.length > 1) {
+      subSpecs.forEach(subSpec => {
+        handleAddProductToNewPO(p, qty, subSpec);
+      });
+      return;
+    }
+
+    const normSpec = targetSpec.trim().toLowerCase();
+    const existingIndex = newPOItems.findIndex(it => 
+      it.product_id === p.product_id && (it.specification || '').trim().toLowerCase() === normSpec
+    );
+
     if (existingIndex >= 0) {
       setNewPOItems(prev => prev.map((it, idx) => 
         idx === existingIndex 
           ? { ...it, ordered_quantity: Math.max(1, Number(it.ordered_quantity || 0) + qty) } 
           : it
       ));
-      showToast(`➕ 已累加「${p.name || p.product_id}」訂購數量 (+${qty})`);
+      showToast(`➕ 已累加「${p.name || p.product_id}${targetSpec ? ` (${targetSpec})` : ''}」訂購數量 (+${qty})`);
     } else {
       setNewPOItems(prev => [
         ...prev,
@@ -781,13 +833,13 @@ export default function Purchases() {
           temp_id: `NEW_PO_ITEM_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
           product_id: p.product_id || `P_${Date.now()}`,
           name: p.name || '未命名商品',
-          specification: p.specification || '',
+          specification: targetSpec,
           ordered_quantity: Math.max(1, qty),
           cost_price: Number(p.cost_price) || 0,
           note: ''
         }
       ]);
-      showToast(`✅ 已將「${p.name || p.product_id}」加入採購清單`);
+      showToast(`✅ 已將「${p.name || p.product_id}${targetSpec ? ` (${targetSpec})` : ''}」加入採購清單`);
     }
 
     // Auto-fill vendor if currently empty and product has vendor
@@ -798,9 +850,13 @@ export default function Purchases() {
     }
   };
 
-  const handleUpdatePOItemQuantity = (productId: string, delta: number) => {
+  const handleUpdatePOItemQuantity = (productId: string, delta: number, specification?: string) => {
     setNewPOItems(prev => {
-      const targetIdx = prev.findIndex(it => it.product_id === productId);
+      const normSpec = specification !== undefined ? specification.trim().toLowerCase() : undefined;
+      const targetIdx = prev.findIndex(it => 
+        it.product_id === productId && 
+        (normSpec !== undefined ? (it.specification || '').trim().toLowerCase() === normSpec : true)
+      );
       if (targetIdx < 0) return prev;
 
       const currentQty = Number(prev[targetIdx].ordered_quantity) || 1;
@@ -891,6 +947,20 @@ export default function Purchases() {
     let finalVendorName = (newPOVendorName || '').trim() || (newPOVendorId || '').trim();
     if (!finalVendorName) {
       showToast('❌ 請選擇或填寫供應商！');
+      return;
+    }
+
+    // Check if any product has specifications in system product catalog, but the PO item left specification empty!
+    const missingSpecItem = newPOItems.find(it => {
+      const catalogProd = products.find(p => p.product_id === it.product_id || (p.name && p.name.trim() === (it.name || '').trim()));
+      const catalogSpec = (catalogProd?.specification || '').trim();
+      const itemSpec = (it.specification || '').trim();
+      return catalogSpec && !itemSpec;
+    });
+
+    if (missingSpecItem) {
+      const catalogProd = products.find(p => p.product_id === missingSpecItem.product_id || (p.name && p.name.trim() === (missingSpecItem.name || '').trim()));
+      showToast(`⚠️ 商品「${missingSpecItem.name}」在系統建檔有規格（${catalogProd?.specification}），但採購單尚未填寫規格，請填寫規格後再建立！`);
       return;
     }
 
@@ -1299,10 +1369,15 @@ export default function Purchases() {
           ) : (
             <div className="space-y-4">
               {filteredPOs.map((po) => {
-                const totalOrdered = (po.items || []).reduce((acc, it) => acc + Number(it.ordered_quantity || 0), 0);
-                const totalReceived = (po.items || []).reduce((acc, it) => acc + Number(it.received_quantity || 0), 0);
+                const resolvedItems = getResolvedPoItems(po, transactions || []);
+                const totalOrdered = resolvedItems.reduce((acc, it) => acc + Number(it.ordered_quantity || 0), 0);
+                const totalReceived = resolvedItems.reduce((acc, it) => acc + Number(it.effective_received_quantity || 0), 0);
                 const remainingOnOrder = Math.max(0, totalOrdered - totalReceived);
-                const totalCost = (po.items || []).reduce((acc, it) => acc + (Number(it.ordered_quantity || 0) * Number(it.cost_price || 0)), 0);
+                const totalCost = resolvedItems.reduce((acc, it) => acc + (Number(it.ordered_quantity || 0) * Number(it.cost_price || 0)), 0);
+
+                const effectiveStatus = (po.status !== 'completed' && po.status !== 'cancelled')
+                  ? (totalReceived > 0 && remainingOnOrder > 0 ? 'partial' : (remainingOnOrder === 0 && totalOrdered > 0 ? 'completed' : po.status))
+                  : po.status;
 
                 return (
                   <div
@@ -1323,14 +1398,14 @@ export default function Purchases() {
 
                         <span className={cn(
                           "text-[11px] font-extrabold px-2.5 py-0.5 rounded-full border",
-                          po.status === 'pending' ? "bg-amber-500/20 text-amber-300 border-amber-500/30" :
-                          po.status === 'partial' ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/30 animate-pulse" :
-                          po.status === 'completed' ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" :
+                          effectiveStatus === 'pending' ? "bg-amber-500/20 text-amber-300 border-amber-500/30" :
+                          effectiveStatus === 'partial' ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/30 animate-pulse" :
+                          effectiveStatus === 'completed' ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" :
                           "bg-zinc-500/20 text-zinc-300 border-zinc-500/30"
                         )}>
-                          {po.status === 'pending' ? '待到貨 (在途中)' :
-                           po.status === 'partial' ? '部分到貨 (繼續在途)' :
-                           po.status === 'completed' ? '已全數到貨 / 結案' : '已取消'}
+                          {effectiveStatus === 'pending' ? '待到貨 (在途中)' :
+                           effectiveStatus === 'partial' ? `部分到貨 (已到 ${totalReceived} / 剩餘 ${remainingOnOrder})` :
+                           effectiveStatus === 'completed' ? '已全數到貨 / 結案' : '已取消'}
                         </span>
 
                         {/* Invoice Number Badge / Quick Add */}
@@ -1518,8 +1593,9 @@ export default function Purchases() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-white/5">
-                          {(po.items || []).map((it, idx) => {
-                            const itemRemaining = Math.max(0, Number(it.ordered_quantity || 0) - Number(it.received_quantity || 0));
+                          {resolvedItems.map((it, idx) => {
+                            const receivedQty = it.effective_received_quantity;
+                            const itemRemaining = it.remaining_quantity;
                             return (
                               <tr key={idx} className="hover:bg-white/[0.02]">
                                 <td className="py-2.5 px-3">
@@ -1528,14 +1604,22 @@ export default function Purchases() {
                                 </td>
                                 <td className="py-2.5 px-2 text-slate-300">{it.specification || '-'}</td>
                                 <td className="py-2.5 px-2 text-center font-medium text-slate-300">{it.ordered_quantity}</td>
-                                <td className="py-2.5 px-2 text-center font-bold text-emerald-400">{it.received_quantity || 0}</td>
+                                <td className="py-2.5 px-2 text-center font-bold text-emerald-400">
+                                  {receivedQty > 0 ? (
+                                    <span className="inline-flex items-center gap-1 bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-mono font-bold">
+                                      {receivedQty}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-500 font-mono">0</span>
+                                  )}
+                                </td>
                                 <td className="py-2.5 px-2 text-center">
                                   {itemRemaining > 0 ? (
-                                    <span className="font-bold text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded">
+                                    <span className="font-bold text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded font-mono">
                                       {itemRemaining}
                                     </span>
                                   ) : (
-                                    <span className="text-slate-500">0 (完畢)</span>
+                                    <span className="text-emerald-400 text-[11px] font-bold">完畢 ✓</span>
                                   )}
                                 </td>
                                 <td className="py-2.5 px-2 text-right font-mono text-slate-300">${it.cost_price || 0}</td>
@@ -2265,56 +2349,90 @@ export default function Purchases() {
                           </button>
                         </div>
                         {matchedList.map(p => {
-                          const existingItem = newPOItems.find(it => it.product_id === p.product_id);
+                          const subSpecs = parseSpecifications(p.specification);
                           const inStock = productTotalStockMap.get(p.product_id) || 0;
-                          const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification);
+                          const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification, transactions);
+
+                          const addedForProduct = newPOItems.filter(it => it.product_id === p.product_id);
+                          const totalAddedQty = addedForProduct.reduce((s, it) => s + Number(it.ordered_quantity || 0), 0);
 
                           return (
                             <div
                               key={p.product_id}
-                              onClick={() => {
-                                handleAddProductToNewPO(p, 1);
-                              }}
-                              className="flex items-center justify-between p-2 hover:bg-indigo-500/15 rounded-lg cursor-pointer transition-colors group pt-2"
+                              className="p-2.5 hover:bg-indigo-500/15 rounded-xl transition-colors group space-y-1.5"
                             >
-                              <div className="space-y-0.5 flex-1 pr-3">
-                                <div className="font-bold text-xs text-white group-hover:text-indigo-200 flex items-center gap-2">
-                                  <span>{p.name}</span>
-                                  {existingItem && (
-                                    <span className="text-[10px] px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded font-mono font-bold">
-                                      已加入 x{existingItem.ordered_quantity}
-                                    </span>
-                                  )}
+                              <div className="flex items-center justify-between">
+                                <div className="space-y-0.5 flex-1 pr-3">
+                                  <div className="font-bold text-xs text-white group-hover:text-indigo-200 flex items-center gap-2">
+                                    <span>{p.name}</span>
+                                    {totalAddedQty > 0 && (
+                                      <span className="text-[10px] px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded font-mono font-bold">
+                                        已加入共 x{totalAddedQty}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[10px] text-slate-400 flex items-center gap-2 flex-wrap">
+                                    <span className="font-mono text-slate-500">{p.product_id}</span>
+                                    {p.specification && <span>• 規格: {p.specification}</span>}
+                                    <span>• 現存: <strong className="text-sky-300 font-mono">{inStock}</strong></span>
+                                    {onOrderQty > 0 ? (
+                                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded font-mono font-bold">
+                                        <Truck className="w-2.5 h-2.5 text-amber-400 shrink-0" />
+                                        <span>在途: {onOrderQty}</span>
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-500 font-mono">• 在途: 0</span>
+                                    )}
+                                    <span className="text-amber-300 font-mono font-bold">• 預設進價: ${p.cost_price || 0}</span>
+                                  </div>
                                 </div>
-                                <div className="text-[10px] text-slate-400 flex items-center gap-2 flex-wrap">
-                                  <span className="font-mono text-slate-500">{p.product_id}</span>
-                                  {p.specification && <span>• 規格: {p.specification}</span>}
-                                  <span>• 現存: <strong className="text-sky-300 font-mono">{inStock}</strong></span>
-                                  {onOrderQty > 0 ? (
-                                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded font-mono font-bold">
-                                      <Truck className="w-2.5 h-2.5 text-amber-400 shrink-0" />
-                                      <span>在途: {onOrderQty}</span>
-                                    </span>
-                                  ) : (
-                                    <span className="text-slate-500 font-mono">• 在途: 0</span>
-                                  )}
-                                  <span className="text-amber-300 font-mono font-bold">• 預設進價: ${p.cost_price || 0}</span>
-                                </div>
+
+                                {subSpecs.length <= 1 ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddProductToNewPO(p, 1)}
+                                    className="px-2.5 py-1 rounded-lg text-xs font-bold transition-all shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm cursor-pointer"
+                                  >
+                                    + 加入
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      subSpecs.forEach(spec => handleAddProductToNewPO(p, 1, spec));
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm cursor-pointer"
+                                    title="一次加入全部規格"
+                                  >
+                                    + 全部規格
+                                  </button>
+                                )}
                               </div>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleAddProductToNewPO(p, 1);
-                                }}
-                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all shrink-0 ${
-                                  existingItem
-                                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm'
-                                    : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm'
-                                }`}
-                              >
-                                {existingItem ? `+ 累加 (${existingItem.ordered_quantity})` : '+ 加入'}
-                              </button>
+
+                              {/* If product has multiple specifications, show clickable pills to add specific spec */}
+                              {subSpecs.length > 1 && (
+                                <div className="flex items-center gap-1.5 flex-wrap pl-2 pt-1 border-t border-white/5">
+                                  <span className="text-[10px] text-slate-400 font-medium">可選規格:</span>
+                                  {subSpecs.map(spec => {
+                                    const specAdded = newPOItems.find(it => it.product_id === p.product_id && (it.specification || '').trim().toLowerCase() === spec.trim().toLowerCase());
+                                    return (
+                                      <button
+                                        key={spec}
+                                        type="button"
+                                        onClick={() => handleAddProductToNewPO(p, 1, spec)}
+                                        className={`px-2 py-0.5 rounded text-[11px] font-bold border transition-colors flex items-center gap-1 cursor-pointer ${
+                                          specAdded
+                                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
+                                            : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10 hover:text-white'
+                                        }`}
+                                      >
+                                        <span>+ {spec}</span>
+                                        {specAdded && <span className="font-mono text-[10px]">({specAdded.ordered_quantity})</span>}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -2377,7 +2495,7 @@ export default function Purchases() {
                     <tbody className="divide-y divide-white/5">
                       {newPOItems.map((item, idx) => {
                         const inStock = productTotalStockMap.get(item.product_id) || 0;
-                        const onOrder = getOnOrderStockQty(purchaseOrders, item.product_id, item.specification);
+                        const onOrder = getOnOrderStockQty(purchaseOrders, item.product_id, item.specification, transactions);
 
                         return (
                           <tr key={item.temp_id} className="hover:bg-white/[0.02] transition-colors">
@@ -2398,16 +2516,34 @@ export default function Purchases() {
                               <span className="block text-[10px] font-mono text-slate-500 px-1.5">{item.product_id}</span>
                             </td>
                             <td className="py-2.5 px-2">
-                              <input
-                                type="text"
-                                value={item.specification}
-                                placeholder="規格 (選填)"
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, specification: val } : it));
-                                }}
-                                className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
-                              />
+                              {(() => {
+                                const catalogProd = products.find(p => p.product_id === item.product_id || (p.name && p.name.trim() === (item.name || '').trim()));
+                                const isSpecRequired = Boolean(catalogProd?.specification && catalogProd.specification.trim());
+                                const isMissing = isSpecRequired && !(item.specification || '').trim();
+
+                                return (
+                                  <div>
+                                    <input
+                                      type="text"
+                                      value={item.specification}
+                                      placeholder={isSpecRequired ? `必填！建檔規格: ${catalogProd!.specification}` : '規格 (選填)'}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, specification: val } : it));
+                                      }}
+                                      className={`w-full bg-white/5 border rounded-lg px-2 py-1 text-xs text-white focus:outline-none transition-colors ${
+                                        isMissing ? 'border-amber-500 bg-amber-500/10 focus:border-amber-400' : 'border-white/10 focus:border-indigo-500'
+                                      }`}
+                                    />
+                                    {isMissing && (
+                                      <p className="text-[10px] text-amber-400 font-bold mt-1 flex items-center gap-1">
+                                        <AlertCircle className="w-3 h-3 shrink-0" />
+                                        <span>此商品建檔有規格，請務必填寫</span>
+                                      </p>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </td>
                             {/* In-stock */}
                             <td className="py-2.5 px-2 text-center">
@@ -2433,7 +2569,7 @@ export default function Purchases() {
                               <div className="flex items-center justify-center gap-1">
                                 <button
                                   type="button"
-                                  onClick={() => handleUpdatePOItemQuantity(item.product_id, -1)}
+                                  onClick={() => handleUpdatePOItemQuantity(item.product_id, -1, item.specification)}
                                   className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white flex items-center justify-center font-bold text-xs"
                                 >
                                   -
@@ -2450,7 +2586,7 @@ export default function Purchases() {
                                 />
                                 <button
                                   type="button"
-                                  onClick={() => handleUpdatePOItemQuantity(item.product_id, 1)}
+                                  onClick={() => handleUpdatePOItemQuantity(item.product_id, 1, item.specification)}
                                   className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white flex items-center justify-center font-bold text-xs"
                                 >
                                   +
@@ -2488,14 +2624,35 @@ export default function Purchases() {
                               />
                             </td>
                             <td className="py-2.5 px-2 text-center">
-                              <button
-                                type="button"
-                                onClick={() => setNewPOItems(prev => prev.filter((_, i) => i !== idx))}
-                                className="text-slate-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
-                                title="刪除此項"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const copy = {
+                                      ...item,
+                                      temp_id: `NEW_PO_ITEM_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                                      specification: '',
+                                      ordered_quantity: 1
+                                    };
+                                    const next = [...newPOItems];
+                                    next.splice(idx + 1, 0, copy);
+                                    setNewPOItems(next);
+                                    showToast(`➕ 已新增「${item.name}」第二種規格行，請填寫規格型號`);
+                                  }}
+                                  className="text-slate-400 hover:text-indigo-400 p-1.5 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+                                  title="為此商品新增另一種規格（例如：另一顏色或尺寸）"
+                                >
+                                  <Copy className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setNewPOItems(prev => prev.filter((_, i) => i !== idx))}
+                                  className="text-slate-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+                                  title="刪除此項"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
