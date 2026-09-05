@@ -97,6 +97,7 @@ export type Vendor = {
 export type Transaction = {
   id: string;
   transaction_id: string; // for GAS
+  stock_id?: string; // 關聯庫存編號
   online_order_id?: string; // 網路訂單編號
   batch_id?: string; // 批次出貨編號
   batch_tx_id?: string; // 批次出貨關聯號
@@ -112,6 +113,7 @@ export type Transaction = {
   floor: string;
   area: string;
   specification?: string;
+  expiry_date?: string;
   cost_price?: number;
   vendor_id?: string;
   po_id?: string;

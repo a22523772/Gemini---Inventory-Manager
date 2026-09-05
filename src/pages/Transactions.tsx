@@ -1,5 +1,8 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useStore, parseToDate, getTxTimestamp, normalizeDateToYMD, formatTxDate, formatAdjustQuantity } from '../store/useStore';
+import { 
+  useStore, parseToDate, getTxTimestamp, normalizeDateToYMD, formatTxDate, formatAdjustQuantity,
+  isStockInType, isStockOutType, isAdjustType, formatConsistentTxDate, getDominantDateSeparator
+} from '../store/useStore';
 import { 
   PackageOpen, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, Calendar, 
   Search, Filter, X, Eye, Edit, Trash2, 
@@ -355,10 +358,10 @@ export default function Transactions() {
 
     filteredTransactions.forEach(t => {
       const qty = Number(t.quantity) || 0;
-      if (t.type === 'stock_in') {
+      if (isStockInType(t.type)) {
         totalInQty += qty;
         totalInCost += (Number(t.cost_price) || getProductCostPrice(t.product_id) || 0) * qty;
-      } else if (t.type === 'stock_out' || t.type.startsWith('stock_out')) {
+      } else if (isStockOutType(t.type)) {
         totalOutQty += qty;
         const val = Number(t.price) || Number(t.cost_price) || getProductCostPrice(t.product_id) || 0;
         totalOutAmount += val * qty;
@@ -375,12 +378,9 @@ export default function Transactions() {
   }, [groupedTransactions, currentPage]);
 
   const getIcon = (type: string) => {
-    switch (type) {
-      case 'stock_in': return <ArrowDownToLine className="w-5 h-5 text-[var(--color-accent-blue)]" />;
-      case 'stock_out': return <ArrowUpFromLine className="w-5 h-5 text-[#f87171]" />;
-      case 'adjust': return <RefreshCcw className="w-5 h-5 text-[var(--color-accent-orange)]" />;
-      default: return <ArrowUpFromLine className="w-5 h-5 text-sky-400" />;
-    }
+    if (isStockInType(type)) return <ArrowDownToLine className="w-5 h-5 text-[var(--color-accent-blue)]" />;
+    if (isAdjustType(type)) return <RefreshCcw className="w-5 h-5 text-[var(--color-accent-orange)]" />;
+    return <ArrowUpFromLine className="w-5 h-5 text-[#f87171]" />;
   };
 
   // Export to Excel / CSV
@@ -419,9 +419,9 @@ export default function Transactions() {
       const typeLbl = getTypeLabel(t.type);
       const forced = isForcedTx(t) ? '是' : '否';
 
-      const formattedQty = t.type === 'adjust' 
+      const formattedQty = isAdjustType(t.type)
         ? formatAdjustQuantity(t).display 
-        : t.type === 'stock_in' 
+        : isStockInType(t.type)
           ? `+${t.quantity}` 
           : `-${t.quantity}`;
 
@@ -832,7 +832,7 @@ export default function Transactions() {
                             {formatTxDate(t.date)}
                           </span>
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-0.5 ${
-                            t.type === 'stock_in' ? 'bg-sky-500/20 text-sky-300' : t.type === 'adjust' ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
+                            isStockInType(t.type) ? 'bg-sky-500/20 text-sky-300' : isAdjustType(t.type) ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
                           }`}>
                             {getTypeLabel(t.type)}
                           </span>
@@ -882,7 +882,7 @@ export default function Transactions() {
                   <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-white/5 text-sm">
                     <div>
                       <p className="text-[10px] text-[var(--color-text-dim)] uppercase font-bold">異動數量</p>
-                      {t.type === 'adjust' ? (
+                      {isAdjustType(t.type) ? (
                         <div className="flex items-center gap-1">
                           <p className="font-mono font-black text-base text-amber-400">
                             {formatAdjustQuantity(t).display}
@@ -892,20 +892,20 @@ export default function Transactions() {
                           </span>
                         </div>
                       ) : (
-                        <p className={`font-mono font-black text-base ${t.type === 'stock_in' ? 'text-sky-400' : 'text-rose-400'}`}>
-                          {t.type === 'stock_in' ? `+${t.quantity}` : `-${t.quantity}`}
+                        <p className={`font-mono font-black text-base ${isStockInType(t.type) ? 'text-sky-400' : 'text-rose-400'}`}>
+                          {isStockInType(t.type) ? `+${t.quantity}` : `-${t.quantity}`}
                         </p>
                       )}
                     </div>
                     <div>
                       <p className="text-[10px] text-[var(--color-text-dim)] uppercase font-bold">
-                        {t.online_order_id || t.type.startsWith('stock_out') ? '售價 / 金額' : '進價成本'}
+                        {t.online_order_id || isStockOutType(t.type) ? '售價 / 金額' : '進價成本'}
                       </p>
                       <p className="font-mono font-black text-base text-[var(--color-accent-green)]">
                         ${t.price || t.cost_price || getProductCostPrice(t.product_id) || 0}
                       </p>
                     </div>
-                    {t.type === 'stock_in' && t.vendor_id && (
+                    {isStockInType(t.type) && t.vendor_id && (
                       <div className="col-span-2">
                         <p className="text-[10px] text-[var(--color-text-dim)] uppercase font-bold">供應商</p>
                         <p className="font-medium text-[var(--color-text-main)] text-xs">{getVendorName(t.vendor_id)}</p>
@@ -956,7 +956,7 @@ export default function Transactions() {
 
             // Batched Transaction Group (When multiple items share an order ID, batch ID, or transaction ID)
             const first = group[0];
-            const isStockIn = group.every(t => t.type === 'stock_in');
+            const isStockIn = group.every(t => isStockInType(t.type));
             const isOnlineOrder = !!(first.online_order_id && String(first.online_order_id).trim());
             const rawTxId = String(first.transaction_id || '').trim();
             const cleanBatchId = first.batch_id || first.batch_tx_id || (rawTxId.startsWith('TX_') ? rawTxId.replace(/_\d+$/, '') : rawTxId);
@@ -1083,13 +1083,13 @@ export default function Transactions() {
                               </div>
                             </div>
                             <span className={`font-mono font-black shrink-0 text-base ${
-                              t.type === 'adjust' 
+                              isAdjustType(t.type) 
                                 ? 'text-amber-400' 
-                                : t.type === 'stock_in' 
+                                : isStockInType(t.type) 
                                   ? 'text-sky-400' 
                                   : 'text-rose-400'
                             }`}>
-                              {t.type === 'adjust' ? formatAdjustQuantity(t).display : (t.type === 'stock_in' ? `+${t.quantity}` : `-${t.quantity}`)}
+                              {isAdjustType(t.type) ? formatAdjustQuantity(t).display : (isStockInType(t.type) ? `+${t.quantity}` : `-${t.quantity}`)}
                             </span>
                           </div>
                           <div className="flex justify-end gap-1.5 mt-2">
@@ -1205,13 +1205,13 @@ export default function Transactions() {
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
                 <span className="text-[var(--color-text-dim)]">異動數量</span>
                 <span className="col-span-2 font-bold font-mono">
-                  {selectedTxForView.type === 'adjust' ? (
+                  {isAdjustType(selectedTxForView.type) ? (
                     <span className="text-amber-400">
                       {formatAdjustQuantity(selectedTxForView).display} <span className="text-xs text-amber-300/80 font-normal font-sans">(變化量=最終數量)</span>
                     </span>
                   ) : (
-                    <span className={selectedTxForView.type === 'stock_in' ? 'text-sky-400' : 'text-rose-400'}>
-                      {selectedTxForView.type === 'stock_in' ? `+${selectedTxForView.quantity}` : `-${selectedTxForView.quantity}`}
+                    <span className={isStockInType(selectedTxForView.type) ? 'text-sky-400' : 'text-rose-400'}>
+                      {isStockInType(selectedTxForView.type) ? `+${selectedTxForView.quantity}` : `-${selectedTxForView.quantity}`}
                     </span>
                   )}
                 </span>
@@ -1274,13 +1274,14 @@ export default function Transactions() {
           <form 
             onSubmit={async (e) => {
               e.preventDefault();
+              const dominantSep = getDominantDateSeparator(transactions);
               const fields: any = {
                 quantity: Number(editQty),
                 location: editLocation,
                 floor: editFloor,
                 area: editArea,
                 specification: editSpec,
-                date: editDate,
+                date: formatConsistentTxDate(editDate, dominantSep),
                 note: editNote,
                 operator: editOperator,
               };
@@ -1341,7 +1342,7 @@ export default function Transactions() {
                 </div>
               </div>
 
-              {selectedTxForEdit.type === 'stock_in' ? (
+              {isStockInType(selectedTxForEdit.type) ? (
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">進價成本 ($)</label>

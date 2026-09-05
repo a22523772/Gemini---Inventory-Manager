@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useStore, calculateOrderStatus, getProductStatusInfo, getOnOrderStockQty } from '../store/useStore';
+import { useStore, calculateOrderStatus, getProductStatusInfo, getOnOrderStockQty, formatConsistentTxDate, getDominantDateSeparator } from '../store/useStore';
 import { 
   Package, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, 
   AlertTriangle, BarChart2, Globe, Truck, Trash2, X, PlusCircle, User, Calendar, CheckCircle, Flame, Search, ArrowRight, FileText,
@@ -678,7 +678,8 @@ export default function Home() {
       const normPlatform = normalizePlatformName(order.platform);
       const txType = `stock_out ${normPlatform}`;
       const cleanOrderId = orderIdStr.replace(/[^a-zA-Z0-9_-]/g, '_');
-      const timestampDate = format(new Date(), 'yyyy-MM-dd HH:mm:ss');
+      const dominantSep = getDominantDateSeparator(useStore.getState().transactions);
+      const timestampDate = formatConsistentTxDate(new Date(), dominantSep);
       const orderTxId = `TX_ORD_${cleanOrderId}`;
 
       for (let itemIdx = 0; itemIdx < order.items.length; itemIdx++) {

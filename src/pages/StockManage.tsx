@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { useStore } from '../store/useStore';
+import { useStore, formatConsistentTxDate, getDominantDateSeparator } from '../store/useStore';
 import { ArrowLeft, Save, Search, X, Filter, Plus, ScanBarcode, FileText, ShoppingBag } from 'lucide-react';
 import { format } from 'date-fns';
 import OutboundCart from '../components/OutboundCart';
@@ -249,6 +249,7 @@ export default function StockManage() {
        }
     }
 
+    const dominantSep = getDominantDateSeparator(useStore.getState().transactions);
     let payload: any = {
       stock_id: type !== 'stock_in' ? selectedStockId : undefined,
       product_id: targetPid,
@@ -258,7 +259,7 @@ export default function StockManage() {
       area,
       expiry_date: currentExpiry || '',
       specification: currentSpecification,
-      date: format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
+      date: formatConsistentTxDate(new Date(), dominantSep),
       operator
     };
 

@@ -122,11 +122,15 @@ export const formatTxDate = (dateVal?: any): string => {
   const d = parseToDate(dateVal);
   if (!d) return rawStr;
 
-  const hasTime = /(?:\d{1,2}:\d{1,2})|T|Z|上午|下午|AM|PM/i.test(rawStr);
-  if (!hasTime && /^\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}$/.test(rawStr)) {
-    return format(d, 'yyyy-MM-dd');
-  }
+  return format(d, 'yyyy-MM-dd HH:mm:ss');
+};
 
+export const getDominantDateSeparator = (_transactions?: Transaction[]): '-' => {
+  return '-';
+};
+
+export const formatConsistentTxDate = (dateVal?: any, _preferredSeparator?: any): string => {
+  const d = parseToDate(dateVal) || new Date();
   return format(d, 'yyyy-MM-dd HH:mm:ss');
 };
 
@@ -586,6 +590,348 @@ export const isSpecificationMatch = (itemSpecRaw?: string, targetSpecRaw?: strin
   if (clean1.includes(clean2) || clean2.includes(clean1)) return true;
 
   return false;
+};
+
+export const isStockInType = (type?: string): boolean => {
+  if (!type) return false;
+  const s = String(type).trim().toLowerCase();
+  return s === 'stock_in' || s.startsWith('stock_in') || s === '進貨' || s === '入庫';
+};
+
+export const isAdjustType = (type?: string): boolean => {
+  if (!type) return false;
+  const s = String(type).trim().toLowerCase();
+  return s === 'adjust' || s === '盤點調整' || s === '盤點' || s === '調整';
+};
+
+export const isStockOutType = (type?: string): boolean => {
+  if (!type) return false;
+  if (isStockInType(type) || isAdjustType(type)) return false;
+  return true;
+};
+
+export const findMatchingStockIndex = (stockList: Stock[], tx: Transaction, productsList?: Product[]): number => {
+  if (!stockList || stockList.length === 0 || !tx) return -1;
+  let targetPid = (tx.product_id || '').trim();
+  const targetName = (tx.product_name || (tx as any).name || '').trim();
+  const targetSpec = (tx.specification || '').trim();
+  const targetLoc = (tx.location || '').trim();
+  const targetFloor = (tx.floor || '').trim();
+  const targetArea = (tx.area || '').trim();
+
+  // If targetPid is missing, attempt resolution by name from productsList or stockList
+  if (!targetPid && targetName) {
+    const p = productsList?.find(prod => prod.name === targetName || prod.product_id === targetName);
+    if (p) {
+      targetPid = p.product_id;
+    } else {
+      const s = stockList.find(stk => (stk as any).name === targetName);
+      if (s) targetPid = s.product_id;
+    }
+  }
+
+  // 1. Match by stock_id if available
+  if (tx.stock_id) {
+    const idx = stockList.findIndex(s => s.stock_id === tx.stock_id);
+    if (idx !== -1) return idx;
+  }
+
+  // 2. Strict match: product_id + location + floor + area + spec
+  if (targetLoc && targetPid) {
+    const idx = stockList.findIndex(s =>
+      (s.product_id || '').trim() === targetPid &&
+      (s.location || '').trim() === targetLoc &&
+      (s.floor || '').trim() === targetFloor &&
+      (s.area || '').trim() === targetArea &&
+      isSpecificationMatch(s.specification, targetSpec)
+    );
+    if (idx !== -1) return idx;
+
+    // Strict boundary: When location is specified, do NOT steal inventory from another warehouse/shelf/spec!
+    // Returning -1 triggers the dedicated reconstruction of the depleted stock item.
+    return -1;
+  }
+
+  // 3. Match by product_id + spec (only if location was unassigned)
+  if (targetSpec && targetPid) {
+    const specMatchIdx = stockList.findIndex(s =>
+      (s.product_id || '').trim() === targetPid &&
+      isSpecificationMatch(s.specification, targetSpec)
+    );
+    if (specMatchIdx !== -1) return specMatchIdx;
+  }
+
+  // 4. Fallback only if neither location nor specification was specified
+  if (targetPid && !targetSpec && !targetLoc) {
+    const pidMatchIdx = stockList.findIndex(s => (s.product_id || '').trim() === targetPid);
+    if (pidMatchIdx !== -1) return pidMatchIdx;
+  }
+
+  return -1;
+};
+
+export const revertTransactionStockEffect = async (
+  currentStock: Stock[],
+  tx: Transaction,
+  productsList?: Product[]
+): Promise<Stock[]> => {
+  let updatedStock = [...currentStock];
+  const qty = Math.abs(Number(tx.quantity) || 0);
+
+  if (isStockInType(tx.type)) {
+    // 進貨被刪除：庫存應扣減
+    const idx = findMatchingStockIndex(updatedStock, tx, productsList);
+    if (idx !== -1) {
+      const newQty = Number(updatedStock[idx].quantity || 0) - qty;
+      if (newQty <= 0) {
+        const removedStockId = updatedStock[idx].stock_id;
+        updatedStock.splice(idx, 1);
+        await dbStock.removeItem(removedStockId);
+      } else {
+        updatedStock[idx] = {
+          ...updatedStock[idx],
+          quantity: newQty,
+          last_update: new Date().toISOString()
+        };
+        await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
+      }
+    }
+  } else if (isStockOutType(tx.type)) {
+    // 出貨被刪除（含網路訂單出貨、一般出貨）：庫存應加回
+    const idx = findMatchingStockIndex(updatedStock, tx, productsList);
+    if (idx !== -1) {
+      updatedStock[idx] = {
+        ...updatedStock[idx],
+        quantity: Number(updatedStock[idx].quantity || 0) + qty,
+        last_update: new Date().toISOString()
+      };
+      await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
+    } else {
+      // 庫存先前扣至 0 已被移除，自動重建庫存項目並填入完整規格、倉位與商品資訊
+      let resolvedPid = (tx.product_id || '').trim();
+      let resolvedName = (tx.product_name || (tx as any).name || '').trim();
+      let resolvedSpec = (tx.specification || '').trim();
+
+      const matchedProd = productsList ? (
+        (resolvedPid ? productsList.find(p => p.product_id === resolvedPid) : null) ||
+        (resolvedName ? productsList.find(p => p.name === resolvedName || p.product_id === resolvedName) : null)
+      ) : null;
+
+      if (matchedProd) {
+        if (!resolvedPid) resolvedPid = matchedProd.product_id;
+        if (!resolvedName) resolvedName = matchedProd.name;
+        if (!resolvedSpec && matchedProd.specification) resolvedSpec = matchedProd.specification;
+      }
+
+      const newS: Stock = {
+        stock_id: tx.stock_id || `STK_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        product_id: resolvedPid,
+        name: resolvedName,
+        location: (tx.location || '').trim() || '倉庫',
+        floor: (tx.floor || '').trim() || '1F',
+        area: (tx.area || '').trim() || 'A區',
+        quantity: qty,
+        expiry_date: tx.expiry_date || '',
+        specification: resolvedSpec,
+        last_update: new Date().toISOString()
+      };
+      updatedStock.push(newS);
+      await dbStock.setItem(newS.stock_id, newS);
+    }
+  } else if (isAdjustType(tx.type)) {
+    // 盤點調整被刪除：反向抵銷 delta
+    const adj = formatAdjustQuantity(tx);
+    const delta = adj.delta; // e.g. +2 or -3
+    const idx = findMatchingStockIndex(updatedStock, tx, productsList);
+    if (idx !== -1) {
+      const newQty = Number(updatedStock[idx].quantity || 0) - delta;
+      if (newQty <= 0) {
+        const removedStockId = updatedStock[idx].stock_id;
+        updatedStock.splice(idx, 1);
+        await dbStock.removeItem(removedStockId);
+      } else {
+        updatedStock[idx] = {
+          ...updatedStock[idx],
+          quantity: newQty,
+          last_update: new Date().toISOString()
+        };
+        await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
+      }
+    } else if (delta < 0) {
+      // 原先盤減至0，刪除盤減紀錄時自動重建加回
+      let resolvedPid = (tx.product_id || '').trim();
+      let resolvedName = (tx.product_name || (tx as any).name || '').trim();
+      let resolvedSpec = (tx.specification || '').trim();
+
+      const matchedProd = productsList ? (
+        (resolvedPid ? productsList.find(p => p.product_id === resolvedPid) : null) ||
+        (resolvedName ? productsList.find(p => p.name === resolvedName || p.product_id === resolvedName) : null)
+      ) : null;
+
+      if (matchedProd) {
+        if (!resolvedPid) resolvedPid = matchedProd.product_id;
+        if (!resolvedName) resolvedName = matchedProd.name;
+        if (!resolvedSpec && matchedProd.specification) resolvedSpec = matchedProd.specification;
+      }
+
+      const newS: Stock = {
+        stock_id: tx.stock_id || `STK_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        product_id: resolvedPid,
+        name: resolvedName,
+        location: (tx.location || '').trim() || '倉庫',
+        floor: (tx.floor || '').trim() || '1F',
+        area: (tx.area || '').trim() || 'A區',
+        quantity: -delta,
+        expiry_date: tx.expiry_date || '',
+        specification: resolvedSpec,
+        last_update: new Date().toISOString()
+      };
+      updatedStock.push(newS);
+      await dbStock.setItem(newS.stock_id, newS);
+    }
+  }
+
+  return updatedStock;
+};
+
+export const applyTransactionStockEffect = async (
+  currentStock: Stock[],
+  newTx: Transaction,
+  productsList?: Product[]
+): Promise<Stock[]> => {
+  let updatedStock = [...currentStock];
+  const qty = Math.abs(Number(newTx.quantity) || 0);
+
+  if (isStockInType(newTx.type)) {
+    const idx = findMatchingStockIndex(updatedStock, newTx, productsList);
+    if (idx !== -1) {
+      updatedStock[idx] = {
+        ...updatedStock[idx],
+        quantity: Number(updatedStock[idx].quantity || 0) + qty,
+        last_update: new Date().toISOString()
+      };
+      await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
+    } else {
+      let resolvedPid = (newTx.product_id || '').trim();
+      let resolvedName = (newTx.product_name || (newTx as any).name || '').trim();
+      let resolvedSpec = (newTx.specification || '').trim();
+
+      const matchedProd = productsList ? (
+        (resolvedPid ? productsList.find(p => p.product_id === resolvedPid) : null) ||
+        (resolvedName ? productsList.find(p => p.name === resolvedName || p.product_id === resolvedName) : null)
+      ) : null;
+
+      if (matchedProd) {
+        if (!resolvedPid) resolvedPid = matchedProd.product_id;
+        if (!resolvedName) resolvedName = matchedProd.name;
+        if (!resolvedSpec && matchedProd.specification) resolvedSpec = matchedProd.specification;
+      }
+
+      const newS: Stock = {
+        stock_id: newTx.stock_id || `STK_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        product_id: resolvedPid,
+        name: resolvedName,
+        location: (newTx.location || '').trim() || '倉庫',
+        floor: (newTx.floor || '').trim() || '1F',
+        area: (newTx.area || '').trim() || 'A區',
+        quantity: qty,
+        expiry_date: newTx.expiry_date || '',
+        specification: resolvedSpec,
+        last_update: new Date().toISOString()
+      };
+      updatedStock.push(newS);
+      await dbStock.setItem(newS.stock_id, newS);
+    }
+  } else if (isStockOutType(newTx.type)) {
+    const idx = findMatchingStockIndex(updatedStock, newTx, productsList);
+    if (idx !== -1) {
+      const newQty = Number(updatedStock[idx].quantity || 0) - qty;
+      if (newQty <= 0) {
+        const removedStockId = updatedStock[idx].stock_id;
+        updatedStock.splice(idx, 1);
+        await dbStock.removeItem(removedStockId);
+      } else {
+        updatedStock[idx] = {
+          ...updatedStock[idx],
+          quantity: newQty,
+          last_update: new Date().toISOString()
+        };
+        await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
+      }
+    } else {
+      let resolvedPid = (newTx.product_id || '').trim();
+      let resolvedName = (newTx.product_name || (newTx as any).name || '').trim();
+      let resolvedSpec = (newTx.specification || '').trim();
+
+      const matchedProd = productsList ? (
+        (resolvedPid ? productsList.find(p => p.product_id === resolvedPid) : null) ||
+        (resolvedName ? productsList.find(p => p.name === resolvedName || p.product_id === resolvedName) : null)
+      ) : null;
+
+      if (matchedProd) {
+        if (!resolvedPid) resolvedPid = matchedProd.product_id;
+        if (!resolvedName) resolvedName = matchedProd.name;
+        if (!resolvedSpec && matchedProd.specification) resolvedSpec = matchedProd.specification;
+      }
+
+      const newS: Stock = {
+        stock_id: newTx.stock_id || `STK_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        product_id: resolvedPid,
+        name: resolvedName,
+        location: (newTx.location || '').trim() || '倉庫',
+        floor: (newTx.floor || '').trim() || '1F',
+        area: (newTx.area || '').trim() || 'A區',
+        quantity: -qty,
+        expiry_date: newTx.expiry_date || '',
+        specification: resolvedSpec,
+        last_update: new Date().toISOString()
+      };
+      updatedStock.push(newS);
+      await dbStock.setItem(newS.stock_id, newS);
+    }
+  } else if (isAdjustType(newTx.type)) {
+    const idx = findMatchingStockIndex(updatedStock, newTx, productsList);
+    if (idx !== -1) {
+      updatedStock[idx] = {
+        ...updatedStock[idx],
+        quantity: qty,
+        last_update: new Date().toISOString()
+      };
+      await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
+    } else {
+      let resolvedPid = (newTx.product_id || '').trim();
+      let resolvedName = (newTx.product_name || (newTx as any).name || '').trim();
+      let resolvedSpec = (newTx.specification || '').trim();
+
+      const matchedProd = productsList ? (
+        (resolvedPid ? productsList.find(p => p.product_id === resolvedPid) : null) ||
+        (resolvedName ? productsList.find(p => p.name === resolvedName || p.product_id === resolvedName) : null)
+      ) : null;
+
+      if (matchedProd) {
+        if (!resolvedPid) resolvedPid = matchedProd.product_id;
+        if (!resolvedName) resolvedName = matchedProd.name;
+        if (!resolvedSpec && matchedProd.specification) resolvedSpec = matchedProd.specification;
+      }
+
+      const newS: Stock = {
+        stock_id: newTx.stock_id || `STK_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        product_id: resolvedPid,
+        name: resolvedName,
+        location: (newTx.location || '').trim() || '倉庫',
+        floor: (newTx.floor || '').trim() || '1F',
+        area: (newTx.area || '').trim() || 'A區',
+        quantity: qty,
+        expiry_date: newTx.expiry_date || '',
+        specification: resolvedSpec,
+        last_update: new Date().toISOString()
+      };
+      updatedStock.push(newS);
+      await dbStock.setItem(newS.stock_id, newS);
+    }
+  }
+
+  return updatedStock;
 };
 
 export const getResolvedPoItems = (
@@ -1096,6 +1442,7 @@ export const useStore = create<AppState>((set, get) => ({
         const newTx: Transaction = {
             id: targetUniqueId,
             transaction_id: targetTxId,
+            stock_id: existingIdx !== -1 ? updatedStock[existingIdx].stock_id : (updatedStock[updatedStock.length - 1]?.stock_id || updatedPayload.stock_id),
             po_id: updatedPayload.po_id || '',
             online_order_id: updatedPayload.online_order_id || updatedPayload.order_id || '',
             batch_id: updatedPayload.batch_id || updatedPayload.batch_tx_id || '',
@@ -1113,7 +1460,7 @@ export const useStore = create<AppState>((set, get) => ({
             price: Number(updatedPayload.price) || 0,
             vendor_id: updatedPayload.vendor_id || '',
             invoice_image_url: updatedPayload.invoice_image_url || '',
-            date: updatedPayload.date || format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
+            date: formatConsistentTxDate(updatedPayload.date, getDominantDateSeparator(transactions)),
             note: updatedPayload.note || '',
             operator: get().operator
         };
@@ -1137,7 +1484,9 @@ export const useStore = create<AppState>((set, get) => ({
         const existingIdx = stock.findIndex(s => s.stock_id === updatedPayload.stock_id);
 
         let updatedStock = [...stock];
+        let originalStockId = updatedPayload.stock_id;
         if (existingIdx !== -1) {
+            originalStockId = updatedStock[existingIdx].stock_id;
             const currentQty = updatedStock[existingIdx].quantity;
             const deduct = Number(updatedPayload.quantity);
             if (currentQty <= deduct) {
@@ -1157,6 +1506,7 @@ export const useStore = create<AppState>((set, get) => ({
         const newTx: Transaction = {
             id: targetUniqueId,
             transaction_id: targetTxId,
+            stock_id: originalStockId,
             online_order_id: updatedPayload.online_order_id || updatedPayload.order_id || '',
             batch_id: updatedPayload.batch_id || updatedPayload.batch_tx_id || '',
             batch_tx_id: updatedPayload.batch_tx_id || updatedPayload.batch_id || '',
@@ -1172,7 +1522,7 @@ export const useStore = create<AppState>((set, get) => ({
             cost_price: product?.cost_price || 0,
             price: Number(updatedPayload.price) || 0,
             vendor_id: product?.vendor_id || '',
-            date: updatedPayload.date || format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
+            date: formatConsistentTxDate(updatedPayload.date, getDominantDateSeparator(transactions)),
             note: updatedPayload.note || '',
             operator: get().operator
         };
@@ -1196,7 +1546,9 @@ export const useStore = create<AppState>((set, get) => ({
         const existingIdx = stock.findIndex(s => s.stock_id === updatedPayload.stock_id);
 
         let updatedStock = [...stock];
+        let originalStockId = updatedPayload.stock_id;
         if (existingIdx !== -1) {
+            originalStockId = updatedStock[existingIdx].stock_id;
             updatedStock[existingIdx] = {
                 ...updatedStock[existingIdx],
                 quantity: Number(updatedPayload.quantity),
@@ -1205,7 +1557,7 @@ export const useStore = create<AppState>((set, get) => ({
             await dbStock.setItem(updatedStock[existingIdx].stock_id, updatedStock[existingIdx]);
         } else {
             const newS: Stock = {
-                stock_id: `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
+                stock_id: updatedPayload.stock_id || `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
                 product_id: updatedPayload.product_id,
                 location: updatedPayload.location || '倉庫',
                 floor: updatedPayload.floor || '1F',
@@ -1214,6 +1566,7 @@ export const useStore = create<AppState>((set, get) => ({
                 specification: updatedPayload.specification || '',
                 last_update: new Date().toISOString()
             };
+            originalStockId = newS.stock_id;
             updatedStock.push(newS);
             await dbStock.setItem(newS.stock_id, newS);
         }
@@ -1221,6 +1574,7 @@ export const useStore = create<AppState>((set, get) => ({
         const newTx: Transaction = {
             id: targetUniqueId,
             transaction_id: targetTxId,
+            stock_id: originalStockId,
             online_order_id: updatedPayload.online_order_id || updatedPayload.order_id || '',
             platform: updatedPayload.platform || (updatedPayload.type && !['stock_in', 'stock_out', 'adjust'].includes(updatedPayload.type) ? updatedPayload.type.replace(/^stock_out\s*/, '') : '') || '',
             product_id: updatedPayload.product_id || '',
@@ -1236,7 +1590,7 @@ export const useStore = create<AppState>((set, get) => ({
             cost_price: product?.cost_price || 0,
             price: Number(updatedPayload.price) || 0,
             vendor_id: product?.vendor_id || '',
-            date: updatedPayload.date || format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
+            date: formatConsistentTxDate(updatedPayload.date, getDominantDateSeparator(transactions)),
             note: updatedPayload.note || '',
             operator: get().operator
         };
@@ -1535,12 +1889,7 @@ export const useStore = create<AppState>((set, get) => ({
           if (cleanDate) {
             const parsed = parseToDate(cleanDate);
             if (parsed) {
-              const hasTime = /(?:\d{1,2}:\d{1,2})|T|Z|上午|下午|AM|PM/i.test(cleanDate);
-              if (!hasTime && /^\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}$/.test(cleanDate)) {
-                cleanDate = format(parsed, 'yyyy-MM-dd');
-              } else {
-                cleanDate = format(parsed, 'yyyy-MM-dd HH:mm:ss');
-              }
+              cleanDate = format(parsed, 'yyyy-MM-dd HH:mm:ss');
             }
           }
 
@@ -1933,6 +2282,7 @@ export const useStore = create<AppState>((set, get) => ({
         }
         return {
           ...t,
+          date: formatConsistentTxDate(t.date),
           cost_price: cp,
           price: Number(t.price) || 0,
           quantity: Number(t.quantity) || 0
@@ -1961,87 +2311,50 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   deleteTransaction: async (targetId: string) => {
-    const { stock, transactions } = get();
+    const { stock, transactions, products } = get();
     // Match by item unique ID first, or fall back to transaction_id
     const tx = transactions.find(t => t.id === targetId) || transactions.find(t => t.transaction_id === targetId);
     if (!tx) return;
 
-    let updatedStock = [...stock];
-
-    if (tx.type === 'stock_in') {
-      const idx = updatedStock.findIndex(s =>
-        s.product_id === tx.product_id &&
-        (s.location || '') === (tx.location || '') &&
-        (s.floor || '') === (tx.floor || '') &&
-        (s.area || '') === (tx.area || '') &&
-        (s.specification || '') === (tx.specification || '')
-      );
-      if (idx !== -1) {
-        const newQty = updatedStock[idx].quantity - Number(tx.quantity);
-        if (newQty <= 0) {
-          const removedStockId = updatedStock[idx].stock_id;
-          updatedStock.splice(idx, 1);
-          await dbStock.removeItem(removedStockId);
-        } else {
-          updatedStock[idx] = {
-            ...updatedStock[idx],
-            quantity: newQty,
-            last_update: new Date().toISOString()
-          };
-          await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
-        }
-      }
-    } else if (tx.type === 'stock_out') {
-      const idx = updatedStock.findIndex(s =>
-        s.product_id === tx.product_id &&
-        (s.location || '') === (tx.location || '') &&
-        (s.floor || '') === (tx.floor || '') &&
-        (s.area || '') === (tx.area || '') &&
-        (s.specification || '') === (tx.specification || '')
-      );
-      if (idx !== -1) {
-        updatedStock[idx] = {
-          ...updatedStock[idx],
-          quantity: updatedStock[idx].quantity + Number(tx.quantity),
-          last_update: new Date().toISOString()
-        };
-        await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
-      } else {
-        const newS: Stock = {
-          stock_id: `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
-          product_id: tx.product_id,
-          location: tx.location || '倉庫',
-          floor: tx.floor || '1F',
-          area: tx.area || 'A區',
-          quantity: Number(tx.quantity),
-          specification: tx.specification || '',
-          last_update: new Date().toISOString()
-        };
-        updatedStock.push(newS);
-        await dbStock.setItem(newS.stock_id, newS);
-      }
-    }
+    const updatedStock = await revertTransactionStockEffect(stock, tx, products);
 
     // Filter out ONLY the single matched item
-    const updatedTx = transactions.filter(t => t.id ? t.id !== tx.id : t.transaction_id !== targetId);
+    const updatedTx = transactions.filter(t => {
+      if (tx.id && t.id) {
+        return t.id !== tx.id;
+      }
+      if (t === tx) return false;
+      if (!t.id && !tx.id && t.transaction_id === targetId) return false;
+      return true;
+    });
+
     if (tx.id) {
       await dbTransactions.removeItem(tx.id);
-    } else {
+    }
+    if (tx.transaction_id && !updatedTx.some(t => t.transaction_id === tx.transaction_id)) {
       await dbTransactions.removeItem(tx.transaction_id);
     }
 
     set({ stock: updatedStock, transactions: updatedTx });
-    get().showToast('✅ 已成功刪除該品項交易紀錄，並已更新庫存！');
+    get().showToast('✅ 已成功刪除該品項交易紀錄，並已還原對應庫存！');
 
     // Sync to cloud spreadsheet if configured
     if (get().gasApiUrl) {
-      await get().overwriteCloudTransactions();
-      await get().overwriteCloudStock();
+      try {
+        await get().overwriteCloudTransactions();
+      } catch (e) {
+        console.error('overwriteCloudTransactions error:', e);
+      }
+      try {
+        await get().overwriteCloudStock();
+      } catch (e) {
+        console.error('overwriteCloudStock error:', e);
+      }
     }
   },
 
   deleteTransactionGroup: async (groupIdOrIds: string | string[]) => {
-    const { stock, transactions } = get();
+    const { stock, transactions, products } = get();
     let groupTxs: Transaction[] = [];
 
     if (Array.isArray(groupIdOrIds)) {
@@ -2068,61 +2381,8 @@ export const useStore = create<AppState>((set, get) => ({
     if (groupTxs.length === 0) return;
 
     let updatedStock = [...stock];
-
     for (const tx of groupTxs) {
-      if (tx.type === 'stock_in') {
-        const idx = updatedStock.findIndex(s =>
-          s.product_id === tx.product_id &&
-          (s.location || '') === (tx.location || '') &&
-          (s.floor || '') === (tx.floor || '') &&
-          (s.area || '') === (tx.area || '') &&
-          (s.specification || '') === (tx.specification || '')
-        );
-        if (idx !== -1) {
-          const newQty = updatedStock[idx].quantity - Number(tx.quantity);
-          if (newQty <= 0) {
-            const removedStockId = updatedStock[idx].stock_id;
-            updatedStock.splice(idx, 1);
-            await dbStock.removeItem(removedStockId);
-          } else {
-            updatedStock[idx] = {
-              ...updatedStock[idx],
-              quantity: newQty,
-              last_update: new Date().toISOString()
-            };
-            await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
-          }
-        }
-      } else if (tx.type === 'stock_out') {
-        const idx = updatedStock.findIndex(s =>
-          s.product_id === tx.product_id &&
-          (s.location || '') === (tx.location || '') &&
-          (s.floor || '') === (tx.floor || '') &&
-          (s.area || '') === (tx.area || '') &&
-          (s.specification || '') === (tx.specification || '')
-        );
-        if (idx !== -1) {
-          updatedStock[idx] = {
-            ...updatedStock[idx],
-            quantity: updatedStock[idx].quantity + Number(tx.quantity),
-            last_update: new Date().toISOString()
-          };
-          await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
-        } else {
-          const newS: Stock = {
-            stock_id: `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
-            product_id: tx.product_id,
-            location: tx.location || '倉庫',
-            floor: tx.floor || '1F',
-            area: tx.area || 'A區',
-            quantity: Number(tx.quantity),
-            specification: tx.specification || '',
-            last_update: new Date().toISOString()
-          };
-          updatedStock.push(newS);
-          await dbStock.setItem(newS.stock_id, newS);
-        }
-      }
+      updatedStock = await revertTransactionStockEffect(updatedStock, tx, products);
       if (tx.id) {
         await dbTransactions.removeItem(tx.id);
       }
@@ -2133,181 +2393,48 @@ export const useStore = create<AppState>((set, get) => ({
 
     const removedIdSet = new Set(groupTxs.map(t => t.id || t.transaction_id));
     const removedTxIdSet = new Set(groupTxs.map(t => t.transaction_id));
-    const updatedTx = transactions.filter(t => !removedIdSet.has(t.id || t.transaction_id) && !removedTxIdSet.has(t.transaction_id));
+    const updatedTx = transactions.filter(t => 
+      !groupTxs.includes(t) &&
+      !removedIdSet.has(t.id || t.transaction_id) && 
+      !removedTxIdSet.has(t.transaction_id)
+    );
 
     set({ stock: updatedStock, transactions: updatedTx });
     get().showToast('✅ 已成功刪除整批交易紀錄，並已還原對應庫存！');
 
     if (get().gasApiUrl) {
-      await get().overwriteCloudTransactions();
-      await get().overwriteCloudStock();
+      try {
+        await get().overwriteCloudTransactions();
+      } catch (e) {
+        console.error('overwriteCloudTransactions error:', e);
+      }
+      try {
+        await get().overwriteCloudStock();
+      } catch (e) {
+        console.error('overwriteCloudStock error:', e);
+      }
     }
   },
 
   editTransaction: async (targetId: string, updatedFields: Partial<Transaction>) => {
-    const { stock, transactions } = get();
+    const { stock, transactions, products } = get();
     const oldTx = transactions.find(t => t.id === targetId) || transactions.find(t => t.transaction_id === targetId);
     if (!oldTx) return;
 
-    const newTx = { ...oldTx, ...updatedFields } as Transaction;
+    const dominantSep = getDominantDateSeparator(transactions);
+    const cleanedFields = { ...updatedFields };
+    if (cleanedFields.date) {
+      cleanedFields.date = formatConsistentTxDate(cleanedFields.date, dominantSep);
+    }
+
+    const newTx = { ...oldTx, ...cleanedFields } as Transaction;
 
     // We first revert the oldTx stock effect, then apply the newTx stock effect
-    let updatedStock = [...stock];
-
-    // 1. Revert Old Transaction's Effect on Stock
-    if (oldTx.type === 'stock_in') {
-      const idx = updatedStock.findIndex(s =>
-        s.product_id === oldTx.product_id &&
-        s.location === oldTx.location &&
-        s.floor === oldTx.floor &&
-        s.area === oldTx.area &&
-        (s.specification || '') === (oldTx.specification || '')
-      );
-      if (idx !== -1) {
-        const prevQty = updatedStock[idx].quantity - Number(oldTx.quantity);
-        if (prevQty <= 0) {
-          const removedStockId = updatedStock[idx].stock_id;
-          updatedStock.splice(idx, 1);
-          await dbStock.removeItem(removedStockId);
-        } else {
-          updatedStock[idx] = {
-            ...updatedStock[idx],
-            quantity: prevQty,
-            last_update: new Date().toISOString()
-          };
-          await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
-        }
-      }
-    } else if (oldTx.type === 'stock_out') {
-      const idx = updatedStock.findIndex(s =>
-        s.product_id === oldTx.product_id &&
-        s.location === oldTx.location &&
-        s.floor === oldTx.floor &&
-        s.area === oldTx.area &&
-        (s.specification || '') === (oldTx.specification || '')
-      );
-      if (idx !== -1) {
-        updatedStock[idx] = {
-          ...updatedStock[idx],
-          quantity: updatedStock[idx].quantity + Number(oldTx.quantity),
-          last_update: new Date().toISOString()
-        };
-        await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
-      } else {
-        const newS: Stock = {
-          stock_id: `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
-          product_id: oldTx.product_id,
-          location: oldTx.location,
-          floor: oldTx.floor,
-          area: oldTx.area,
-          quantity: Number(oldTx.quantity),
-          specification: oldTx.specification || '',
-          last_update: new Date().toISOString()
-        };
-        updatedStock.push(newS);
-        await dbStock.setItem(newS.stock_id, newS);
-      }
-    }
-
-    // 2. Apply New Transaction's Effect on Stock
-    if (newTx.type === 'stock_in') {
-      const idx = updatedStock.findIndex(s =>
-        s.product_id === newTx.product_id &&
-        s.location === newTx.location &&
-        s.floor === newTx.floor &&
-        s.area === newTx.area &&
-        (s.specification || '') === (newTx.specification || '')
-      );
-      if (idx !== -1) {
-        updatedStock[idx] = {
-          ...updatedStock[idx],
-          quantity: updatedStock[idx].quantity + Number(newTx.quantity),
-          last_update: new Date().toISOString()
-        };
-        await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
-      } else {
-        const newS: Stock = {
-          stock_id: `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
-          product_id: newTx.product_id,
-          location: newTx.location,
-          floor: newTx.floor,
-          area: newTx.area,
-          quantity: Number(newTx.quantity),
-          specification: newTx.specification || '',
-          last_update: new Date().toISOString()
-        };
-        updatedStock.push(newS);
-        await dbStock.setItem(newS.stock_id, newS);
-      }
-    } else if (newTx.type === 'stock_out') {
-      const idx = updatedStock.findIndex(s =>
-        s.product_id === newTx.product_id &&
-        s.location === newTx.location &&
-        s.floor === newTx.floor &&
-        s.area === newTx.area &&
-        (s.specification || '') === (newTx.specification || '')
-      );
-      if (idx !== -1) {
-        const newQty = updatedStock[idx].quantity - Number(newTx.quantity);
-        if (newQty <= 0) {
-          const removedStockId = updatedStock[idx].stock_id;
-          updatedStock.splice(idx, 1);
-          await dbStock.removeItem(removedStockId);
-        } else {
-          updatedStock[idx] = {
-            ...updatedStock[idx],
-            quantity: newQty,
-            last_update: new Date().toISOString()
-          };
-          await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
-        }
-      } else {
-        const newS: Stock = {
-          stock_id: `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
-          product_id: newTx.product_id,
-          location: newTx.location,
-          floor: newTx.floor,
-          area: newTx.area,
-          quantity: -Number(newTx.quantity),
-          specification: newTx.specification || '',
-          last_update: new Date().toISOString()
-        };
-        updatedStock.push(newS);
-        await dbStock.setItem(newS.stock_id, newS);
-      }
-    } else if (newTx.type === 'adjust') {
-      const idx = updatedStock.findIndex(s =>
-        s.product_id === newTx.product_id &&
-        s.location === newTx.location &&
-        s.floor === newTx.floor &&
-        s.area === newTx.area &&
-        (s.specification || '') === (newTx.specification || '')
-      );
-      if (idx !== -1) {
-        updatedStock[idx] = {
-          ...updatedStock[idx],
-          quantity: Number(newTx.quantity),
-          last_update: new Date().toISOString()
-        };
-        await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
-      } else {
-        const newS: Stock = {
-          stock_id: `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
-          product_id: newTx.product_id,
-          location: newTx.location,
-          floor: newTx.floor,
-          area: newTx.area,
-          quantity: Number(newTx.quantity),
-          specification: newTx.specification || '',
-          last_update: new Date().toISOString()
-        };
-        updatedStock.push(newS);
-        await dbStock.setItem(newS.stock_id, newS);
-      }
-    }
+    let updatedStock = await revertTransactionStockEffect(stock, oldTx, products);
+    updatedStock = await applyTransactionStockEffect(updatedStock, newTx, products);
 
     const updatedTx = transactions
-      .map(t => (t.id ? t.id === oldTx.id : t.transaction_id === targetId) ? newTx : t)
+      .map(t => (t.id ? t.id === oldTx.id : (t === oldTx || t.transaction_id === targetId)) ? newTx : t)
       .sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date));
     await dbTransactions.setItem(newTx.id || newTx.transaction_id, newTx);
 
@@ -2316,8 +2443,16 @@ export const useStore = create<AppState>((set, get) => ({
 
     // Sync to cloud spreadsheet if configured
     if (get().gasApiUrl) {
-      await get().overwriteCloudTransactions();
-      await get().overwriteCloudStock();
+      try {
+        await get().overwriteCloudTransactions();
+      } catch (e) {
+        console.error('overwriteCloudTransactions error:', e);
+      }
+      try {
+        await get().overwriteCloudStock();
+      } catch (e) {
+        console.error('overwriteCloudStock error:', e);
+      }
     }
   },
 
@@ -2519,7 +2654,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   batchStockInFromInvoice: async (params) => {
     const { items, po_id, invoice_number, invoice_image_url, is_close_remaining_po } = params;
-    const nowStr = format(new Date(), 'yyyy-MM-dd HH:mm:ss');
+    const nowStr = formatConsistentTxDate(new Date(), getDominantDateSeparator(get().transactions));
     const { products, purchaseOrders, enqueueAction, updatePurchaseOrder, showToast } = get();
 
     // If linked to a PO, use PO ID as the transaction_id!
