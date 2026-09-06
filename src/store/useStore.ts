@@ -453,6 +453,201 @@ const normalizeAndFillOnlineOrders = (rawItems: any[], _products?: Product[]): O
   return result;
 };
 
+/**
+ * Generates an exact identity fingerprint for an order item based on 4 dimensions:
+ * 1. 訂單編號 (order_id)
+ * 2. 商品名稱 (product_name)
+ * 3. 商品編號 (product_id)
+ * 4. 商品數量 (quantity)
+ */
+export const buildOrderItemFingerprint = (
+  orderId: string | number,
+  productId: string | number,
+  productName: string,
+  quantity: number | string
+): string => {
+  const cleanOrderId = String(orderId || '').trim().toLowerCase();
+  const cleanProductId = String(productId || '').trim().toLowerCase();
+  const cleanProductName = String(productName || '').trim().toLowerCase();
+  const cleanQty = Number(quantity) || 0;
+  return `${cleanOrderId}:::${cleanProductId}:::${cleanProductName}:::${cleanQty}`;
+};
+
+export interface OrderDuplicateCheckResult {
+  orderId: string;
+  countInSheet: number;
+  isDuplicateInSheet: boolean; // 試算表內部有完全相同之重複商品行 (訂單編號、商品名稱、商品編號、數量皆相同)
+  wasAlreadyInLocal: boolean;  // 與現有訂單之商品完全相符 (訂單編號、商品名稱、商品編號、數量皆相同)
+  wasAlreadyShipped: boolean;  // 歷史出貨紀錄中已存在相同商品 (訂單編號、商品名稱、商品編號、數量皆相同)
+  hasNewItems: boolean;        // 含有新商品品項或數量不同之項目
+  platform?: string;
+  customerName?: string;
+  duplicateItemDescriptions: string[]; // 詳細重複品項清單，例：「商品名稱 (編號: P01, 數量: 2)」
+}
+
+export interface OrderFetchSummary {
+  fetchedAt: string;
+  totalRawRows: number;
+  totalUniqueOrders: number;
+  newOrderCount: number;
+  duplicateOrderCount: number;
+  sheetDuplicateRowCount: number;
+  newOrderIds: string[];
+  duplicateOrderIds: string[];
+  alreadyShippedOrderIds: string[];
+  sheetDuplicateOrderIds: string[];
+  details: OrderDuplicateCheckResult[];
+}
+
+export const analyzeOnlineOrdersDuplication = (
+  rawIncomingOrders: any[],
+  resolvedIncomingOrders: OnlineOrder[],
+  currentLocalOrders: OnlineOrder[],
+  transactions: Transaction[]
+): OrderFetchSummary => {
+  // 1. Build fingerprint set for local existing orders
+  const localItemFingerprints = new Set<string>();
+  const localOrderItemsMap = new Map<string, string[]>();
+  for (const lo of currentLocalOrders || []) {
+    const oid = String(lo.order_id || '').trim();
+    if (!oid) continue;
+    const fp = buildOrderItemFingerprint(lo.order_id, lo.product_id, lo.product_name, lo.quantity);
+    localItemFingerprints.add(fp);
+    const cleanOid = oid.toLowerCase();
+    if (!localOrderItemsMap.has(cleanOid)) {
+      localOrderItemsMap.set(cleanOid, []);
+    }
+    localOrderItemsMap.get(cleanOid)!.push(fp);
+  }
+
+  // 2. Build fingerprint set for completed shipped transactions
+  const shippedItemFingerprints = new Set<string>();
+  for (const t of transactions || []) {
+    const toid = String(t.online_order_id || '').trim();
+    if (!toid) continue;
+    const fp = buildOrderItemFingerprint(toid, t.product_id || '', t.product_name, t.quantity);
+    shippedItemFingerprints.add(fp);
+  }
+
+  // 3. Group incoming orders by order_id
+  const incomingMap = new Map<string, OnlineOrder[]>();
+  for (const item of resolvedIncomingOrders) {
+    const oid = String(item.order_id || '').trim();
+    if (!oid) continue;
+    if (!incomingMap.has(oid)) {
+      incomingMap.set(oid, []);
+    }
+    incomingMap.get(oid)!.push(item);
+  }
+
+  let sheetDuplicateRowCount = 0;
+  const sheetDuplicateOrderIds: string[] = [];
+  const duplicateOrderIds: string[] = [];
+  const newOrderIds: string[] = [];
+  const alreadyShippedOrderIds: string[] = [];
+  const details: OrderDuplicateCheckResult[] = [];
+
+  for (const [oid, items] of incomingMap.entries()) {
+    const cleanOid = oid.toLowerCase();
+    const seenItemFingerprintsInOrder = new Set<string>();
+    let isDuplicateInSheet = false;
+    const duplicateItemDescriptions: string[] = [];
+
+    // Step A: Check duplicates within the spreadsheet itself
+    // A duplicate occurs ONLY if another row in the same order has the EXACT same product_id, product_name, and quantity!
+    // If items have different product_id or product_name or quantity, they are distinct valid items in a multi-item order!
+    for (const it of items) {
+      const fp = buildOrderItemFingerprint(oid, it.product_id, it.product_name, it.quantity);
+      if (seenItemFingerprintsInOrder.has(fp)) {
+        isDuplicateInSheet = true;
+        sheetDuplicateRowCount++;
+        duplicateItemDescriptions.push(`試算表重複登錄相同品項：${it.product_name}${it.product_id ? ` (編號: ${it.product_id})` : ''} x ${it.quantity}`);
+      } else {
+        seenItemFingerprintsInOrder.add(fp);
+      }
+    }
+
+    if (isDuplicateInSheet) {
+      sheetDuplicateOrderIds.push(oid);
+    }
+
+    // Step B: Compare against existing local orders
+    // An order is considered "wasAlreadyInLocal" if local orders already contain this order AND all incoming items match existing local items
+    const localFps = localOrderItemsMap.get(cleanOid) || [];
+    const hasLocalOrder = localFps.length > 0;
+    let allIncomingItemsMatchLocal = hasLocalOrder && items.length > 0;
+    let hasAnyNewItemComparedToLocal = false;
+
+    for (const it of items) {
+      const fp = buildOrderItemFingerprint(oid, it.product_id, it.product_name, it.quantity);
+      if (!localItemFingerprints.has(fp)) {
+        allIncomingItemsMatchLocal = false;
+        hasAnyNewItemComparedToLocal = true;
+      }
+    }
+
+    const wasAlreadyInLocal = hasLocalOrder && allIncomingItemsMatchLocal;
+
+    // Step C: Compare against shipped transactions
+    // Does any item in this order match a shipped transaction with identical order_id, product_id, product_name, and quantity?
+    let wasAlreadyShipped = false;
+    for (const it of items) {
+      const fp = buildOrderItemFingerprint(oid, it.product_id, it.product_name, it.quantity);
+      if (shippedItemFingerprints.has(fp)) {
+        wasAlreadyShipped = true;
+        duplicateItemDescriptions.push(`歷史已出貨商品：${it.product_name}${it.product_id ? ` (編號: ${it.product_id})` : ''} x ${it.quantity}`);
+      }
+    }
+
+    if (wasAlreadyShipped) {
+      alreadyShippedOrderIds.push(oid);
+    }
+
+    // Determine if this order should be flagged as duplicate:
+    // A duplicate order is defined strictly as:
+    // 1. It contains duplicate rows in the spreadsheet with identical item name, ID, and quantity (isDuplicateInSheet)
+    // 2. OR it was already shipped with identical item name, ID, and quantity in historical transactions (wasAlreadyShipped)
+    // NOTE: An order being already present on the local board from a prior fetch is NORMAL and must NEVER be treated as a duplicate!
+    const isDuplicate = isDuplicateInSheet || wasAlreadyShipped;
+
+    if (isDuplicate) {
+      duplicateOrderIds.push(oid);
+    }
+
+    // Track newly fetched orders (orders that were not present on local board before this fetch)
+    const isNewOrder = !hasLocalOrder;
+    if (isNewOrder) {
+      newOrderIds.push(oid);
+    }
+
+    details.push({
+      orderId: oid,
+      countInSheet: items.length,
+      isDuplicateInSheet,
+      wasAlreadyInLocal,
+      wasAlreadyShipped,
+      hasNewItems: hasAnyNewItemComparedToLocal,
+      platform: items[0]?.platform,
+      customerName: items[0]?.customer_name,
+      duplicateItemDescriptions
+    });
+  }
+
+  return {
+    fetchedAt: new Date().toISOString(),
+    totalRawRows: rawIncomingOrders.length,
+    totalUniqueOrders: incomingMap.size,
+    newOrderCount: newOrderIds.length,
+    duplicateOrderCount: duplicateOrderIds.length,
+    sheetDuplicateRowCount,
+    newOrderIds,
+    duplicateOrderIds,
+    alreadyShippedOrderIds,
+    sheetDuplicateOrderIds,
+    details
+  };
+};
+
 export const mergeAndProtectPurchaseOrders = (remotePOs: any[], currentLocalPOs: PurchaseOrder[]): PurchaseOrder[] => {
   const localPOMap = new Map<string, PurchaseOrder>();
   (currentLocalPOs || []).forEach(p => {
@@ -1105,6 +1300,7 @@ interface AppState {
   completeAndStockInAllRemainingPO: (poId: string) => Promise<void>;
   updateOnlineOrderStatus: (orderId: string, status: string, productId?: string) => Promise<boolean>;
   deleteOnlineOrder: (orderId: string) => Promise<boolean>;
+  deduplicateOnlineOrders: (targetOrderId?: string) => Promise<{ success: boolean; removedRowCount: number; affectedOrderCount: number }>;
   addProduct: (product: Omit<Product, 'created_at'>, isManual?: boolean) => Promise<void>;
   editProduct: (product: Product) => Promise<void>;
   deleteProduct: (productId: string) => Promise<void>;
@@ -1175,6 +1371,8 @@ interface AppState {
     setup: string;
   };
   setLastPath: (key: 'home' | 'products' | 'scan' | 'manage' | 'setup', path: string) => void;
+  orderFetchSummary: OrderFetchSummary | null;
+  clearOrderFetchSummary: () => void;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -1183,6 +1381,8 @@ export const useStore = create<AppState>((set, get) => ({
   vendors: [],
   transactions: [],
   onlineOrders: [],
+  orderFetchSummary: null,
+  clearOrderFetchSummary: () => set({ orderFetchSummary: null }),
   purchaseOrders: [],
   syncQueue: [],
   gasApiUrl: '',
@@ -1962,13 +2162,25 @@ export const useStore = create<AppState>((set, get) => ({
           const dO = await rO.json();
           const currentProducts = get().products;
           const resolvedO = normalizeAndFillOnlineOrders(dO || [], currentProducts);
+          const currentOrders = get().onlineOrders;
+          const currentTxs = (validT && validT.length > 0) ? validT : (get().transactions || []);
+
+          const summary = analyzeOnlineOrdersDuplication(
+            dO || [],
+            resolvedO,
+            currentOrders,
+            currentTxs
+          );
 
           await dbOnlineOrders.clear();
           for (let i = 0; i < resolvedO.length; i++) {
             const o = resolvedO[i];
             await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id || 'unlinked'}_${i}`, o);
           }
-          set({ onlineOrders: resolvedO });
+          set({ 
+            onlineOrders: resolvedO,
+            orderFetchSummary: summary
+          });
         }
       } catch (err) {
         console.warn("Failed to fetch online orders in fetchRemoteData, ignoring:", err);
@@ -2005,7 +2217,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   fetchOnlineOrders: async () => {
-    const { gasApiUrl, showToast } = get();
+    const { gasApiUrl, showToast, onlineOrders: currentOrders, transactions } = get();
     if (!gasApiUrl) {
       showToast("❌ 請先至設定頁面設定 Google Apps Script 網址！");
       return;
@@ -2018,13 +2230,31 @@ export const useStore = create<AppState>((set, get) => ({
         const currentProducts = get().products;
         const resolvedO = normalizeAndFillOnlineOrders(dO || [], currentProducts);
 
+        // Analyze duplicate order IDs against local orders, transactions, and sheet internals
+        const summary = analyzeOnlineOrdersDuplication(
+          dO || [],
+          resolvedO,
+          currentOrders,
+          transactions
+        );
+
         await dbOnlineOrders.clear();
         for (let i = 0; i < resolvedO.length; i++) {
           const o = resolvedO[i];
           await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id || 'unlinked'}_${i}`, o);
         }
-        set({ onlineOrders: resolvedO });
-        showToast(`✨ 成功讀取 ${resolvedO.length} 筆網路訂單資料！`);
+        set({ 
+          onlineOrders: resolvedO,
+          orderFetchSummary: summary
+        });
+
+        if (summary.duplicateOrderCount > 0) {
+          const shippedNote = summary.alreadyShippedOrderIds.length > 0 ? `，${summary.alreadyShippedOrderIds.length} 筆為歷史已出貨` : '';
+          const sheetDupNote = summary.sheetDuplicateRowCount > 0 ? `，${summary.sheetDuplicateRowCount} 行試算表內相同品項重複` : '';
+          showToast(`⚠️ 讀取完成！共 ${summary.totalUniqueOrders} 筆訂單，發現 ${summary.duplicateOrderCount} 筆重複或已出貨訂單${shippedNote}${sheetDupNote}。`);
+        } else {
+          showToast(`✨ 成功讀取 ${summary.totalUniqueOrders} 筆訂單！(商品名稱、編號與數量皆無重複)`);
+        }
       } else {
         throw new Error(`狀態碼: ${rO.status}`);
       }
@@ -2100,6 +2330,101 @@ export const useStore = create<AppState>((set, get) => ({
       console.error("Failed to delete online order on cloud:", err);
     }
     return true;
+  },
+
+  deduplicateOnlineOrders: async (targetOrderId?: string) => {
+    const { onlineOrders, transactions, gasApiUrl, showToast } = get();
+
+    // Track seen fingerprints for items:
+    // Fingerprint: order_id + product_id + product_name + quantity
+    const seenFingerprints = new Set<string>();
+    const deduplicatedOrders: OnlineOrder[] = [];
+    let removedRowCount = 0;
+    const affectedOrderIds = new Set<string>();
+
+    for (const order of onlineOrders) {
+      if (order.status === '已刪除' || order.order_status === '已刪除') {
+        deduplicatedOrders.push(order);
+        continue;
+      }
+
+      // If targetOrderId is provided and does not match, keep untouched
+      if (targetOrderId && order.order_id !== targetOrderId) {
+        deduplicatedOrders.push(order);
+        continue;
+      }
+
+      const oid = String(order.order_id || '').trim().toLowerCase();
+      const pid = String(order.product_id || '').trim().toLowerCase();
+      const pname = String(order.product_name || '').trim().toLowerCase();
+      const qty = Number(order.quantity) || 0;
+      const fp = `${oid}:::${pid}:::${pname}:::${qty}`;
+
+      if (seenFingerprints.has(fp)) {
+        // It's a duplicate identical row! Drop this duplicate row.
+        removedRowCount++;
+        affectedOrderIds.add(order.order_id);
+      } else {
+        seenFingerprints.add(fp);
+        deduplicatedOrders.push(order);
+      }
+    }
+
+    if (removedRowCount === 0) {
+      showToast("ℹ️ 目前沒有重複的商品品項行需要清理。");
+      return { success: true, removedRowCount: 0, affectedOrderCount: 0 };
+    }
+
+    // Update state
+    set({ onlineOrders: deduplicatedOrders });
+
+    // Save to IndexedDB
+    await dbOnlineOrders.clear();
+    for (let i = 0; i < deduplicatedOrders.length; i++) {
+      const o = deduplicatedOrders[i];
+      await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id || 'unlinked'}_${i}`, o);
+    }
+
+    // Re-run duplication analysis to update orderFetchSummary with deduplicated orders
+    const newSummary = analyzeOnlineOrdersDuplication(
+      deduplicatedOrders,
+      deduplicatedOrders,
+      [],
+      transactions
+    );
+    set({ orderFetchSummary: newSummary });
+
+    // Synchronize deletion with Google Spreadsheet via Google Apps Script (Option B)
+    let cloudDeletedCount = 0;
+    let cloudSyncSuccess = false;
+    if (gasApiUrl) {
+      try {
+        const response = await fetch(`${gasApiUrl}?action=deduplicateOnlineOrders`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ order_id: targetOrderId || '' })
+        });
+        if (response.ok) {
+          const resJson = await response.json().catch(() => null);
+          if (resJson && resJson.success) {
+            cloudSyncSuccess = true;
+            cloudDeletedCount = Number(resJson.deletedCount) || 0;
+          }
+        }
+      } catch (err) {
+        console.error("Failed to sync deduplication to Google Spreadsheet:", err);
+      }
+    }
+
+    if (gasApiUrl && cloudSyncSuccess) {
+      showToast(`✨ APP 與 Google 試算表已同步清理！共刪除試算表 ${cloudDeletedCount} 列重複資料，每項商品均已只保留一筆。`);
+    } else if (gasApiUrl) {
+      showToast(`✨ APP 本地已清理 ${removedRowCount} 筆重複資料。若試算表未同步，請至「設定與同步」重新複製部署最新 GAS 腳本。`);
+    } else {
+      showToast(`✨ 已成功清理 ${removedRowCount} 筆重複品項行（涉及 ${affectedOrderIds.size} 筆訂單），每項商品均已只保留一筆！`);
+    }
+
+    return { success: true, removedRowCount, affectedOrderCount: affectedOrderIds.size, cloudDeletedCount };
   },
 
   addProduct: async (product) => {

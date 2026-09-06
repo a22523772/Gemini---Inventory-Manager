@@ -913,6 +913,72 @@ export default function SetupGuide() {
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
 
+  if (action === 'deduplicateOnlineOrders') {
+    var orderSheet = ss.getSheetByName('網路訂單');
+    var deletedCount = 0;
+    if (orderSheet && orderSheet.getLastRow() > 1) {
+      var headers = orderSheet.getRange(1, 1, 1, orderSheet.getLastColumn()).getValues()[0];
+      
+      // 動態對應欄位索引（支援英文與中文欄位名稱）
+      var orderIdIdx = headers.indexOf('order_id');
+      if (orderIdIdx === -1) orderIdIdx = headers.indexOf('訂單編號');
+      if (orderIdIdx === -1) orderIdIdx = headers.indexOf('單號');
+
+      var productIdIdx = headers.indexOf('product_id');
+      if (productIdIdx === -1) productIdIdx = headers.indexOf('商品編號');
+      if (productIdIdx === -1) productIdIdx = headers.indexOf('商品ID');
+      if (productIdIdx === -1) productIdIdx = headers.indexOf('品項編號');
+
+      var productNameIdx = headers.indexOf('product_name');
+      if (productNameIdx === -1) productNameIdx = headers.indexOf('商品名稱');
+      if (productNameIdx === -1) productNameIdx = headers.indexOf('品名');
+      if (productNameIdx === -1) productNameIdx = headers.indexOf('商品');
+
+      var qtyIdx = headers.indexOf('quantity');
+      if (qtyIdx === -1) qtyIdx = headers.indexOf('數量');
+
+      var targetOrderId = data && data.order_id ? String(data.order_id).trim() : '';
+
+      var values = orderSheet.getDataRange().getValues();
+      var seenFingerprints = {};
+      var rowsToDelete = [];
+
+      // 由上至下檢索重複行（保留第一次出現的首筆，其餘標記刪除）
+      for (var i = 1; i < values.length; i++) {
+        var row = values[i];
+        var oid = orderIdIdx !== -1 ? String(row[orderIdIdx] || '').trim() : '';
+        if (!oid) continue;
+
+        // 若指定特定訂單，非該訂單者跳過
+        if (targetOrderId && oid !== targetOrderId) continue;
+
+        var pid = productIdIdx !== -1 ? String(row[productIdIdx] || '').trim().toLowerCase() : '';
+        var pname = productNameIdx !== -1 ? String(row[productNameIdx] || '').trim().toLowerCase() : '';
+        var pqty = qtyIdx !== -1 ? (Number(row[qtyIdx]) || 0) : 0;
+
+        var fp = oid.toLowerCase() + ':::' + pid + ':::' + pname + ':::' + pqty;
+
+        if (seenFingerprints[fp]) {
+          // 重複行，記錄 1-based 列號
+          rowsToDelete.push(i + 1);
+        } else {
+          seenFingerprints[fp] = true;
+        }
+      }
+
+      // 由下往上倒序刪除，確保列號（Row Index）不會偏移錯位
+      for (var d = rowsToDelete.length - 1; d >= 0; d--) {
+        orderSheet.deleteRow(rowsToDelete[d]);
+        deletedCount++;
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      deletedCount: deletedCount,
+      message: '成功清理試算表重複資料，共刪除 ' + deletedCount + ' 列（每項只留一筆）'
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
   if (action === 'addPurchaseOrder' || action === 'savePurchaseOrders' || action === 'editPurchaseOrder') {
     var poSheet = ss.getSheetByName('purchase_orders');
     if (!poSheet) {

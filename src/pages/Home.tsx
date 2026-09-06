@@ -4,7 +4,7 @@ import {
   Package, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, 
   AlertTriangle, BarChart2, Globe, Truck, Trash2, X, PlusCircle, User, Calendar, CheckCircle, Flame, Search, ArrowRight, FileText,
   ArrowUpDown, Edit2, Clock, Check, FileSpreadsheet, Download, Copy, Printer, ShoppingBag, Layers, Filter, Scan, Save, Settings,
-  ChevronUp, ChevronDown, GripVertical
+  ChevronUp, ChevronDown, GripVertical, AlertCircle, Sparkles
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
@@ -69,9 +69,12 @@ export default function Home() {
     enqueueAction, 
     showToast,
     onlineOrders,
+    orderFetchSummary,
+    clearOrderFetchSummary,
     fetchOnlineOrders,
     updateOnlineOrderStatus,
-    deleteOnlineOrder
+    deleteOnlineOrder,
+    deduplicateOnlineOrders
   } = useStore();
 
   const [activeShortcutIds, setActiveShortcutIds] = useState<string[]>(() => {
@@ -88,6 +91,11 @@ export default function Home() {
   const [isOrderDashboardOpen, setIsOrderDashboardOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const [orderErrors, setOrderErrors] = useState<string[]>([]);
+
+  const selectedOrderDupDetail = useMemo(() => {
+    if (!selectedOrder) return null;
+    return orderFetchSummary?.details?.find(d => d.orderId === selectedOrder.order_id) || null;
+  }, [selectedOrder, orderFetchSummary]);
   
   // Online Orders Dashboard Filtering & Sorting
   const [orderSearchQuery, setOrderSearchQuery] = useState('');
@@ -95,7 +103,7 @@ export default function Home() {
   const [orderStatusFilter, setOrderStatusFilter] = useState('ALL');
   const [orderStockFilter, setOrderStockFilter] = useState<'ALL' | 'READY' | 'SHORTFALL'>('ALL');
   const [orderShippingFilter, setOrderShippingFilter] = useState('ALL');
-  const [orderQuickFilter, setOrderQuickFilter] = useState<'ALL' | 'OVERDUE' | 'DUE_SOON' | 'SHORTFALL' | 'READY'>('ALL');
+  const [orderQuickFilter, setOrderQuickFilter] = useState<'ALL' | 'OVERDUE' | 'DUE_SOON' | 'SHORTFALL' | 'READY' | 'DUPLICATE'>('ALL');
 
   // Sorting state for online orders board
   const [orderSortType, setOrderSortType] = useState<
@@ -117,6 +125,10 @@ export default function Home() {
 
   // Anti-duplicate shipping in-flight state tracking
   const [shippingOrderIds, setShippingOrderIds] = useState<Set<string>>(new Set());
+
+  // Deduplicate confirmation modal state
+  const [confirmDeduplicateModal, setConfirmDeduplicateModal] = useState<{ orderId?: string; count: number; affectedOrders?: number } | null>(null);
+  const [isDeduplicating, setIsDeduplicating] = useState(false);
 
   const handleOpenShortcutModal = () => {
     setEditingShortcuts(activeShortcutIds);
@@ -337,13 +349,97 @@ export default function Home() {
     return Array.from(set);
   }, [groupedOrders]);
 
+  // Duplicate / matching order IDs set (from latest fetch summary or matching product_id + product_name + quantity)
+  const duplicateOrderIdsSet = useMemo(() => {
+    const set = new Set<string>();
+    if (orderFetchSummary?.duplicateOrderIds) {
+      orderFetchSummary.duplicateOrderIds.forEach(id => set.add(id));
+      return set;
+    }
+
+    // Fallback if orderFetchSummary is not yet set: check transactions with same order_id, product_id, product_name, and quantity
+    const shippedItemSet = new Set<string>();
+    (transactions || []).forEach(t => {
+      const toid = String(t.online_order_id || '').trim().toLowerCase();
+      if (!toid) return;
+      const pid = String(t.product_id || '').trim().toLowerCase();
+      const pname = String(t.product_name || '').trim().toLowerCase();
+      const qty = Number(t.quantity) || 0;
+      shippedItemSet.add(`${toid}:::${pid}:::${pname}:::${qty}`);
+    });
+
+    for (const grp of groupedOrders) {
+      const oid = String(grp.order_id || '').trim().toLowerCase();
+      // Check if any item in this order matches a shipped transaction with identical product_id, product_name, and quantity
+      const isShippedItem = grp.items.some((it: any) => {
+        const pid = String(it.product_id || '').trim().toLowerCase();
+        const pname = String(it.product_name || '').trim().toLowerCase();
+        const qty = Number(it.quantity) || 0;
+        return shippedItemSet.has(`${oid}:::${pid}:::${pname}:::${qty}`);
+      });
+
+      // Check if internal items in the sheet have duplicate rows (same product_id, product_name, and quantity)
+      const seenFp = new Set<string>();
+      let hasInternalDuplicateRow = false;
+      for (const it of grp.items) {
+        const pid = String(it.product_id || '').trim().toLowerCase();
+        const pname = String(it.product_name || '').trim().toLowerCase();
+        const qty = Number(it.quantity) || 0;
+        const fp = `${pid}:::${pname}:::${qty}`;
+        if (seenFp.has(fp)) {
+          hasInternalDuplicateRow = true;
+        } else {
+          seenFp.add(fp);
+        }
+      }
+
+      if (isShippedItem || hasInternalDuplicateRow) {
+        set.add(grp.order_id);
+      }
+    }
+
+    return set;
+  }, [orderFetchSummary, transactions, groupedOrders]);
+
   // Calculate counts for quick filter pills
   const pendingOrdersCount = groupedOrders.length;
   const overdueOrdersCount = groupedOrders.filter(o => o.order_status.includes('逾期')).length;
   const dueSoonOrdersCount = groupedOrders.filter(o => o.order_status.includes('即將到期')).length;
   const shortfallOrdersCount = groupedOrders.filter(o => o.items.some((item: any) => !checkItemHealth(item).ok)).length;
   const readyOrdersCount = groupedOrders.filter(o => o.items.every((item: any) => checkItemHealth(item).ok)).length;
+  const duplicateOrdersCount = useMemo(() => {
+    return groupedOrders.filter(o => duplicateOrderIdsSet.has(o.order_id)).length;
+  }, [groupedOrders, duplicateOrderIdsSet]);
   const shippedOrdersCount = overdueOrdersCount;
+
+  // Information about cleanable duplicate rows (leaving only 1 per unique item)
+  const cleanableDuplicateInfo = useMemo(() => {
+    const seenFp = new Set<string>();
+    let duplicateRowCount = 0;
+    const affectedOrders = new Set<string>();
+
+    for (const o of onlineOrders) {
+      if (o.status === '已刪除' || o.order_status === '已刪除') continue;
+      const oid = String(o.order_id || '').trim().toLowerCase();
+      const pid = String(o.product_id || '').trim().toLowerCase();
+      const pname = String(o.product_name || '').trim().toLowerCase();
+      const qty = Number(o.quantity) || 0;
+      const fp = `${oid}:::${pid}:::${pname}:::${qty}`;
+
+      if (seenFp.has(fp)) {
+        duplicateRowCount++;
+        affectedOrders.add(o.order_id);
+      } else {
+        seenFp.add(fp);
+      }
+    }
+
+    return {
+      duplicateRowCount,
+      affectedOrderCount: affectedOrders.size,
+      hasCleanable: duplicateRowCount > 0
+    };
+  }, [onlineOrders]);
 
   // Filter groupedOrders based on search query, dropdowns, and quick pills
   const filteredGroupedOrders = useMemo(() => {
@@ -353,6 +449,7 @@ export default function Home() {
       if (orderQuickFilter === 'DUE_SOON' && !order.order_status.includes('即將到期')) return false;
       if (orderQuickFilter === 'SHORTFALL' && !order.items.some((item: any) => !checkItemHealth(item).ok)) return false;
       if (orderQuickFilter === 'READY' && !order.items.every((item: any) => checkItemHealth(item).ok)) return false;
+      if (orderQuickFilter === 'DUPLICATE' && !duplicateOrderIdsSet.has(order.order_id)) return false;
 
       // 2. Platform Dropdown Filter
       if (orderPlatformFilter !== 'ALL' && order.platform !== orderPlatformFilter) {
@@ -420,7 +517,8 @@ export default function Home() {
     orderShippingFilter,
     orderSearchQuery,
     products,
-    stock
+    stock,
+    duplicateOrderIdsSet
   ]);
 
   // Sort grouped orders
@@ -957,12 +1055,29 @@ export default function Home() {
               </div>
 
               <div 
-                onClick={() => setIsOrderDashboardOpen(true)}
-                className="col-span-2 sm:col-span-1 bg-black/30 border border-white/5 rounded-xl p-3.5 hover:border-emerald-500/40 transition-all cursor-pointer group/stat"
+                onClick={() => {
+                  if (duplicateOrdersCount > 0) {
+                    setOrderQuickFilter('DUPLICATE');
+                  }
+                  setIsOrderDashboardOpen(true);
+                }}
+                className={`col-span-2 sm:col-span-1 bg-black/30 border rounded-xl p-3.5 transition-all cursor-pointer group/stat ${
+                  duplicateOrdersCount > 0 
+                    ? 'border-amber-500/30 hover:border-amber-500/50' 
+                    : 'border-white/5 hover:border-emerald-500/40'
+                }`}
               >
-                <span className="text-[11px] text-slate-400 font-medium block">平台涵蓋率</span>
-                <span className="text-2xl font-black text-emerald-400 font-mono mt-1 block group-hover/stat:scale-105 transition-transform">
-                  100% <span className="text-xs font-normal text-slate-500">同步中</span>
+                <span className="text-[11px] text-slate-400 font-medium block">
+                  {duplicateOrdersCount > 0 ? '相同/重複單號' : '平台涵蓋率'}
+                </span>
+                <span className={`text-2xl font-black font-mono mt-1 block group-hover/stat:scale-105 transition-transform ${
+                  duplicateOrdersCount > 0 ? 'text-amber-400' : 'text-emerald-400'
+                }`}>
+                  {duplicateOrdersCount > 0 ? (
+                    <>{duplicateOrdersCount} <span className="text-xs font-normal text-amber-300/80">筆</span></>
+                  ) : (
+                    <>100% <span className="text-xs font-normal text-slate-500">同步中</span></>
+                  )}
                 </span>
               </div>
             </div>
@@ -1182,6 +1297,86 @@ export default function Home() {
               {/* TAB 1: Orders Cards Grid View */}
               {orderDashboardTab === 'orders' && (
                 <div className="space-y-4">
+                  {/* Duplication Analysis Summary Banner */}
+                  {orderFetchSummary && (
+                    <div className="bg-slate-900/95 border border-indigo-500/30 rounded-2xl p-3.5 sm:p-4 text-xs space-y-2.5 relative shadow-xl backdrop-blur-md">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="p-2 bg-indigo-500/20 text-indigo-400 rounded-xl shrink-0">
+                            <Layers className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h4 className="font-bold text-white text-xs sm:text-sm">
+                                試算表訂單讀取與多重維度查重報告
+                              </h4>
+                              <span className="text-[10px] text-slate-400 font-mono">
+                                {orderFetchSummary.fetchedAt ? format(new Date(orderFetchSummary.fetchedAt), 'HH:mm:ss') : ''}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-400 mt-0.5">
+                              已自動比對「訂單編號 + 商品名稱 + 商品編號 + 商品數量」，多品項訂單不會被誤判，確保出貨準確性。
+                            </p>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={clearOrderFetchSummary}
+                          className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+                          title="關閉此報告"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-wrap pt-1">
+                        <span className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-slate-200 font-medium">
+                          讀取訂單: <strong className="text-white font-mono font-bold">{orderFetchSummary.totalUniqueOrders}</strong> 筆
+                        </span>
+                        <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 font-medium">
+                          全新訂單: <strong className="text-emerald-400 font-mono font-bold">{orderFetchSummary.newOrderCount}</strong> 筆
+                        </span>
+                        {orderFetchSummary.duplicateOrderCount > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setOrderQuickFilter('DUPLICATE')}
+                            className="px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 font-medium hover:bg-amber-500/25 transition-colors cursor-pointer flex items-center gap-1.5"
+                            title="篩選相同品項單號"
+                          >
+                            <span>⚠️ 相同品項單號: <strong className="text-amber-400 font-mono font-bold">{orderFetchSummary.duplicateOrderCount}</strong> 筆</span>
+                            <span className="underline text-[10px] text-amber-200">點擊檢視</span>
+                          </button>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-300 font-medium">
+                            ✅ 無重複訂單與品項
+                          </span>
+                        )}
+                        {orderFetchSummary.sheetDuplicateRowCount > 0 && (
+                          <span className="px-2.5 py-1 rounded-lg bg-orange-500/15 border border-orange-500/30 text-orange-300 font-medium" title="試算表內部有完全相同商品名稱、編號與數量的重複行">
+                            📑 表內重複行: <strong className="text-orange-400 font-mono font-bold">{orderFetchSummary.sheetDuplicateRowCount}</strong> 行
+                          </span>
+                        )}
+                        {orderFetchSummary.alreadyShippedOrderIds.length > 0 && (
+                          <span className="px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 font-medium">
+                            🚨 歷史已出貨: <strong className="text-rose-400 font-mono font-bold">{orderFetchSummary.alreadyShippedOrderIds.length}</strong> 筆
+                          </span>
+                        )}
+                        {cleanableDuplicateInfo.hasCleanable && (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeduplicateModal({ count: cleanableDuplicateInfo.duplicateRowCount, affectedOrders: cleanableDuplicateInfo.affectedOrderCount })}
+                            className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs shadow-md shadow-amber-500/20 flex items-center gap-1.5 transition-all cursor-pointer ml-auto"
+                            title="一鍵刪除全部重複的訂單品項行，每項只保留一筆"
+                          >
+                            <Sparkles className="w-3.5 h-3.5" />
+                            <span>一鍵清理重複訂單 (只留一筆 · 共 {cleanableDuplicateInfo.duplicateRowCount} 項)</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Quick Filter Pills */}
                   <div className="flex items-center gap-2 overflow-x-auto pb-1 custom-scrollbar">
                     <button
@@ -1258,6 +1453,24 @@ export default function Home() {
                         {readyOrdersCount}
                       </span>
                     </button>
+
+                    {duplicateOrdersCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setOrderQuickFilter('DUPLICATE')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                          orderQuickFilter === 'DUPLICATE'
+                            ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/30 ring-1 ring-amber-400 font-extrabold'
+                            : 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30'
+                        }`}
+                        title="篩選商品名稱、商品編號、數量完全相符之相同品項單號"
+                      >
+                        <span>⚠️ 相同品項單號</span>
+                        <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-black/30 font-mono font-bold">
+                          {duplicateOrdersCount}
+                        </span>
+                      </button>
+                    )}
                   </div>
 
                   {/* Search & Multi-filter Controls Bar */}
@@ -1420,6 +1633,15 @@ export default function Home() {
                           const isMomo = order.platform === 'MOMO購物網';
                           const statusStyle = getStatusBadgeStyle(order.order_status);
                           const orderPrice = getOrderPrice(order);
+                          const hasDuplicateRowInThisOrder = order.items.some((item: any, idx: number) => {
+                            return order.items.some((other: any, otherIdx: number) => {
+                              if (otherIdx === idx) return false;
+                              const sameId = String(item.product_id || '').trim().toLowerCase() === String(other.product_id || '').trim().toLowerCase();
+                              const sameName = String(item.product_name || '').trim().toLowerCase() === String(other.product_name || '').trim().toLowerCase();
+                              const sameQty = Number(item.quantity) === Number(other.quantity);
+                              return sameId && sameName && sameQty;
+                            });
+                          });
 
                           return (
                             <div 
@@ -1428,7 +1650,7 @@ export default function Home() {
                             >
                               {/* Top Header: SWAPPED Position 1 -> 訂單狀態 (Order Status) */}
                               <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center space-x-2 min-w-0">
+                                <div className="flex items-center space-x-2 min-w-0 flex-wrap">
                                   <span className={`text-[10px] uppercase font-black px-2 py-0.5 rounded-full shrink-0 ${
                                     isShopee ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' :
                                     isMomo ? 'bg-pink-500/20 text-pink-400 border border-pink-500/30' :
@@ -1437,6 +1659,29 @@ export default function Home() {
                                     {order.platform}
                                   </span>
                                   <span className="text-xs font-mono font-bold text-white truncate">{order.order_id}</span>
+                                  {duplicateOrderIdsSet.has(order.order_id) && (
+                                    <span 
+                                      className="text-[10px] font-bold px-1.5 py-0.2 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/35 flex items-center gap-1 shrink-0"
+                                      title="比對出商品名稱、商品編號與數量皆相符之重複紀錄"
+                                    >
+                                      <AlertTriangle className="w-2.5 h-2.5 text-amber-400 shrink-0" />
+                                      <span>相同品項單號</span>
+                                    </span>
+                                  )}
+                                  {hasDuplicateRowInThisOrder && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setConfirmDeduplicateModal({ orderId: order.order_id, count: 1 });
+                                      }}
+                                      className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center gap-1 shadow-sm transition-all cursor-pointer shrink-0"
+                                      title="刪除此訂單中重複的品項行，每項只保留一筆"
+                                    >
+                                      <Sparkles className="w-2.5 h-2.5" />
+                                      <span>去重(只留一筆)</span>
+                                    </button>
+                                  )}
                                 </div>
 
                                 {/* 訂單狀態 Badge + Manual Edit Button */}
@@ -1461,6 +1706,13 @@ export default function Home() {
                               {/* Items list */}
                               <div className="space-y-2 cursor-pointer" onClick={() => setSelectedOrder(order)}>
                                 {order.items.map((item: any, idx: number) => {
+                                  const isDuplicateRowInOrder = order.items.some((other: any, otherIdx: number) => {
+                                    if (otherIdx === idx) return false;
+                                    const sameId = String(item.product_id || '').trim().toLowerCase() === String(other.product_id || '').trim().toLowerCase();
+                                    const sameName = String(item.product_name || '').trim().toLowerCase() === String(other.product_name || '').trim().toLowerCase();
+                                    const sameQty = Number(item.quantity) === Number(other.quantity);
+                                    return sameId && sameName && sameQty;
+                                  });
                                   const spec = item.specification || getProductSpecification(item.product_id);
                                   const shipMethod = item.shipping_method || order.shipping_method;
                                   const sysProd = item.product_id ? productMap.get(item.product_id) : (item.product_name ? products.find(p => p.name === item.product_name || p.product_id === item.product_name) : null);
@@ -1472,6 +1724,11 @@ export default function Home() {
                                       <div className="flex-1 min-w-0 mr-2 space-y-1">
                                         <div className="flex items-center gap-1.5 flex-wrap">
                                           <p className="font-semibold text-white truncate">{item.product_name}</p>
+                                          {isDuplicateRowInOrder && (
+                                            <span className="text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/35 px-1.5 py-0.2 rounded shrink-0" title="此訂單內存在相同品名、編號與數量的重複品項行">
+                                              ⚠️ 重複品項行
+                                            </span>
+                                          )}
                                           {sysProd ? (
                                             <span className="text-[10px] font-mono bg-sky-500/10 text-sky-300 border border-sky-500/20 px-1.5 py-0.2 rounded font-medium">
                                               系統商品
@@ -1818,6 +2075,31 @@ export default function Home() {
             </div>
 
             <div className="p-4 space-y-4 flex-1 overflow-y-auto">
+              {/* Duplicate check warning */}
+              {duplicateOrderIdsSet.has(selectedOrder.order_id) && (
+                <div className="bg-amber-950/50 border border-amber-500/35 rounded-xl p-3 text-xs text-amber-200 flex items-start gap-2.5 shadow-sm">
+                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1 w-full">
+                    <p className="font-bold text-amber-300 flex items-center gap-1.5">
+                      <span>⚠️ 查重比對提醒：檢測到相同單號且品項相符</span>
+                    </p>
+                    <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                      系統已同時比對「商品名稱、商品編號、商品數量」：訂單編號 <span className="font-mono font-bold text-amber-100">#{selectedOrder.order_id}</span> 包含與系統或歷史出貨完全一致之商品項目。出貨前請確認避免重複備貨或重複出貨。
+                    </p>
+                    {selectedOrderDupDetail?.duplicateItemDescriptions && selectedOrderDupDetail.duplicateItemDescriptions.length > 0 && (
+                      <div className="mt-1 bg-amber-900/40 rounded-lg p-2 border border-amber-500/20 text-[11px] space-y-1">
+                        <span className="font-bold text-amber-200 block text-[10px]">相符之品項細節：</span>
+                        <ul className="list-disc pl-4 text-amber-200/90 space-y-0.5">
+                          {selectedOrderDupDetail.duplicateItemDescriptions.map((desc: string, di: number) => (
+                            <li key={di}>{desc}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3 text-xs bg-white/5 p-3 rounded-xl border border-white/5">
                 <div>
                   <span className="text-zinc-400 block mb-0.5">來源平台</span>
@@ -1867,9 +2149,37 @@ export default function Home() {
 
               {/* Items Table */}
               <div className="space-y-3">
-                <h4 className="text-xs font-bold text-zinc-300 uppercase tracking-wider">訂購商品品項 ({selectedOrder.items.length})</h4>
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-xs font-bold text-zinc-300 uppercase tracking-wider">訂購商品品項 ({selectedOrder.items.length})</h4>
+                  {selectedOrder.items.some((item: any, idx: number) => {
+                    return selectedOrder.items.some((other: any, otherIdx: number) => {
+                      if (otherIdx === idx) return false;
+                      const sameId = String(item.product_id || '').trim().toLowerCase() === String(other.product_id || '').trim().toLowerCase();
+                      const sameName = String(item.product_name || '').trim().toLowerCase() === String(other.product_name || '').trim().toLowerCase();
+                      const sameQty = Number(item.quantity) === Number(other.quantity);
+                      return sameId && sameName && sameQty;
+                    });
+                  }) && (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeduplicateModal({ orderId: selectedOrder.order_id, count: 1 })}
+                      className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-[11px] rounded-lg flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                      title="清理此訂單中的重複品項，每項只留一筆"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>移除重複品項（只留一筆）</span>
+                    </button>
+                  )}
+                </div>
                 <div className="space-y-2.5">
                   {selectedOrder.items.map((item: any, idx: number) => {
+                    const isDuplicateItemRow = selectedOrder.items.some((other: any, otherIdx: number) => {
+                      if (otherIdx === idx) return false;
+                      const sameId = String(item.product_id || '').trim().toLowerCase() === String(other.product_id || '').trim().toLowerCase();
+                      const sameName = String(item.product_name || '').trim().toLowerCase() === String(other.product_name || '').trim().toLowerCase();
+                      const sameQty = Number(item.quantity) === Number(other.quantity);
+                      return sameId && sameName && sameQty;
+                    });
                     const health = checkItemHealth(item);
                     const spec = item.specification || getProductSpecification(item.product_id);
                     const sysProd = item.product_id ? productMap.get(item.product_id) : (item.product_name ? products.find(p => p.name === item.product_name || p.product_id === item.product_name) : null);
@@ -1880,7 +2190,14 @@ export default function Home() {
                       <div key={idx} className="bg-zinc-900/60 border border-white/5 rounded-xl p-3 space-y-2">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
-                            <p className="text-xs font-bold text-white">{item.product_name}</p>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <p className="text-xs font-bold text-white">{item.product_name}</p>
+                              {isDuplicateItemRow && (
+                                <span className="text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/35 px-1.5 py-0.5 rounded shrink-0" title="此訂單內存在相同商品名稱、編號與數量之重複行">
+                                  ⚠️ 試算表重複品項行
+                                </span>
+                              )}
+                            </div>
                             <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                               {item.product_id ? (
                                 <span className="text-[10px] font-mono bg-white/10 text-zinc-300 px-1.5 py-0.5 rounded">商品ID: {item.product_id}</span>
@@ -2133,6 +2450,103 @@ export default function Home() {
                 ) : (
                   <>
                     <Truck className="w-4 h-4" /> ⚠️ 強行繼續出貨 (扣存 & 記錄)
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deduplicate Confirmation Modal */}
+      {confirmDeduplicateModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-amber-500/30 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl relative text-left">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 bg-amber-500/20 text-amber-400 rounded-xl shrink-0">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold text-white">
+                  {confirmDeduplicateModal.orderId 
+                    ? `確認清理訂單 #${confirmDeduplicateModal.orderId} 重複品項`
+                    : '確認清理全部重複訂單（只留一筆）'
+                  }
+                </h3>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {confirmDeduplicateModal.orderId ? (
+                    <>系統將自動比對商品名稱、商品編號與數量，刪除多餘的重複商品行，<strong className="text-amber-300">每項商品只保留一筆</strong>。</>
+                  ) : (
+                    <>
+                      系統偵測到共 <strong className="text-amber-300 font-mono font-bold">{confirmDeduplicateModal.count}</strong> 筆完全重複的商品品項行
+                      {confirmDeduplicateModal.affectedOrders ? `（涉及 ${confirmDeduplicateModal.affectedOrders} 筆訂單）` : ''}。
+                      <br />
+                      執行後將刪除所有多餘的重複行，<strong className="text-amber-300">每項商品與訂單均「只留一筆」</strong>。
+                    </>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-amber-950/40 border border-amber-500/25 rounded-xl p-3 text-[11px] text-amber-200/90 space-y-1">
+              <p className="font-bold text-amber-300 flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                規則提醒：
+              </p>
+              <ul className="list-disc pl-4 space-y-0.5 text-slate-300">
+                <li>清理後，相同品項（相同名稱、編號、數量）將確保只保留 1 筆紀錄。</li>
+                <li>系統將同步指示 Google 試算表（網路訂單）精準刪除多餘重複列，不影響其他資料。</li>
+                <li><strong className="text-amber-200">歷史已出貨</strong>的重複警告將維持提醒標記，不會被刪除。</li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeduplicating}
+                onClick={() => setConfirmDeduplicateModal(null)}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 rounded-xl transition-colors cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={isDeduplicating}
+                onClick={async () => {
+                  setIsDeduplicating(true);
+                  try {
+                    await deduplicateOnlineOrders(confirmDeduplicateModal.orderId);
+                    if (selectedOrder) {
+                      if (!confirmDeduplicateModal.orderId || selectedOrder.order_id === confirmDeduplicateModal.orderId) {
+                        const seen = new Set<string>();
+                        const cleanItems = selectedOrder.items.filter((it: any) => {
+                          const pid = String(it.product_id || '').trim().toLowerCase();
+                          const pname = String(it.product_name || '').trim().toLowerCase();
+                          const qty = Number(it.quantity) || 0;
+                          const fp = `${pid}:::${pname}:::${qty}`;
+                          if (seen.has(fp)) return false;
+                          seen.add(fp);
+                          return true;
+                        });
+                        setSelectedOrder({ ...selectedOrder, items: cleanItems });
+                      }
+                    }
+                    setConfirmDeduplicateModal(null);
+                  } finally {
+                    setIsDeduplicating(false);
+                  }
+                }}
+                className="px-4 py-2 text-xs font-bold rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center gap-1.5 shadow-md shadow-amber-500/20 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {isDeduplicating ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                    <span>清理中...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>確認清理（只留一筆）</span>
                   </>
                 )}
               </button>
