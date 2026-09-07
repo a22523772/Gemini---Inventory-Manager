@@ -784,8 +784,14 @@ export default function Home() {
         const item = order.items[itemIdx];
         let remainingNeeded = Number(item.quantity) || 1;
         const itemPrice = Number(item.price || 0);
-        const isProductInSystem = products.some(p => p.product_id && item.product_id && p.product_id === item.product_id);
-        const productStock = isProductInSystem ? stock.filter(s => s.product_id === item.product_id) : [];
+
+        // Always get freshest products and stock snapshots from store to avoid stale closure during continuous shipments
+        const currentProducts = useStore.getState().products;
+        const currentStock = useStore.getState().stock;
+
+        const targetPid = String(item.product_id || '').trim().toLowerCase();
+        const isProductInSystem = currentProducts.some(p => String(p.product_id || '').trim().toLowerCase() === targetPid);
+        const productStock = isProductInSystem ? currentStock.filter(s => String(s.product_id || '').trim().toLowerCase() === targetPid) : [];
         
         const isExpired = (expiryStr?: string) => {
           if (!expiryStr) return false;
@@ -803,14 +809,15 @@ export default function Home() {
           return a.expiry_date.localeCompare(b.expiry_date);
         });
 
-        const p = products.find(prod => prod.product_id === item.product_id);
+        const p = currentProducts.find(prod => String(prod.product_id || '').trim().toLowerCase() === targetPid);
         const itemCostPrice = p ? (Number(p.cost_price) || 0) : 0;
         let deductIdx = 0;
 
         if (isProductInSystem && sortedStock.length > 0) {
           for (const entry of sortedStock) {
             if (remainingNeeded <= 0) break;
-            const deductQty = Math.min(entry.quantity, remainingNeeded);
+            const deductQty = Math.min(Number(entry.quantity) || 0, remainingNeeded);
+            if (deductQty <= 0) continue;
             const rowUniqueId = `${orderTxId}_${itemIdx}_${deductIdx}_${Math.random().toString(36).substring(2, 6)}`;
 
             await enqueueAction('stockOut', {
@@ -822,8 +829,8 @@ export default function Home() {
               platform: normPlatform,
               type: txType,
               stock_id: entry.stock_id,
-              product_id: item.product_id || '',
-              product_name: item.product_name || '',
+              product_id: item.product_id || p?.product_id || '',
+              product_name: item.product_name || p?.name || '',
               cost_price: itemCostPrice,
               price: itemPrice,
               quantity: deductQty,
@@ -831,7 +838,7 @@ export default function Home() {
               floor: entry.floor || '',
               area: entry.area || '',
               expiry_date: entry.expiry_date,
-              specification: item.specification || entry.specification || '',
+              specification: item.specification || entry.specification || p?.specification || '',
               date: timestampDate,
               note: `${isForced ? '[強行出貨] ' : ''}網路訂單出貨 | 訂單號: ${order.order_id} | 平台: ${normPlatform} | 買家: ${order.customer_name || '未指定'} | 物流: ${order.shipping_method || '未指定'}`,
             });
@@ -856,8 +863,8 @@ export default function Home() {
             batch_tx_id: orderTxId,
             platform: normPlatform,
             type: txType,
-            product_id: item.product_id || '',
-            product_name: item.product_name || '',
+            product_id: item.product_id || p?.product_id || '',
+            product_name: item.product_name || p?.name || '',
             cost_price: itemCostPrice,
             price: itemPrice,
             quantity: remainingNeeded,

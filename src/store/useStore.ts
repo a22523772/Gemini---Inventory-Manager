@@ -1375,6 +1375,8 @@ interface AppState {
   clearOrderFetchSummary: () => void;
 }
 
+let remoteFetchDebounceTimer: any = null;
+
 export const useStore = create<AppState>((set, get) => ({
   products: [],
   stock: [],
@@ -1681,26 +1683,63 @@ export const useStore = create<AppState>((set, get) => ({
         set({ stock: updatedStock, transactions: updatedTx });
     } else if (action === 'stockOut') {
         const { stock, transactions } = get();
-        const existingIdx = stock.findIndex(s => s.stock_id === updatedPayload.stock_id);
-
         let updatedStock = [...stock];
-        let originalStockId = updatedPayload.stock_id;
-        if (existingIdx !== -1) {
-            originalStockId = updatedStock[existingIdx].stock_id;
-            const currentQty = updatedStock[existingIdx].quantity;
-            const deduct = Number(updatedPayload.quantity);
-            if (currentQty <= deduct) {
-                const deletedId = updatedStock[existingIdx].stock_id;
-                updatedStock.splice(existingIdx, 1);
+        let originalStockId = updatedPayload.stock_id || '';
+        let deductRemaining = Number(updatedPayload.quantity) || 0;
+        const targetPid = String(updatedPayload.product_id || '').trim().toLowerCase();
+        const targetStockId = String(updatedPayload.stock_id || '').trim();
+
+        // 1. If a specific stock_id was provided, try to deduct from it first
+        let primaryIdx = targetStockId ? updatedStock.findIndex(s => String(s.stock_id || '').trim() === targetStockId) : -1;
+        
+        // If primaryIdx was not found by stock_id, but product_id is given, find matching stock entries
+        if (primaryIdx === -1 && targetPid) {
+          primaryIdx = updatedStock.findIndex(s => String(s.product_id || '').trim().toLowerCase() === targetPid);
+        }
+
+        if (primaryIdx !== -1) {
+          originalStockId = updatedStock[primaryIdx].stock_id;
+          const currentQty = Number(updatedStock[primaryIdx].quantity) || 0;
+          const deductFromThis = Math.min(currentQty, deductRemaining);
+          deductRemaining -= deductFromThis;
+
+          if (currentQty <= deductFromThis) {
+            const deletedId = updatedStock[primaryIdx].stock_id;
+            updatedStock.splice(primaryIdx, 1);
+            await dbStock.removeItem(deletedId);
+          } else {
+            updatedStock[primaryIdx] = {
+              ...updatedStock[primaryIdx],
+              quantity: currentQty - deductFromThis,
+              last_update: new Date().toISOString()
+            };
+            await dbStock.setItem(updatedStock[primaryIdx].stock_id, updatedStock[primaryIdx]);
+          }
+        }
+
+        // 2. If deductRemaining > 0 and product_id is provided, deduct remaining from other batches of this product
+        if (deductRemaining > 0 && targetPid) {
+          for (let i = 0; i < updatedStock.length && deductRemaining > 0; i++) {
+            if (String(updatedStock[i].product_id || '').trim().toLowerCase() === targetPid) {
+              const currentQty = Number(updatedStock[i].quantity) || 0;
+              const deductFromThis = Math.min(currentQty, deductRemaining);
+              deductRemaining -= deductFromThis;
+
+              if (currentQty <= deductFromThis) {
+                const deletedId = updatedStock[i].stock_id;
+                updatedStock.splice(i, 1);
                 await dbStock.removeItem(deletedId);
-            } else {
-                updatedStock[existingIdx] = {
-                    ...updatedStock[existingIdx],
-                    quantity: currentQty - deduct,
-                    last_update: new Date().toISOString()
+                i--; // Adjust index after removal
+              } else {
+                updatedStock[i] = {
+                  ...updatedStock[i],
+                  quantity: currentQty - deductFromThis,
+                  last_update: new Date().toISOString()
                 };
-                await dbStock.setItem(updatedStock[existingIdx].stock_id, updatedStock[existingIdx]);
+                await dbStock.setItem(updatedStock[i].stock_id, updatedStock[i]);
+              }
             }
+          }
         }
 
         const newTx: Transaction = {
@@ -1876,10 +1915,13 @@ export const useStore = create<AppState>((set, get) => ({
     }
     
     if (!hasError) {
-      // Small delay to allow GAS and Sheets to process the write before we fetch back
-      setTimeout(async () => {
-        await get().fetchRemoteData();
-      }, 1000);
+      if (remoteFetchDebounceTimer) clearTimeout(remoteFetchDebounceTimer);
+      remoteFetchDebounceTimer = setTimeout(async () => {
+        // Only fetch if syncQueue is completely processed so we don't clobber in-flight stock updates
+        if (get().syncQueue.length === 0) {
+          await get().fetchRemoteData();
+        }
+      }, 3000);
     }
     set({ isLoading: false, isSyncing: false });
   },
@@ -2018,13 +2060,56 @@ export const useStore = create<AppState>((set, get) => ({
       const rS = await fetch(`${cleanUrl}?action=getStock`);
       if (rS.ok) {
         const dS = await rS.json();
-        const validS = (dS || []).map((item: any) => normalizeKeys(item))
-          .filter((s: any) => s && s.stock_id)
-          .map((s: any) => ({
-            ...s,
-            stock_id: String(s.stock_id).trim(),
-            product_id: s.product_id ? String(s.product_id).trim() : ''
-          }));
+        let validS: Stock[] = (dS || []).map((item: any) => normalizeKeys(item))
+          .filter((s: any) => s && (s.stock_id || s.product_id))
+          .map((s: any) => {
+            const generatedId = String(s.stock_id || `${s.product_id}_${s.location || '倉庫'}_${s.floor || '1F'}_${s.area || 'A區'}_${s.expiry_date || ''}_${s.specification || ''}`).replace(/_+$/, '').trim();
+            return {
+              ...s,
+              stock_id: generatedId,
+              product_id: s.product_id ? String(s.product_id).trim() : '',
+              quantity: Number(s.quantity) || 0
+            };
+          });
+
+        // Safeguard: Protect against remote overwriting local deductions
+        // If there are pending stockOut actions in syncQueue, apply them to validS
+        const currentQueue = get().syncQueue || [];
+        const pendingStockOuts = currentQueue.filter(q => q.action === 'stockOut' && q.payload);
+
+        for (const item of pendingStockOuts) {
+          const p = item.payload;
+          const qtyToDeduct = Number(p.quantity) || 0;
+          const sId = p.stock_id ? String(p.stock_id).trim() : '';
+          const pId = p.product_id ? String(p.product_id).trim().toLowerCase() : '';
+
+          let rem = qtyToDeduct;
+          if (sId) {
+            const idx = validS.findIndex(s => s.stock_id === sId);
+            if (idx !== -1) {
+              const d = Math.min(validS[idx].quantity, rem);
+              validS[idx].quantity -= d;
+              rem -= d;
+              if (validS[idx].quantity <= 0) {
+                validS.splice(idx, 1);
+              }
+            }
+          }
+          if (rem > 0 && pId) {
+            for (let i = 0; i < validS.length && rem > 0; i++) {
+              if (String(validS[i].product_id).trim().toLowerCase() === pId) {
+                const d = Math.min(validS[i].quantity, rem);
+                validS[i].quantity -= d;
+                rem -= d;
+                if (validS[i].quantity <= 0) {
+                  validS.splice(i, 1);
+                  i--;
+                }
+              }
+            }
+          }
+        }
+
         await dbStock.clear();
         for (const s of validS) {
           await dbStock.setItem(s.stock_id, s);

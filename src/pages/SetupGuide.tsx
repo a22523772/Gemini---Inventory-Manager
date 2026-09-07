@@ -689,36 +689,54 @@ export default function SetupGuide() {
     var stockSheet = ss.getSheetByName('stock');
     var transSheet = ss.getSheetByName('transactions');
     var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
-    var stockId = data.stock_id || [data.product_id, data.location, data.floor, data.area, data.expiry_date || '', data.specification || ''].join('_').replace(/_+$/, '');
+    var stockId = String(data.stock_id || '').trim();
+    var productId = String(data.product_id || '').trim();
+    var deductNeeded = Number(data.quantity) || 0;
 
-    if(stockSheet && stockSheet.getLastRow() > 1) {
+    if(stockSheet && stockSheet.getLastRow() > 1 && deductNeeded > 0) {
       var stockHeaders = stockSheet.getRange(1, 1, 1, stockSheet.getLastColumn()).getValues()[0];
-      var values = stockSheet.getDataRange().getValues();
       var idIdx = stockHeaders.indexOf('stock_id');
+      var pIdIdx = stockHeaders.indexOf('product_id');
       var qtyIdx = stockHeaders.indexOf('quantity');
       var updateIdx = stockHeaders.indexOf('last_update');
 
-      for (var i = 1; i < values.length; i++) {
-         var matchById = (idIdx !== -1 && values[i][idIdx] == stockId);
-         var matchByAttrs = (
-           values[i][stockHeaders.indexOf('product_id')] == data.product_id &&
-           values[i][stockHeaders.indexOf('location')] == data.location &&
-           values[i][stockHeaders.indexOf('floor')] == data.floor &&
-           values[i][stockHeaders.indexOf('area')] == data.area &&
-           String(values[i][stockHeaders.indexOf('expiry_date')] || '') == String(data.expiry_date || '') &&
-           String(values[i][stockHeaders.indexOf('specification')] || '') == String(data.specification || '')
-         );
-
-         if (matchById || matchByAttrs) {
-            var newQ = (Number(values[i][qtyIdx]) || 0) - Number(data.quantity);
+      // 1. First priority: match exact stock_id
+      if (stockId && idIdx !== -1) {
+        var values = stockSheet.getDataRange().getValues();
+        for (var i = 1; i < values.length && deductNeeded > 0; i++) {
+          if (String(values[i][idIdx] || '').trim() === stockId) {
+            var currQ = Number(values[i][qtyIdx]) || 0;
+            var deductFromRow = Math.min(currQ, deductNeeded);
+            deductNeeded -= deductFromRow;
+            var newQ = currQ - deductFromRow;
             if (newQ <= 0) {
-               stockSheet.deleteRow(i + 1);
+              stockSheet.deleteRow(i + 1);
             } else {
-               stockSheet.getRange(i+1, qtyIdx + 1).setValue(newQ);
-               if (updateIdx !== -1) stockSheet.getRange(i+1, updateIdx + 1).setValue(now);
+              stockSheet.getRange(i + 1, qtyIdx + 1).setValue(newQ);
+              if (updateIdx !== -1) stockSheet.getRange(i + 1, updateIdx + 1).setValue(now);
             }
             break;
-         }
+          }
+        }
+      }
+
+      // 2. Second priority: if deductNeeded > 0 and productId provided, deduct from matching product_id rows
+      if (deductNeeded > 0 && productId && pIdIdx !== -1) {
+        var values2 = stockSheet.getDataRange().getValues();
+        for (var j = values2.length - 1; j >= 1 && deductNeeded > 0; j--) {
+          if (String(values2[j][pIdIdx] || '').trim().toLowerCase() === productId.toLowerCase()) {
+            var currQ2 = Number(values2[j][qtyIdx]) || 0;
+            var deductFromRow2 = Math.min(currQ2, deductNeeded);
+            deductNeeded -= deductFromRow2;
+            var newQ2 = currQ2 - deductFromRow2;
+            if (newQ2 <= 0) {
+              stockSheet.deleteRow(j + 1);
+            } else {
+              stockSheet.getRange(j + 1, qtyIdx + 1).setValue(newQ2);
+              if (updateIdx !== -1) stockSheet.getRange(j + 1, updateIdx + 1).setValue(now);
+            }
+          }
+        }
       }
     }
     
