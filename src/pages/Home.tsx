@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useStore, calculateOrderStatus, getProductStatusInfo, getOnOrderStockQty, formatConsistentTxDate, getDominantDateSeparator } from '../store/useStore';
+import { useStore, calculateOrderStatus, getProductStatusInfo, getOnOrderStockQty, formatConsistentTxDate, getDominantDateSeparator, isSpecificationMatch, getProductSpecifications, resolveStandardProductSpecification } from '../store/useStore';
 import { 
   Package, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, 
   AlertTriangle, BarChart2, Globe, Truck, Trash2, X, PlusCircle, User, Calendar, CheckCircle, Flame, Search, ArrowRight, FileText,
@@ -74,7 +74,8 @@ export default function Home() {
     fetchOnlineOrders,
     updateOnlineOrderStatus,
     deleteOnlineOrder,
-    deduplicateOnlineOrders
+    deduplicateOnlineOrders,
+    updateOnlineOrderItemSpecification
   } = useStore();
 
   const [activeShortcutIds, setActiveShortcutIds] = useState<string[]>(() => {
@@ -246,10 +247,19 @@ export default function Home() {
     const product = products.find(p => p.product_id === item.product_id);
     if (!product) return { ok: false, message: '系統找不到此商品的資料，請先新增商品。' };
 
-    const productStock = stock.filter(s => s.product_id === item.product_id);
+    const itemSpec = item.specification ? String(item.specification).trim() : '';
+    const productStock = stock.filter(s => {
+      const pidMatch = String(s.product_id || '').trim().toLowerCase() === String(item.product_id || '').trim().toLowerCase();
+      if (!pidMatch) return false;
+      if (itemSpec) {
+        return isSpecificationMatch(s.specification, itemSpec);
+      }
+      return true;
+    });
     const totalQty = productStock.reduce((acc, curr) => acc + curr.quantity, 0);
+    const specLabel = itemSpec ? ` [規格: ${itemSpec}]` : '';
     if (totalQty < item.quantity) {
-      return { ok: false, message: `庫存量不足！需要 ${item.quantity}，但目前在席庫存僅剩 ${totalQty}。` };
+      return { ok: false, message: `庫存量不足！需要 ${item.quantity}${specLabel}，但目前在席庫存僅剩 ${totalQty}。` };
     }
 
     const isExpired = (expiryStr?: string) => {
@@ -263,7 +273,7 @@ export default function Home() {
     const validStock = productStock.filter(s => !isExpired(s.expiry_date));
     const totalValid = validStock.reduce((acc, curr) => acc + curr.quantity, 0);
     if (totalValid < item.quantity) {
-      return { ok: false, message: `出貨安全阻擋！雖有庫存 ${totalQty}，但皆已過期！可用健康庫存僅剩 ${totalValid}。` };
+      return { ok: false, message: `出貨安全阻擋！雖有庫存 ${totalQty}${specLabel}，但皆已過期！可用健康庫存僅剩 ${totalValid}。` };
     }
 
     return { ok: true, message: '正常' };
@@ -610,9 +620,15 @@ export default function Home() {
         ? (vendorsMap.get(matchedProd.vendor_id) || '未指定廠商') 
         : (isSystemProduct ? '未指定廠商' : '非系統商品 / 尚未建檔');
 
-      const currentStock = matchedProd 
-        ? (productTotalStockMap.get(matchedProd.product_id) || 0) 
-        : (rawPid && productTotalStockMap.has(rawPid) ? (productTotalStockMap.get(rawPid) || 0) : 0);
+      const matchedStocks = stock.filter(s => {
+        const pidMatch = String(s.product_id || '').trim().toLowerCase() === resolvedPid.toLowerCase();
+        if (!pidMatch) return false;
+        if (resolvedSpec) {
+          return isSpecificationMatch(s.specification, resolvedSpec);
+        }
+        return true;
+      });
+      const currentStock = matchedStocks.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
 
       // Distinct key ensuring non-system items with different names/specs never overwrite each other
       const key = isSystemProduct 
@@ -790,8 +806,16 @@ export default function Home() {
         const currentStock = useStore.getState().stock;
 
         const targetPid = String(item.product_id || '').trim().toLowerCase();
+        const itemSpec = item.specification ? String(item.specification).trim() : '';
         const isProductInSystem = currentProducts.some(p => String(p.product_id || '').trim().toLowerCase() === targetPid);
-        const productStock = isProductInSystem ? currentStock.filter(s => String(s.product_id || '').trim().toLowerCase() === targetPid) : [];
+        const productStock = isProductInSystem ? currentStock.filter(s => {
+          const pidMatch = String(s.product_id || '').trim().toLowerCase() === targetPid;
+          if (!pidMatch) return false;
+          if (itemSpec) {
+            return isSpecificationMatch(s.specification, itemSpec);
+          }
+          return true;
+        }) : [];
         
         const isExpired = (expiryStr?: string) => {
           if (!expiryStr) return false;
@@ -1747,11 +1771,37 @@ export default function Home() {
                                           )}
                                         </div>
                                         <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-                                          {spec && (
-                                            <span className="inline-block bg-indigo-500/10 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-500/20 font-medium">
-                                              規格: {spec}
-                                            </span>
-                                          )}
+                                          {(() => {
+                                            const itemSpecOptions = getProductSpecifications(item.product_id || item.product_name, products, stock);
+                                            if (itemSpecOptions.length > 0) {
+                                              return (
+                                                <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                                                  <span className="text-slate-400 font-medium text-[10px]">規格:</span>
+                                                  <select
+                                                    value={spec || ''}
+                                                    onChange={(e) => {
+                                                      e.stopPropagation();
+                                                      updateOnlineOrderItemSpecification(order.order_id, idx, e.target.value);
+                                                    }}
+                                                    className="bg-indigo-950 text-indigo-200 border border-indigo-500/40 rounded px-1.5 py-0.5 text-[10px] font-bold outline-none focus:border-indigo-400 cursor-pointer"
+                                                    title="選擇此訂單品項之標準商品規格"
+                                                  >
+                                                    <option value="" className="bg-slate-900 text-slate-400">(未指定)</option>
+                                                    {itemSpecOptions.map(opt => (
+                                                      <option key={opt} value={opt} className="bg-slate-900 text-white">
+                                                        {opt}
+                                                      </option>
+                                                    ))}
+                                                  </select>
+                                                </div>
+                                              );
+                                            }
+                                            return spec ? (
+                                              <span className="inline-block bg-indigo-500/10 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-500/20 font-medium">
+                                                規格: {spec}
+                                              </span>
+                                            ) : null;
+                                          })()}
                                           {shipMethod && (
                                             <span className="inline-block bg-teal-500/10 text-teal-300 px-1.5 py-0.5 rounded border border-teal-500/20 font-medium">
                                               物流: {shipMethod}
@@ -2224,7 +2274,43 @@ export default function Home() {
                                   </button>
                                 </div>
                               )}
-                              {spec && <span className="text-[10px] bg-indigo-500/10 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-500/20">規格: {spec}</span>}
+                              {(() => {
+                                const itemSpecOptions = getProductSpecifications(item.product_id || item.product_name, products, stock);
+                                if (itemSpecOptions.length > 0) {
+                                  return (
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <span className="text-zinc-400 font-medium text-[10px]">規格:</span>
+                                      <select
+                                        value={spec || ''}
+                                        onChange={(e) => {
+                                          const newSpec = e.target.value;
+                                          updateOnlineOrderItemSpecification(selectedOrder.order_id, idx, newSpec);
+                                          setSelectedOrder((prev: any) => {
+                                            if (!prev) return prev;
+                                            const newItems = [...prev.items];
+                                            newItems[idx] = { ...newItems[idx], specification: newSpec };
+                                            return { ...prev, items: newItems };
+                                          });
+                                        }}
+                                        className="bg-indigo-950 text-indigo-200 border border-indigo-500/40 rounded px-2 py-0.5 text-[10px] font-bold outline-none focus:border-indigo-400 cursor-pointer"
+                                        title="切換此訂單品項之規格"
+                                      >
+                                        <option value="" className="bg-slate-900 text-slate-400">(未指定規格)</option>
+                                        {itemSpecOptions.map(opt => (
+                                          <option key={opt} value={opt} className="bg-slate-900 text-white">
+                                            {opt}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  );
+                                }
+                                return spec ? (
+                                  <span className="text-[10px] bg-indigo-500/10 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-500/20 font-medium">
+                                    規格: {spec}
+                                  </span>
+                                ) : null;
+                              })()}
                               {sysProd && (
                                 <>
                                   {costPrice !== null && (

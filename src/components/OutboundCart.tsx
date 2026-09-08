@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useStore } from '../store/useStore';
+import { useStore, getProductSpecifications, isSpecificationMatch } from '../store/useStore';
 import { Save, Plus, Trash2, Search, X, ScanBarcode, Minus, ShoppingCart, Filter } from 'lucide-react';
 import QuantityInput from './QuantityInput';
 
@@ -77,6 +77,7 @@ export default function OutboundCart() {
   const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
   const [selectedStockId, setSelectedStockId] = useState<string>('');
   const [quantityToAdd, setQuantityToAdd] = useState<string>('1');
+  const [specFilter, setSpecFilter] = useState<string>('ALL');
   
   // Filter State
   const [showFilters, setShowFilters] = useState(false);
@@ -107,10 +108,29 @@ export default function OutboundCart() {
     }
   }, [searchParams, products, setSearchParams, showToast]);
 
+  const productSpecs = useMemo(() => {
+    if (!selectedProduct) return [];
+    return getProductSpecifications(selectedProduct.product_id, products, stock);
+  }, [selectedProduct, products, stock]);
+
   const availableStocks = useMemo(() => {
     if (!selectedProduct) return [];
-    return stock.filter(s => s.product_id === selectedProduct.product_id);
-  }, [selectedProduct, stock]);
+    const all = stock.filter(s => s.product_id === selectedProduct.product_id);
+    if (specFilter !== 'ALL') {
+      return all.filter(s => isSpecificationMatch(s.specification, specFilter));
+    }
+    return all;
+  }, [selectedProduct, stock, specFilter]);
+
+  useEffect(() => {
+    if (availableStocks.length > 0) {
+      if (!availableStocks.find(s => s.stock_id === selectedStockId)) {
+        setSelectedStockId(availableStocks[0].stock_id);
+      }
+    } else {
+      setSelectedStockId('');
+    }
+  }, [availableStocks, selectedStockId]);
 
   const searchResults = useMemo(() => {
     let result = products;
@@ -486,10 +506,29 @@ export default function OutboundCart() {
                        </button>
                     </div>
 
+                    {/* Specification Filter & Stock Batch Select */}
+                    {productSpecs.length > 0 && (
+                      <div className="w-full">
+                        <label className="block text-xs font-bold text-indigo-300 uppercase tracking-wider mb-2">商品規格篩選</label>
+                        <select
+                          value={specFilter}
+                          onChange={(e) => setSpecFilter(e.target.value)}
+                          className="block w-full max-w-[calc(100vw-3rem)] rounded-xl border border-indigo-500/20 bg-black/40 py-2.5 px-3 text-sm text-indigo-100 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
+                        >
+                          <option value="ALL">全部規格批次 (不限規格)</option>
+                          {productSpecs.map(opt => (
+                            <option key={opt} value={opt}>
+                              規格: {opt}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
                     {/* Stock Batch Select */}
                     {availableStocks.length === 0 ? (
                       <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm font-semibold text-center mt-4">
-                        此商品目前無庫存
+                        {specFilter !== 'ALL' ? '此規格目前無可用庫存批次' : '此商品目前無庫存'}
                       </div>
                     ) : (
                       <>

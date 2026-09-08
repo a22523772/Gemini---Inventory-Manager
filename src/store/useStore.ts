@@ -297,7 +297,7 @@ export const calculateOrderStatus = (deadlineStr: string, manualStatus?: string)
 
 const stripKey = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]/g, '');
 
-const normalizeAndFillOnlineOrders = (rawItems: any[], _products?: Product[]): OnlineOrder[] => {
+const normalizeAndFillOnlineOrders = (rawItems: any[], _products?: Product[], _stock?: Stock[]): OnlineOrder[] => {
   if (!Array.isArray(rawItems)) return [];
 
   let lastOrderHeader: {
@@ -406,7 +406,25 @@ const normalizeAndFillOnlineOrders = (rawItems: any[], _products?: Product[]): O
     ])).trim();
 
     const quantity = Number(getVal(['quantity', 'qty', 'count', '數量', '件數', '個數', '買家購買數量'])) || 1;
-    const specification = String(getVal(['specification', 'spec', 'variant', '商品規格', '規格', '規格描述', '選項'])).trim();
+    let specification = String(getVal(['specification', 'spec', 'variant', '商品規格', '規格', '規格描述', '選項'])).trim();
+
+    // Link with system products if available
+    let matchedProd: Product | undefined;
+    if (_products && _products.length > 0) {
+      if (product_id) {
+        matchedProd = _products.find(p => String(p.product_id || '').trim().toLowerCase() === product_id.toLowerCase());
+      }
+      if (!matchedProd && product_name) {
+        matchedProd = _products.find(p => String(p.name || '').trim().toLowerCase() === product_name.toLowerCase());
+      }
+      if (matchedProd) {
+        if (!product_id) product_id = matchedProd.product_id;
+        if (!product_name) product_name = matchedProd.name;
+      }
+    }
+
+    // Pre-match and normalize specification against standard product specifications
+    specification = resolveStandardProductSpecification(specification, product_id || product_name, _products, _stock);
 
     // Fallback: if product_name is empty but product_id is provided, use product_id as name
     if (!product_name && product_id) {
@@ -454,23 +472,26 @@ const normalizeAndFillOnlineOrders = (rawItems: any[], _products?: Product[]): O
 };
 
 /**
- * Generates an exact identity fingerprint for an order item based on 4 dimensions:
+ * Generates an exact identity fingerprint for an order item based on 5 dimensions:
  * 1. 訂單編號 (order_id)
  * 2. 商品名稱 (product_name)
  * 3. 商品編號 (product_id)
  * 4. 商品數量 (quantity)
+ * 5. 商品規格 (specification)
  */
 export const buildOrderItemFingerprint = (
   orderId: string | number,
   productId: string | number,
   productName: string,
-  quantity: number | string
+  quantity: number | string,
+  specification?: string
 ): string => {
   const cleanOrderId = String(orderId || '').trim().toLowerCase();
   const cleanProductId = String(productId || '').trim().toLowerCase();
   const cleanProductName = String(productName || '').trim().toLowerCase();
   const cleanQty = Number(quantity) || 0;
-  return `${cleanOrderId}:::${cleanProductId}:::${cleanProductName}:::${cleanQty}`;
+  const cleanSpec = String(specification || '').trim().toLowerCase();
+  return `${cleanOrderId}:::${cleanProductId}:::${cleanProductName}:::${cleanQty}:::${cleanSpec}`;
 };
 
 export interface OrderDuplicateCheckResult {
@@ -785,6 +806,83 @@ export const isSpecificationMatch = (itemSpecRaw?: string, targetSpecRaw?: strin
   if (clean1.includes(clean2) || clean2.includes(clean1)) return true;
 
   return false;
+};
+
+/**
+ * Retrieves all unique specifications available for a given product (from product definition and stock)
+ */
+export const getProductSpecifications = (
+  productIdOrName?: string,
+  products?: Product[],
+  stock?: Stock[]
+): string[] => {
+  if (!productIdOrName) return [];
+  const cleanKey = String(productIdOrName).trim().toLowerCase();
+  if (!cleanKey) return [];
+
+  const matchedProd = (products || []).find(p =>
+    (p.product_id && p.product_id.toLowerCase() === cleanKey) ||
+    (p.name && p.name.toLowerCase() === cleanKey) ||
+    (p.barcode && p.barcode.toLowerCase() === cleanKey)
+  );
+
+  const targetPid = matchedProd ? matchedProd.product_id.toLowerCase() : cleanKey;
+  const specSet = new Set<string>();
+
+  if (matchedProd?.specification) {
+    parseSpecifications(matchedProd.specification).forEach(s => {
+      const clean = s.trim();
+      if (clean) specSet.add(clean);
+    });
+  }
+
+  (stock || []).forEach(s => {
+    if (s.product_id && s.product_id.toLowerCase() === targetPid && s.specification) {
+      parseSpecifications(s.specification).forEach(sp => {
+        const clean = sp.trim();
+        if (clean) specSet.add(clean);
+      });
+    }
+  });
+
+  return Array.from(specSet);
+};
+
+/**
+ * Pre-matches and resolves a raw imported/inputted specification against standard product specifications
+ */
+export const resolveStandardProductSpecification = (
+  rawSpec: string | undefined,
+  productIdOrName: string | undefined,
+  products?: Product[],
+  stock?: Stock[]
+): string => {
+  const cleanRaw = String(rawSpec || '').trim();
+  const availableSpecs = getProductSpecifications(productIdOrName, products, stock);
+
+  if (availableSpecs.length === 0) {
+    return cleanRaw;
+  }
+
+  const isBlankOrGeneric = !cleanRaw || 
+    ['預設規格', '預設', '無', '無規格', '-', '未指定', 'default', 'none'].includes(cleanRaw.toLowerCase());
+
+  if (isBlankOrGeneric) {
+    if (availableSpecs.length === 1) {
+      return availableSpecs[0];
+    }
+    return '';
+  }
+
+  // 1. Exact string match (case-insensitive)
+  const exactMatch = availableSpecs.find(s => s.toLowerCase() === cleanRaw.toLowerCase());
+  if (exactMatch) return exactMatch;
+
+  // 2. Intelligent fuzzy/inclusive match
+  const smartMatch = availableSpecs.find(s => isSpecificationMatch(s, cleanRaw));
+  if (smartMatch) return smartMatch;
+
+  return cleanRaw;
 };
 
 export const isStockInType = (type?: string): boolean => {
@@ -1299,6 +1397,7 @@ interface AppState {
   }) => Promise<void>;
   completeAndStockInAllRemainingPO: (poId: string) => Promise<void>;
   updateOnlineOrderStatus: (orderId: string, status: string, productId?: string) => Promise<boolean>;
+  updateOnlineOrderItemSpecification: (orderId: string, itemIdx: number, newSpec: string) => Promise<void>;
   deleteOnlineOrder: (orderId: string) => Promise<boolean>;
   deduplicateOnlineOrders: (targetOrderId?: string) => Promise<{ success: boolean; removedRowCount: number; affectedOrderCount: number }>;
   addProduct: (product: Omit<Product, 'created_at'>, isManual?: boolean) => Promise<void>;
@@ -1688,13 +1787,28 @@ export const useStore = create<AppState>((set, get) => ({
         let deductRemaining = Number(updatedPayload.quantity) || 0;
         const targetPid = String(updatedPayload.product_id || '').trim().toLowerCase();
         const targetStockId = String(updatedPayload.stock_id || '').trim();
+        const targetSpec = String(updatedPayload.specification || '').trim();
 
         // 1. If a specific stock_id was provided, try to deduct from it first
         let primaryIdx = targetStockId ? updatedStock.findIndex(s => String(s.stock_id || '').trim() === targetStockId) : -1;
         
-        // If primaryIdx was not found by stock_id, but product_id is given, find matching stock entries
+        // If primaryIdx was not found by stock_id, but product_id is given, find matching stock entries with matching specification
         if (primaryIdx === -1 && targetPid) {
-          primaryIdx = updatedStock.findIndex(s => String(s.product_id || '').trim().toLowerCase() === targetPid);
+          if (targetSpec) {
+            primaryIdx = updatedStock.findIndex(s => 
+              String(s.product_id || '').trim().toLowerCase() === targetPid &&
+              isSpecificationMatch(s.specification, targetSpec)
+            );
+          } else {
+            // No spec specified: prefer empty spec entry
+            primaryIdx = updatedStock.findIndex(s => 
+              String(s.product_id || '').trim().toLowerCase() === targetPid &&
+              !String(s.specification || '').trim()
+            );
+            if (primaryIdx === -1) {
+              primaryIdx = updatedStock.findIndex(s => String(s.product_id || '').trim().toLowerCase() === targetPid);
+            }
+          }
         }
 
         if (primaryIdx !== -1) {
@@ -1717,27 +1831,33 @@ export const useStore = create<AppState>((set, get) => ({
           }
         }
 
-        // 2. If deductRemaining > 0 and product_id is provided, deduct remaining from other batches of this product
+        // 2. If deductRemaining > 0 and product_id is provided, deduct remaining from other batches of this product with MATCHING specification
         if (deductRemaining > 0 && targetPid) {
           for (let i = 0; i < updatedStock.length && deductRemaining > 0; i++) {
-            if (String(updatedStock[i].product_id || '').trim().toLowerCase() === targetPid) {
-              const currentQty = Number(updatedStock[i].quantity) || 0;
-              const deductFromThis = Math.min(currentQty, deductRemaining);
-              deductRemaining -= deductFromThis;
+            const rowPid = String(updatedStock[i].product_id || '').trim().toLowerCase();
+            if (rowPid !== targetPid) continue;
 
-              if (currentQty <= deductFromThis) {
-                const deletedId = updatedStock[i].stock_id;
-                updatedStock.splice(i, 1);
-                await dbStock.removeItem(deletedId);
-                i--; // Adjust index after removal
-              } else {
-                updatedStock[i] = {
-                  ...updatedStock[i],
-                  quantity: currentQty - deductFromThis,
-                  last_update: new Date().toISOString()
-                };
-                await dbStock.setItem(updatedStock[i].stock_id, updatedStock[i]);
-              }
+            // Strict specification check: If targetSpec is provided, it MUST match!
+            if (targetSpec && !isSpecificationMatch(updatedStock[i].specification, targetSpec)) {
+              continue;
+            }
+
+            const currentQty = Number(updatedStock[i].quantity) || 0;
+            const deductFromThis = Math.min(currentQty, deductRemaining);
+            deductRemaining -= deductFromThis;
+
+            if (currentQty <= deductFromThis) {
+              const deletedId = updatedStock[i].stock_id;
+              updatedStock.splice(i, 1);
+              await dbStock.removeItem(deletedId);
+              i--; // Adjust index after removal
+            } else {
+              updatedStock[i] = {
+                ...updatedStock[i],
+                quantity: currentQty - deductFromThis,
+                last_update: new Date().toISOString()
+              };
+              await dbStock.setItem(updatedStock[i].stock_id, updatedStock[i]);
             }
           }
         }
@@ -2095,9 +2215,13 @@ export const useStore = create<AppState>((set, get) => ({
               }
             }
           }
+          const spec = p.specification ? String(p.specification).trim() : '';
           if (rem > 0 && pId) {
             for (let i = 0; i < validS.length && rem > 0; i++) {
               if (String(validS[i].product_id).trim().toLowerCase() === pId) {
+                if (spec && !isSpecificationMatch(validS[i].specification, spec)) {
+                  continue;
+                }
                 const d = Math.min(validS[i].quantity, rem);
                 validS[i].quantity -= d;
                 rem -= d;
@@ -2417,11 +2541,32 @@ export const useStore = create<AppState>((set, get) => ({
     return true;
   },
 
+  updateOnlineOrderItemSpecification: async (orderId: string, itemIdx: number, newSpec: string) => {
+    const { onlineOrders } = get();
+    let currentIdxInOrder = 0;
+    const updatedOrders = onlineOrders.map(o => {
+      if (o.order_id === orderId) {
+        if (currentIdxInOrder === itemIdx) {
+          currentIdxInOrder++;
+          return { ...o, specification: newSpec };
+        }
+        currentIdxInOrder++;
+      }
+      return o;
+    });
+    set({ onlineOrders: updatedOrders });
+    await dbOnlineOrders.clear();
+    for (let i = 0; i < updatedOrders.length; i++) {
+      const o = updatedOrders[i];
+      await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id || 'unlinked'}_${i}`, o);
+    }
+  },
+
   deduplicateOnlineOrders: async (targetOrderId?: string) => {
     const { onlineOrders, transactions, gasApiUrl, showToast } = get();
 
     // Track seen fingerprints for items:
-    // Fingerprint: order_id + product_id + product_name + quantity
+    // Fingerprint: order_id + product_id + product_name + quantity + specification
     const seenFingerprints = new Set<string>();
     const deduplicatedOrders: OnlineOrder[] = [];
     let removedRowCount = 0;
@@ -2443,7 +2588,8 @@ export const useStore = create<AppState>((set, get) => ({
       const pid = String(order.product_id || '').trim().toLowerCase();
       const pname = String(order.product_name || '').trim().toLowerCase();
       const qty = Number(order.quantity) || 0;
-      const fp = `${oid}:::${pid}:::${pname}:::${qty}`;
+      const spec = String(order.specification || '').trim().toLowerCase();
+      const fp = `${oid}:::${pid}:::${pname}:::${qty}:::${spec}`;
 
       if (seenFingerprints.has(fp)) {
         // It's a duplicate identical row! Drop this duplicate row.

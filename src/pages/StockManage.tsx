@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { useStore, formatConsistentTxDate, getDominantDateSeparator } from '../store/useStore';
+import { useStore, formatConsistentTxDate, getDominantDateSeparator, getProductSpecifications, isSpecificationMatch } from '../store/useStore';
 import { ArrowLeft, Save, Search, X, Filter, Plus, ScanBarcode, FileText, ShoppingBag } from 'lucide-react';
 import { format } from 'date-fns';
 import OutboundCart from '../components/OutboundCart';
@@ -24,6 +24,8 @@ export default function StockManage() {
   const [note, setNote] = useState('');
   const [currentExpiry, setCurrentExpiry] = useState('');
   const [currentSpecification, setCurrentSpecification] = useState('');
+  const [isCustomSpecMode, setIsCustomSpecMode] = useState(false);
+  const [specFilter, setSpecFilter] = useState('ALL');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedStockId, setSelectedStockId] = useState<string>('');
 
@@ -126,10 +128,19 @@ export default function StockManage() {
     return products.find(p => p.product_id.toLowerCase() === term || p.barcode?.toLowerCase() === term) || null;
   }, [pid, products]);
 
+  const getSpecOptions = useMemo(() => {
+    if (!product) return [];
+    return getProductSpecifications(product.product_id, products, stock);
+  }, [product, products, stock]);
+
   const availableStockEntries = useMemo(() => {
     if (!product) return [];
-    return stock.filter(s => s.product_id === product.product_id);
-  }, [product, stock]);
+    const productStocks = stock.filter(s => s.product_id === product.product_id);
+    if (specFilter !== 'ALL') {
+      return productStocks.filter(s => isSpecificationMatch(s.specification, specFilter));
+    }
+    return productStocks;
+  }, [product, stock, specFilter]);
 
   useEffect(() => {
     if (availableStockEntries.length > 0) {
@@ -143,40 +154,13 @@ export default function StockManage() {
 
   const selectedStock = availableStockEntries.find(s => s.stock_id === selectedStockId);
 
-  const getSpecOptions = useMemo(() => {
-    if (!product) return [];
-    const matchingProducts = products.filter(p => p.product_id === product.product_id);
-    const allSpecs: string[] = [];
-    matchingProducts.forEach(p => {
-      if (p.specification) {
-        p.specification.split(/[,\/，\s、]+/).forEach(s => {
-          const trimmed = s.trim();
-          if (trimmed && !allSpecs.includes(trimmed)) {
-            allSpecs.push(trimmed);
-          }
-        });
-      }
-    });
-    return allSpecs;
-  }, [product, products]);
-
   useEffect(() => {
     if (product) {
       if (type === 'stock_in') {
         setCurrentExpiry('');
-        const matchingProducts = products.filter(p => p.product_id === product.product_id);
-        const allSpecs: string[] = [];
-        matchingProducts.forEach(p => {
-          if (p.specification) {
-            p.specification.split(/[,\/，\s、]+/).forEach(s => {
-              const trimmed = s.trim();
-              if (trimmed && !allSpecs.includes(trimmed)) {
-                allSpecs.push(trimmed);
-              }
-            });
-          }
-        });
-        setCurrentSpecification(allSpecs[0] || '');
+        const specs = getProductSpecifications(product.product_id, products, stock);
+        setCurrentSpecification(specs[0] || '');
+        setIsCustomSpecMode(false);
         setCostPrice(product.cost_price?.toString() || '');
         setVendorId(product.vendor_id || '');
 
@@ -435,44 +419,104 @@ export default function StockManage() {
           )}
         </div>
 
-        {(type === 'stock_out' || type === 'adjust') && availableStockEntries.length > 0 && (
-          <div className="animate-in fade-in slide-in-from-top-2 p-3 border border-[var(--color-accent-blue)]/30 bg-[var(--color-accent-blue)]/10 rounded-xl">
-             <label className="block text-sm font-bold text-[var(--color-accent-blue)] uppercase tracking-wider text-[10px] mb-1">
-               選擇庫存批次 (多個儲位或效期)
-             </label>
-             <select
-               value={selectedStockId}
-               onChange={(e) => setSelectedStockId(e.target.value)}
-               className="block w-full rounded-xl border border-white/10 bg-black/20 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]"
-             >
-               {availableStockEntries.map(s => (
-                 <option key={s.stock_id} value={s.stock_id}>
-                   {s.location}-{s.floor}-{s.area} {s.specification ? `[${s.specification}]` : ''} {s.expiry_date ? `(效: ${s.expiry_date})` : ''} [量: {s.quantity}]
-                 </option>
-               ))}
-             </select>
+        {(type === 'stock_out' || type === 'adjust') && (
+          <div className="space-y-3">
+            {getSpecOptions.length > 0 && (
+              <div className="animate-in fade-in slide-in-from-top-2 p-3 border border-indigo-500/30 bg-indigo-500/10 rounded-xl">
+                <label className="block text-sm font-bold text-indigo-300 uppercase tracking-wider text-[10px] mb-1">
+                  規格篩選 (依規格分流庫存)
+                </label>
+                <select
+                  value={specFilter}
+                  onChange={(e) => setSpecFilter(e.target.value)}
+                  className="block w-full rounded-xl border border-indigo-500/20 bg-black/40 py-2.5 px-3 text-sm text-indigo-100 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
+                >
+                  <option value="ALL">全部規格批次 (不限規格)</option>
+                  {getSpecOptions.map(opt => (
+                    <option key={opt} value={opt}>
+                      規格: {opt}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {availableStockEntries.length > 0 ? (
+              <div className="animate-in fade-in slide-in-from-top-2 p-3 border border-[var(--color-accent-blue)]/30 bg-[var(--color-accent-blue)]/10 rounded-xl">
+                <label className="block text-sm font-bold text-[var(--color-accent-blue)] uppercase tracking-wider text-[10px] mb-1">
+                  選擇出庫/調整批次
+                </label>
+                <select
+                  value={selectedStockId}
+                  onChange={(e) => setSelectedStockId(e.target.value)}
+                  className="block w-full rounded-xl border border-white/10 bg-black/20 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]"
+                >
+                  {availableStockEntries.map(s => (
+                    <option key={s.stock_id} value={s.stock_id}>
+                      {s.location}-{s.floor}-{s.area} {s.specification ? `[${s.specification}]` : ''} {s.expiry_date ? `(效: ${s.expiry_date})` : ''} [量: {s.quantity}]
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-300 text-center font-medium">
+                此規格無符合的現有庫存批次
+              </div>
+            )}
           </div>
         )}
 
         {type === 'stock_in' && (
           <div className="animate-in fade-in slide-in-from-top-2 p-3 border border-[var(--color-accent-blue)]/30 bg-[var(--color-accent-blue)]/5 rounded-xl">
-            <label className="block text-sm font-bold text-[var(--color-accent-blue)] uppercase tracking-wider text-[10px] mb-1">
-              商品規格 {getSpecOptions.length > 0 ? '(可點選下拉選單或手動輸入新規格)' : '(手動輸入)'}
-            </label>
-            <input
-              type="text"
-              list="spec-suggestions"
-              value={currentSpecification}
-              onChange={(e) => setCurrentSpecification(e.target.value)}
-              placeholder="例如：灰 或 紅色 (可自行輸入新規格)"
-              className="block w-full rounded-xl border border-white/10 bg-black/20 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all"
-            />
-            {getSpecOptions.length > 0 && (
-              <datalist id="spec-suggestions">
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm font-bold text-[var(--color-accent-blue)] uppercase tracking-wider text-[10px]">
+                商品規格 (固定選單)
+              </label>
+              {getSpecOptions.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCustomSpecMode(!isCustomSpecMode);
+                    if (isCustomSpecMode) {
+                      setCurrentSpecification(getSpecOptions[0] || '');
+                    }
+                  }}
+                  className="text-[10px] text-indigo-400 hover:text-indigo-300 underline"
+                >
+                  {isCustomSpecMode ? '切換回規格選單' : '➕ 輸入新規格'}
+                </button>
+              )}
+            </div>
+
+            {getSpecOptions.length > 0 && !isCustomSpecMode ? (
+              <select
+                value={currentSpecification}
+                onChange={(e) => {
+                  if (e.target.value === '__custom__') {
+                    setIsCustomSpecMode(true);
+                    setCurrentSpecification('');
+                  } else {
+                    setCurrentSpecification(e.target.value);
+                  }
+                }}
+                className="block w-full rounded-xl border border-white/10 bg-black/20 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]"
+              >
+                <option value="">(無特定規格)</option>
                 {getSpecOptions.map(opt => (
-                  <option key={opt} value={opt} />
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
                 ))}
-              </datalist>
+                <option value="__custom__">➕ 自訂新規格...</option>
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={currentSpecification}
+                onChange={(e) => setCurrentSpecification(e.target.value)}
+                placeholder="例如：灰 或 紅色"
+                className="block w-full rounded-xl border border-white/10 bg-black/20 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all"
+              />
             )}
           </div>
         )}
