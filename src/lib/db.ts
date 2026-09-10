@@ -70,7 +70,8 @@ export type Product = {
   is_synced?: boolean;
   is_discontinued?: boolean; // 暫時停產 (廠商生產中)
   is_out_of_stock?: boolean; // 暫時缺貨
-  status?: string; // 狀態 (例如: 正常、暫時缺貨、暫時停產)
+  expected_restock_date?: string; // 預計進貨日 (YYYY-MM-DD)；若暫時缺貨且未填即為停產
+  status?: string; // 狀態 (例如: 正常、暫時缺貨、暫時停產、停產)
 };
 
 export type Stock = {

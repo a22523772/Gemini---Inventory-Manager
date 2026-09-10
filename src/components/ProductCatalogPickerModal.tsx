@@ -1,9 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { Product, Vendor } from '../lib/db';
-import { useStore, getOnOrderStockQty, parseSpecifications } from '../store/useStore';
+import { useStore, getOnOrderStockQty, parseSpecifications, getProductStatusInfo } from '../store/useStore';
 import { 
   Search, X, Plus, Minus, Check, Package, 
-  Layers, Building2, DollarSign, Filter, Sparkles, AlertCircle, Truck, Tag 
+  Layers, Building2, DollarSign, Filter, Sparkles, AlertCircle, Truck, Tag, AlertTriangle 
 } from 'lucide-react';
 
 interface ProductCatalogPickerModalProps {
@@ -251,6 +251,8 @@ export default function ProductCatalogPickerModal({
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               {filteredProducts.map(p => {
+                const statusInfo = getProductStatusInfo(p);
+                const isBlocked = statusInfo.isPaused;
                 const subSpecs = parseSpecifications(p.specification);
                 const hasMultipleSpecs = subSpecs.length > 1;
                 const totalProductQty = selectedItems
@@ -264,7 +266,9 @@ export default function ProductCatalogPickerModal({
                   <div
                     key={p.product_id}
                     className={`p-3 rounded-xl border transition-all flex flex-col justify-between gap-2.5 ${
-                      totalProductQty > 0
+                      isBlocked
+                        ? 'bg-rose-950/20 border-rose-500/30 opacity-75'
+                        : totalProductQty > 0
                         ? 'bg-indigo-950/30 border-indigo-500/50 shadow-sm shadow-indigo-500/10'
                         : 'bg-white/5 hover:bg-white/[0.08] border-white/10'
                     }`}
@@ -272,14 +276,19 @@ export default function ProductCatalogPickerModal({
                     {/* Top row: Title and info */}
                     <div className="space-y-1">
                       <div className="flex items-start justify-between gap-2">
-                        <span className="font-bold text-xs text-white line-clamp-2 leading-relaxed">
+                        <span className="font-bold text-xs text-white line-clamp-2 leading-relaxed flex items-center gap-1.5">
                           {p.name}
                         </span>
-                        {totalProductQty > 0 && (
+                        {isBlocked ? (
+                          <span className="shrink-0 text-[10px] px-2 py-0.5 bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-full font-bold flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3 text-rose-400" />
+                            {statusInfo.isDiscontinued ? '停產' : `缺貨 (${statusInfo.expectedDate || '未定'})`}
+                          </span>
+                        ) : totalProductQty > 0 ? (
                           <span className="shrink-0 text-[10px] px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full font-bold">
                             已挑選 x{totalProductQty}
                           </span>
-                        )}
+                        ) : null}
                       </div>
 
                       {/* Specs & Tags */}
@@ -326,7 +335,11 @@ export default function ProductCatalogPickerModal({
 
                       {!hasMultipleSpecs && (
                         <div>
-                          {totalProductQty > 0 ? (
+                          {isBlocked ? (
+                            <span className="text-xs px-2.5 py-1 bg-rose-950/40 text-rose-400 border border-rose-500/30 rounded-lg font-bold">
+                              禁止採購
+                            </span>
+                          ) : totalProductQty > 0 ? (
                             <div className="flex items-center gap-1.5 bg-slate-900 border border-indigo-500/40 rounded-lg p-0.5">
                               <button
                                 type="button"
@@ -370,17 +383,19 @@ export default function ProductCatalogPickerModal({
                             <Tag className="w-3 h-3 text-indigo-400" />
                             <span>多規格選購 ({subSpecs.length} 款)：</span>
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              subSpecs.forEach(spec => {
-                                onAddProduct(p, 1, spec);
-                              });
-                            }}
-                            className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold px-1.5 py-0.5 rounded hover:bg-white/5 transition-colors"
-                          >
-                            + 全規格各一
-                          </button>
+                          {!isBlocked && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                subSpecs.forEach(spec => {
+                                  onAddProduct(p, 1, spec);
+                                });
+                              }}
+                              className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold px-1.5 py-0.5 rounded hover:bg-white/5 transition-colors"
+                            >
+                              + 全規格各一
+                            </button>
+                          )}
                         </div>
                         <div className="grid grid-cols-2 gap-1.5">
                           {subSpecs.map(spec => {
@@ -393,7 +408,9 @@ export default function ProductCatalogPickerModal({
                                 <span className="text-xs text-slate-200 font-medium truncate max-w-[90px]" title={spec}>
                                   {spec}
                                 </span>
-                                {specQty > 0 ? (
+                                {isBlocked ? (
+                                  <span className="text-[10px] text-rose-400 font-bold">不可採購</span>
+                                ) : specQty > 0 ? (
                                   <div className="flex items-center gap-1 bg-slate-900 border border-indigo-500/40 rounded p-0.5">
                                     <button
                                       type="button"

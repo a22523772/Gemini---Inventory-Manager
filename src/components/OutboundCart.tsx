@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useStore, getProductSpecifications, isSpecificationMatch } from '../store/useStore';
-import { Save, Plus, Trash2, Search, X, ScanBarcode, Minus, ShoppingCart, Filter } from 'lucide-react';
+import { useStore, getProductSpecifications, isSpecificationMatch, getProductStatusInfo } from '../store/useStore';
+import { Save, Plus, Trash2, Search, X, ScanBarcode, Minus, ShoppingCart, Filter, AlertTriangle } from 'lucide-react';
 import QuantityInput from './QuantityInput';
 
 interface CartItem {
@@ -184,6 +184,18 @@ export default function OutboundCart() {
 
   const handleAddToCart = () => {
     if (!selectedProduct) return;
+
+    // Check availability status
+    const statusInfo = getProductStatusInfo(selectedProduct);
+    if (statusInfo.isPaused) {
+      if (statusInfo.isDiscontinued) {
+        showToast(`❌ 【${selectedProduct.name}】為「停產」商品，禁止出貨！`);
+      } else {
+        showToast(`❌ 【${selectedProduct.name}】目前為「暫時缺貨」狀態${statusInfo.expectedDate ? ` (預計 ${statusInfo.expectedDate} 到貨)` : ''}，禁止出貨！`);
+      }
+      return;
+    }
+
     const qty = parseInt(quantityToAdd);
     if (!qty || qty <= 0) {
       showToast('❌ 數量無效');
@@ -249,6 +261,11 @@ export default function OutboundCart() {
     
     // Check constraints
     for (const item of cart) {
+      const statusInfo = getProductStatusInfo(item.product);
+      if (statusInfo.isPaused) {
+        showToast(`❌ 商品【${item.product.name}】目前為「${statusInfo.isDiscontinued ? '停產' : '暫時缺貨'}」狀態，禁止出貨！請自清單中移除。`);
+        return;
+      }
       if (isExpired(item.stockEntry.expiry_date)) {
         showToast(`❌ 商品 ${item.product.name} 已過期，禁止出貨！`);
         return;
@@ -471,24 +488,50 @@ export default function OutboundCart() {
                       {searchResults.length === 0 ? (
                         <div className="text-center py-8 text-white/40 text-sm">找不到相關商品</div>
                       ) : (
-                        searchResults.map(p => (
-                          <div 
-                            key={p.product_id}
-                            onClick={() => {
-                              setSelectedProduct(p);
-                              const pStocks = stock.filter(s => s.product_id === p.product_id);
-                              setSelectedStockId(pStocks.length > 0 ? pStocks[0].stock_id : '');
-                              setSearchTerm('');
-                            }}
-                            className="glass-panel p-3 rounded-xl border border-white/5 hover:border-[var(--color-accent-blue)]/50 cursor-pointer active:scale-[0.98] transition-all flex items-center justify-between w-full"
-                          >
-                             <div className="overflow-hidden pr-2">
-                               <div className="font-bold text-white text-sm truncate">{p.name}</div>
-                               <div className="text-xs text-white/40 tracking-wider truncate mt-1">{p.product_id}</div>
-                             </div>
-                             <Plus className="w-5 h-5 text-[var(--color-accent-blue)] shrink-0" />
-                          </div>
-                        ))
+                        searchResults.map(p => {
+                          const statusInfo = getProductStatusInfo(p);
+                          const isBlocked = statusInfo.isPaused;
+
+                          return (
+                            <div 
+                              key={p.product_id}
+                              onClick={() => {
+                                if (isBlocked) {
+                                  showToast(`❌ 【${p.name}】目前為「${statusInfo.isDiscontinued ? '停產' : '暫時缺貨'}」狀態，禁止出貨！`);
+                                  return;
+                                }
+                                setSelectedProduct(p);
+                                const pStocks = stock.filter(s => s.product_id === p.product_id);
+                                setSelectedStockId(pStocks.length > 0 ? pStocks[0].stock_id : '');
+                                setSearchTerm('');
+                              }}
+                              className={`glass-panel p-3 rounded-xl border transition-all flex items-center justify-between w-full ${
+                                isBlocked 
+                                  ? 'opacity-60 border-rose-500/20 bg-rose-950/10 cursor-not-allowed'
+                                  : 'border-white/5 hover:border-[var(--color-accent-blue)]/50 cursor-pointer active:scale-[0.98]'
+                              }`}
+                            >
+                               <div className="overflow-hidden pr-2">
+                                 <div className="font-bold text-white text-sm truncate flex items-center gap-2">
+                                   <span>{p.name}</span>
+                                   {isBlocked && (
+                                     <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                                       {statusInfo.isDiscontinued ? '停產' : `缺貨 (預計: ${statusInfo.expectedDate || '未定'})`}
+                                     </span>
+                                   )}
+                                 </div>
+                                 <div className="text-xs text-white/40 tracking-wider truncate mt-1">{p.product_id}</div>
+                               </div>
+                               {isBlocked ? (
+                                 <span className="text-[10px] text-rose-400 font-bold px-2 py-1 rounded bg-rose-500/10 border border-rose-500/20 shrink-0">
+                                   禁止出貨
+                                 </span>
+                               ) : (
+                                 <Plus className="w-5 h-5 text-[var(--color-accent-blue)] shrink-0" />
+                               )}
+                            </div>
+                          );
+                        })
                       )}
                     </div>
                   </div>

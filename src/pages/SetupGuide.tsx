@@ -214,13 +214,13 @@ export default function SetupGuide() {
 
             <div className="glass-panel p-4 rounded-2xl border-orange-500/20 bg-orange-500/5">
               <h2 className="text-base font-bold text-orange-200 mb-2">資料庫維護工具</h2>
-              <p className="text-xs text-orange-200/60 mb-4">若您手動在 Google Sheets 新增了多行資料，請執行此功能以自動生成缺失的 ID 並確保格式正確。</p>
+              <p className="text-xs text-orange-200/60 mb-4">若您手動在 Google Sheets 新增了多行資料，或需要為雲端試算表自動補齊最新欄位（如 products 表的預計進貨日 expected_restock_date、brand、specification 等），請執行此功能以自動補齊表頭與生成缺失的 ID 並確保格式正確。</p>
               <button
                 onClick={() => useStore.getState().reformatDatabase()}
                 disabled={isLoading || !gasApiUrl}
                 className={`w-full flex items-center justify-center py-3 px-4 rounded-xl text-sm font-bold active:scale-95 transition-all outline-none border border-orange-500/30 text-orange-200 bg-orange-500/10 hover:bg-orange-500/20 disabled:opacity-50`}
               >
-                整理資料庫格式與補齊 ID
+                整理資料庫格式、補齊欄位與 ID
               </button>
             </div>
 
@@ -327,7 +327,7 @@ export default function SetupGuide() {
                 <h3 className="text-base font-bold text-[var(--color-text-main)]">1. Google Sheets 結構設定</h3>
                 <p className="text-[var(--color-text-dim)] mt-1">請建立一個新的 Google Sheet，並確保下方有這六個工作表 (區分大小寫，系統亦會於首次寫入時自動建立)：</p>
                 <ul className="list-disc pl-5 mt-2 space-y-1 text-white/80 font-mono text-xs">
-                  <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, specification, min_stock, is_discontinued, created_at</li>
+                  <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, specification, min_stock, is_discontinued, expected_restock_date, created_at</li>
                   <li><strong>vendors</strong> (供應商): vendor_id, vendor_name, contact, phone</li>
                   <li><strong>stock</strong> (庫存表): stock_id, product_id, name, location, floor, area, quantity, expiry_date, specification, last_update</li>
                   <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, name, type, quantity, location, floor, area, specification, cost_price, vendor_id, date, note, operator</li>
@@ -351,7 +351,7 @@ export default function SetupGuide() {
     
     var headers = [];
     if (prodSheet.getLastRow() === 0) {
-      headers = ['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at', 'brand', 'specification', 'min_stock', 'is_discontinued'];
+      headers = ['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at', 'brand', 'specification', 'min_stock', 'is_discontinued', 'expected_restock_date'];
       prodSheet.appendRow(headers);
     } else {
       headers = prodSheet.getRange(1, 1, 1, prodSheet.getLastColumn()).getValues()[0];
@@ -359,6 +359,7 @@ export default function SetupGuide() {
       if (headers.indexOf('specification') === -1) { headers.push('specification'); prodSheet.getRange(1, headers.length).setValue('specification'); }
       if (headers.indexOf('min_stock') === -1) { headers.push('min_stock'); prodSheet.getRange(1, headers.length).setValue('min_stock'); }
       if (headers.indexOf('is_discontinued') === -1) { headers.push('is_discontinued'); prodSheet.getRange(1, headers.length).setValue('is_discontinued'); }
+      if (headers.indexOf('expected_restock_date') === -1) { headers.push('expected_restock_date'); prodSheet.getRange(1, headers.length).setValue('expected_restock_date'); }
     }
     
     // Automatic ID generation (Pattern B: P000001)
@@ -392,12 +393,13 @@ export default function SetupGuide() {
     var prodSheet = ss.getSheetByName('products');
     var prodCostMap = {};
     if (prodSheet && prodSheet.getLastRow() > 0) {
-       var headers = ['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at', 'brand', 'specification', 'min_stock', 'is_discontinued'];
+       var headers = ['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at', 'brand', 'specification', 'min_stock', 'is_discontinued', 'expected_restock_date'];
        var existingHeaders = prodSheet.getRange(1, 1, 1, prodSheet.getLastColumn()).getValues()[0];
        if (existingHeaders.indexOf('brand') === -1) { existingHeaders.push('brand'); prodSheet.getRange(1, existingHeaders.length).setValue('brand'); }
        if (existingHeaders.indexOf('specification') === -1) { existingHeaders.push('specification'); prodSheet.getRange(1, existingHeaders.length).setValue('specification'); }
        if (existingHeaders.indexOf('min_stock') === -1) { existingHeaders.push('min_stock'); prodSheet.getRange(1, existingHeaders.length).setValue('min_stock'); }
        if (existingHeaders.indexOf('is_discontinued') === -1) { existingHeaders.push('is_discontinued'); prodSheet.getRange(1, existingHeaders.length).setValue('is_discontinued'); }
+       if (existingHeaders.indexOf('expected_restock_date') === -1) { existingHeaders.push('expected_restock_date'); prodSheet.getRange(1, existingHeaders.length).setValue('expected_restock_date'); }
        
        var values = prodSheet.getDataRange().getValues();
        var idIdx = existingHeaders.indexOf('product_id');

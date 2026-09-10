@@ -244,12 +244,33 @@ export default function Home() {
 
   // Helper to validate single item health status (stock checks only)
   const checkItemHealth = (item: any) => {
-    const product = products.find(p => p.product_id === item.product_id);
+    const itemPid = String(item.product_id || '').trim().toLowerCase();
+    const itemName = String(item.product_name || '').trim().toLowerCase();
+    const product = products.find(p => 
+      (itemPid && String(p.product_id || '').trim().toLowerCase() === itemPid) ||
+      (itemName && String(p.name || '').trim().toLowerCase() === itemName) ||
+      (itemName && String(p.product_id || '').trim().toLowerCase() === itemName)
+    );
     if (!product) return { ok: false, message: '系統找不到此商品的資料，請先新增商品。' };
+
+    // Check Out of Stock or Discontinued status: strictly block shipping!
+    const statusInfo = getProductStatusInfo(product);
+    if (statusInfo.isPaused) {
+      if (statusInfo.isDiscontinued) {
+        return { ok: false, message: '出貨安全阻擋！此商品已被系統標註為「停產」，禁止出貨！' };
+      } else {
+        return { 
+          ok: false, 
+          message: `出貨安全阻擋！此商品目前為「暫時缺貨」狀態${statusInfo.expectedDate ? ` (預計 ${statusInfo.expectedDate} 到貨)` : ''}，禁止出貨！` 
+        };
+      }
+    }
 
     const itemSpec = item.specification ? String(item.specification).trim() : '';
     const productStock = stock.filter(s => {
-      const pidMatch = String(s.product_id || '').trim().toLowerCase() === String(item.product_id || '').trim().toLowerCase();
+      const sPid = String(s.product_id || '').trim().toLowerCase();
+      const sName = String((s as any).name || '').trim().toLowerCase();
+      const pidMatch = (itemPid && sPid === itemPid) || (product.product_id && sPid === product.product_id.toLowerCase()) || (itemName && sName === itemName);
       if (!pidMatch) return false;
       if (itemSpec) {
         return isSpecificationMatch(s.specification, itemSpec);

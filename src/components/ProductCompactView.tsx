@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useStore, getOnOrderStockQty } from '../store/useStore';
+import { useStore, getOnOrderStockQty, getProductStatusInfo } from '../store/useStore';
 import { 
   Search, 
   Copy, 
@@ -19,7 +19,8 @@ import {
   ExternalLink,
   Pencil,
   X,
-  Truck
+  Truck,
+  Calendar
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -95,7 +96,8 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
           ? Number(rawMin) 
           : 5;
 
-      const isOutOfStock = Boolean(p.is_out_of_stock || p.is_discontinued);
+      const statusInfo = getProductStatusInfo(p);
+      const isOutOfStock = statusInfo.isPaused;
       const isOut = currentStock <= 0;
       const isLow = !isOut && currentStock <= minStock;
       
@@ -134,6 +136,10 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
         current_stock: currentStock,
         min_stock: minStock,
         stock_entries: stockData.entries,
+        status_info: statusInfo,
+        is_paused: statusInfo.isPaused,
+        is_discontinued: statusInfo.isDiscontinued,
+        expected_restock_date: statusInfo.expectedDate,
         is_out_of_stock: isOutOfStock,
         is_out: isOut,
         is_low: isLow,
@@ -601,7 +607,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                       {/* Product Name & Brand */}
                       <td className="p-3">
                         <div className="space-y-1">
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-bold text-white text-sm hover:text-sky-300 transition-colors">
                               {item.name}
                             </span>
@@ -609,6 +615,18 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                               <span className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.2 rounded border border-white/10 shrink-0 font-medium">
                                 {item.brand}
                               </span>
+                            )}
+                            {item.is_paused && (
+                              item.is_discontinued ? (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold shrink-0">
+                                  🔴 停產
+                                </span>
+                              ) : (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold shrink-0 flex items-center gap-1">
+                                  <Calendar className="w-2.5 h-2.5 text-amber-400" />
+                                  <span>🟡 暫時缺貨 {item.expected_restock_date ? `(預計: ${item.expected_restock_date})` : ''}</span>
+                                </span>
+                              )
                             )}
                           </div>
                           <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400 font-mono">
@@ -670,9 +688,13 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
 
                       {/* Suggested Order Qty */}
                       <td className="p-3 text-center">
-                        {isOutOfStock ? (
-                          <span className="text-[11px] text-amber-300/80 font-medium">
-                            🟡 待補貨
+                        {item.is_paused ? (
+                          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full inline-block ${
+                            item.is_discontinued 
+                              ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30' 
+                              : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                          }`}>
+                            {item.is_discontinued ? '🔴 停產 (禁止採購)' : '🟡 缺貨 (禁止採購)'}
                           </span>
                         ) : item.suggested_order_qty > 0 ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-sky-500/20 text-sky-300 border border-sky-500/40 rounded-full font-mono text-xs font-black animate-pulse">
@@ -708,27 +730,42 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
 
                       {/* Out of Stock / Active Toggle */}
                       <td className="p-3 text-center">
-                        <button
-                          onClick={() => toggleOutOfStock(item.product_id)}
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold transition-all border cursor-pointer ${
-                            isOutOfStock 
-                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30' 
-                              : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20 hover:bg-emerald-500/20'
-                          }`}
-                          title={isOutOfStock ? '點擊恢復正常供應' : '點擊標記為暫時缺貨'}
-                        >
-                          {isOutOfStock ? (
-                            <>
-                              <PauseCircle className="w-3.5 h-3.5 text-amber-400" />
-                              <span>暫時缺貨</span>
-                            </>
-                          ) : (
-                            <>
-                              <PlayCircle className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>正常供應</span>
-                            </>
+                        <div className="flex flex-col items-center gap-1">
+                          <button
+                            onClick={() => toggleOutOfStock(item.product_id)}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold transition-all border cursor-pointer ${
+                              item.is_discontinued
+                                ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                                : item.is_paused 
+                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30' 
+                                  : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20 hover:bg-emerald-500/20'
+                            }`}
+                            title={item.is_paused ? '點擊恢復正常供應' : '點擊標記為暫時缺貨'}
+                          >
+                            {item.is_discontinued ? (
+                              <>
+                                <span className="text-xs">🔴</span>
+                                <span>已停產</span>
+                              </>
+                            ) : item.is_paused ? (
+                              <>
+                                <PauseCircle className="w-3.5 h-3.5 text-amber-400" />
+                                <span>暫時缺貨</span>
+                              </>
+                            ) : (
+                              <>
+                                <PlayCircle className="w-3.5 h-3.5 text-emerald-400" />
+                                <span>正常供應</span>
+                              </>
+                            )}
+                          </button>
+                          {item.is_paused && item.expected_restock_date && (
+                            <span className="text-[10px] text-amber-300/90 font-mono flex items-center gap-0.5">
+                              <Calendar className="w-2.5 h-2.5 text-amber-400" />
+                              <span>{item.expected_restock_date}</span>
+                            </span>
                           )}
-                        </button>
+                        </div>
                       </td>
 
                       {/* Actions */}

@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useStore, getProductStatusInfo, ProductStatusInfo } from '../store/useStore';
-import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter, AlertCircle, Clock, ArrowUpDown, SlidersHorizontal, X, PauseCircle, PlayCircle, Layers, TableProperties, TrendingUp, ClipboardList, Ban } from 'lucide-react';
+import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter, AlertCircle, Clock, ArrowUpDown, SlidersHorizontal, X, PauseCircle, PlayCircle, Layers, TableProperties, TrendingUp, ClipboardList, Ban, Calendar } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { differenceInDays } from 'date-fns';
 import QuantityInput from '../components/QuantityInput';
@@ -358,6 +358,14 @@ export default function Products() {
                   >
                     🟡 暫時缺貨
                   </button>
+                  <button
+                    onClick={() => setFilterDiscontinued('discontinued')}
+                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
+                      filterDiscontinued === 'discontinued' ? 'bg-rose-500/30 text-rose-300' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    🔴 停產
+                  </button>
                 </div>
 
                 <div className="relative">
@@ -466,11 +474,18 @@ export default function Products() {
                       {p.specification && <span className="text-[10px] font-normal px-1.5 py-0.5 ml-1 bg-white/10 rounded-md text-[var(--color-accent-blue)]">{p.specification}</span>}
                     </h3>
                     <div className="flex flex-wrap gap-1.5 mt-2">
-                       {isPaused && (
-                         <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-500/20 text-amber-300 rounded-md flex items-center gap-1 border border-amber-500/40 shadow-sm">
-                           <Ban className="w-3 h-3 text-amber-400" />
-                           🟡 暫時缺貨 (待補貨)
-                         </span>
+                       {statusInfo.isPaused && (
+                         statusInfo.isDiscontinued ? (
+                           <span className="text-[10px] font-bold px-2 py-0.5 bg-rose-500/20 text-rose-300 rounded-md flex items-center gap-1 border border-rose-500/40 shadow-sm">
+                             <Ban className="w-3 h-3 text-rose-400" />
+                             🔴 停產 (禁止進出貨/採購)
+                           </span>
+                         ) : (
+                           <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-500/20 text-amber-300 rounded-md flex items-center gap-1 border border-amber-500/40 shadow-sm">
+                             <Calendar className="w-3 h-3 text-amber-400" />
+                             🟡 暫時缺貨 {statusInfo.expectedDate ? `(預計: ${statusInfo.expectedDate})` : ''}
+                           </span>
+                         )
                        )}
                        {isExpired && (
                          <span className="text-[10px] font-bold px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded flex items-center gap-1 border border-red-500/30">
@@ -520,16 +535,19 @@ export default function Products() {
                         <div className="flex gap-1.5 items-center flex-wrap">
                            {/* Status quick toggle dropdown / buttons */}
                            <select
-                             value={isPaused ? 'out_of_stock' : 'normal'}
+                             value={statusInfo.status}
                              onChange={(e) => setProductAvailability(p.product_id, e.target.value as any)}
                              className={`px-2 py-1 text-xs font-bold rounded-lg border outline-none transition-all cursor-pointer ${
-                               isPaused
-                                 ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                                 : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                               statusInfo.isDiscontinued
+                                 ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                 : statusInfo.isPaused
+                                   ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                   : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                              }`}
                            >
                              <option value="normal" className="bg-[#0f172a] text-emerald-300">🟢 正常供應</option>
                              <option value="out_of_stock" className="bg-[#0f172a] text-amber-300">🟡 暫時缺貨</option>
+                             <option value="discontinued" className="bg-[#0f172a] text-rose-300">🔴 停產</option>
                            </select>
                            <button onClick={() => navigate(`/add-product?editId=${p.product_id}`)} className="p-2 glass-panel text-[var(--color-accent-blue)] rounded-lg hover:bg-white/10" title="編輯商品">
                              <Pencil className="w-4 h-4" />

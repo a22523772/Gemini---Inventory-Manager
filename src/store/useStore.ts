@@ -141,40 +141,52 @@ export interface ProductStatusInfo {
   status: ProductAvailabilityStatus;
   label: string;
   badgeClass: string;
+  expectedDate?: string;
+  isDiscontinued: boolean;
 }
 
 export const getProductStatusInfo = (p: any): ProductStatusInfo => {
-  if (!p) return { isPaused: false, status: 'normal', label: '正常供應', badgeClass: 'bg-emerald-500/20 text-emerald-300' };
+  if (!p) return { isPaused: false, status: 'normal', label: '正常供應', badgeClass: 'bg-emerald-500/20 text-emerald-300', isDiscontinued: false };
 
+  // Determine if out of stock or discontinued
+  let isOut = false;
   if (p.is_discontinued || p.is_out_of_stock) {
-    return {
-      isPaused: true,
-      status: 'out_of_stock',
-      label: '暫時缺貨',
-      badgeClass: 'bg-amber-500/25 text-amber-300 border border-amber-500/40'
-    };
+    isOut = true;
   }
 
   const rawStatus = String(p.status || p['狀態'] || p.state || '').trim();
   if (rawStatus.includes('停產') || rawStatus.includes('缺貨') || rawStatus.toLowerCase() === 'discontinued' || rawStatus.toLowerCase() === 'out_of_stock') {
-    return {
-      isPaused: true,
-      status: 'out_of_stock',
-      label: '暫時缺貨',
-      badgeClass: 'bg-amber-500/25 text-amber-300 border border-amber-500/40'
-    };
+    isOut = true;
   }
 
   if (String(p['暫時停產'] || '').toUpperCase() === 'TRUE' || String(p['停產'] || '').toUpperCase() === 'TRUE' || String(p['暫時缺貨'] || '').toUpperCase() === 'TRUE' || String(p['缺貨'] || '').toUpperCase() === 'TRUE') {
-    return {
-      isPaused: true,
-      status: 'out_of_stock',
-      label: '暫時缺貨',
-      badgeClass: 'bg-amber-500/25 text-amber-300 border border-amber-500/40'
-    };
+    isOut = true;
   }
 
-  return { isPaused: false, status: 'normal', label: '正常供應', badgeClass: 'bg-emerald-500/20 text-emerald-300' };
+  if (isOut) {
+    const expDate = String(p.expected_restock_date || p['預計進貨日'] || p['預計到貨日'] || '').trim();
+    if (expDate) {
+      return {
+        isPaused: true,
+        status: 'out_of_stock',
+        label: `暫時缺貨 (預計 ${expDate} 到貨)`,
+        badgeClass: 'bg-amber-500/25 text-amber-300 border border-amber-500/40',
+        expectedDate: expDate,
+        isDiscontinued: false
+      };
+    } else {
+      return {
+        isPaused: true,
+        status: 'discontinued',
+        label: '停產 (無預計進貨日)',
+        badgeClass: 'bg-rose-500/25 text-rose-300 border border-rose-500/40',
+        expectedDate: undefined,
+        isDiscontinued: true
+      };
+    }
+  }
+
+  return { isPaused: false, status: 'normal', label: '正常供應', badgeClass: 'bg-emerald-500/20 text-emerald-300', isDiscontinued: false };
 };
 
 export const formatAdjustQuantity = (t: any): { display: string; delta: number; finalQty: number; isPositive: boolean } => {
@@ -897,7 +909,8 @@ export const isAdjustType = (type?: string): boolean => {
   return s === 'adjust' || s === '盤點調整' || s === '盤點' || s === '調整';
 };
 
-export const isStockOutType = (type?: string): boolean => {
+export const isStockOutType = (type?: string, tx?: any): boolean => {
+  if (tx && tx.online_order_id && String(tx.online_order_id).trim()) return true;
   if (!type) return false;
   if (isStockInType(type) || isAdjustType(type)) return false;
   return true;
@@ -914,50 +927,74 @@ export const findMatchingStockIndex = (stockList: Stock[], tx: Transaction, prod
 
   // If targetPid is missing, attempt resolution by name from productsList or stockList
   if (!targetPid && targetName) {
-    const p = productsList?.find(prod => prod.name === targetName || prod.product_id === targetName);
+    const p = productsList?.find(prod => 
+      prod.name === targetName || 
+      prod.product_id === targetName ||
+      (prod.name && prod.name.toLowerCase() === targetName.toLowerCase()) ||
+      (prod.product_id && prod.product_id.toLowerCase() === targetName.toLowerCase())
+    );
     if (p) {
       targetPid = p.product_id;
     } else {
-      const s = stockList.find(stk => (stk as any).name === targetName);
+      const s = stockList.find(stk => 
+        (stk as any).name === targetName ||
+        (stk as any).name?.toLowerCase() === targetName.toLowerCase()
+      );
       if (s) targetPid = s.product_id;
     }
   }
 
-  // 1. Match by stock_id if available
-  if (tx.stock_id) {
-    const idx = stockList.findIndex(s => s.stock_id === tx.stock_id);
+  const cleanTargetPid = targetPid.toLowerCase();
+
+  // 1. Match by stock_id if available (exact string)
+  if (tx.stock_id && tx.stock_id.trim()) {
+    const idx = stockList.findIndex(s => s.stock_id === tx.stock_id.trim());
     if (idx !== -1) return idx;
   }
 
-  // 2. Strict match: product_id + location + floor + area + spec
-  if (targetLoc && targetPid) {
-    const idx = stockList.findIndex(s =>
-      (s.product_id || '').trim() === targetPid &&
-      (s.location || '').trim() === targetLoc &&
-      (s.floor || '').trim() === targetFloor &&
-      (s.area || '').trim() === targetArea &&
-      isSpecificationMatch(s.specification, targetSpec)
-    );
-    if (idx !== -1) return idx;
+  // 2. Exact match: product_id + location + floor + area + spec (case-insensitive for product_id)
+  if (cleanTargetPid) {
+    if (targetLoc) {
+      const exactIdx = stockList.findIndex(s =>
+        (s.product_id || '').trim().toLowerCase() === cleanTargetPid &&
+        (s.location || '').trim() === targetLoc &&
+        (s.floor || '').trim() === targetFloor &&
+        (s.area || '').trim() === targetArea &&
+        isSpecificationMatch(s.specification, targetSpec)
+      );
+      if (exactIdx !== -1) return exactIdx;
 
-    // Strict boundary: When location is specified, do NOT steal inventory from another warehouse/shelf/spec!
-    // Returning -1 triggers the dedicated reconstruction of the depleted stock item.
-    return -1;
-  }
+      // 2b. Same warehouse location + spec, even if floor/area slightly differed or was blank
+      const locSpecIdx = stockList.findIndex(s =>
+        (s.product_id || '').trim().toLowerCase() === cleanTargetPid &&
+        (s.location || '').trim() === targetLoc &&
+        isSpecificationMatch(s.specification, targetSpec)
+      );
+      if (locSpecIdx !== -1) return locSpecIdx;
+    }
 
-  // 3. Match by product_id + spec (only if location was unassigned)
-  if (targetSpec && targetPid) {
-    const specMatchIdx = stockList.findIndex(s =>
-      (s.product_id || '').trim() === targetPid &&
-      isSpecificationMatch(s.specification, targetSpec)
-    );
-    if (specMatchIdx !== -1) return specMatchIdx;
-  }
+    // 3. Match by product_id + spec (any location)
+    if (targetSpec) {
+      const specMatchIdx = stockList.findIndex(s =>
+        (s.product_id || '').trim().toLowerCase() === cleanTargetPid &&
+        isSpecificationMatch(s.specification, targetSpec)
+      );
+      if (specMatchIdx !== -1) return specMatchIdx;
+    }
 
-  // 4. Fallback only if neither location nor specification was specified
-  if (targetPid && !targetSpec && !targetLoc) {
-    const pidMatchIdx = stockList.findIndex(s => (s.product_id || '').trim() === targetPid);
-    if (pidMatchIdx !== -1) return pidMatchIdx;
+    // 4. If targetSpec is blank/empty/generic, prefer empty specification or any existing stock row of this product
+    if (!targetSpec) {
+      const emptySpecIdx = stockList.findIndex(s =>
+        (s.product_id || '').trim().toLowerCase() === cleanTargetPid &&
+        !String(s.specification || '').trim()
+      );
+      if (emptySpecIdx !== -1) return emptySpecIdx;
+
+      const anyPidIdx = stockList.findIndex(s =>
+        (s.product_id || '').trim().toLowerCase() === cleanTargetPid
+      );
+      if (anyPidIdx !== -1) return anyPidIdx;
+    }
   }
 
   return -1;
@@ -989,7 +1026,7 @@ export const revertTransactionStockEffect = async (
         await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
       }
     }
-  } else if (isStockOutType(tx.type)) {
+  } else if (isStockOutType(tx.type, tx)) {
     // 出貨被刪除（含網路訂單出貨、一般出貨）：庫存應加回
     const idx = findMatchingStockIndex(updatedStock, tx, productsList);
     if (idx !== -1) {
@@ -1006,14 +1043,16 @@ export const revertTransactionStockEffect = async (
       let resolvedSpec = (tx.specification || '').trim();
 
       const matchedProd = productsList ? (
-        (resolvedPid ? productsList.find(p => p.product_id === resolvedPid) : null) ||
-        (resolvedName ? productsList.find(p => p.name === resolvedName || p.product_id === resolvedName) : null)
+        (resolvedPid ? productsList.find(p => p.product_id === resolvedPid || p.product_id.toLowerCase() === resolvedPid.toLowerCase()) : null) ||
+        (resolvedName ? productsList.find(p => p.name === resolvedName || p.name.toLowerCase() === resolvedName.toLowerCase() || p.product_id === resolvedName) : null)
       ) : null;
 
       if (matchedProd) {
-        if (!resolvedPid) resolvedPid = matchedProd.product_id;
-        if (!resolvedName) resolvedName = matchedProd.name;
-        if (!resolvedSpec && matchedProd.specification) resolvedSpec = matchedProd.specification;
+        resolvedPid = matchedProd.product_id;
+        resolvedName = matchedProd.name;
+        if (!resolvedSpec && matchedProd.specification) {
+          resolvedSpec = resolveStandardProductSpecification(resolvedSpec, resolvedPid, productsList, currentStock);
+        }
       }
 
       const newS: Stock = {
@@ -1404,8 +1443,8 @@ interface AppState {
   editProduct: (product: Product) => Promise<void>;
   deleteProduct: (productId: string) => Promise<void>;
   toggleDiscontinued: (productId: string) => Promise<void>;
-  toggleOutOfStock: (productId: string) => Promise<void>;
-  setProductAvailability: (productId: string, status: 'normal' | 'out_of_stock' | 'discontinued') => Promise<void>;
+  toggleOutOfStock: (productId: string, expectedRestockDate?: string) => Promise<void>;
+  setProductAvailability: (productId: string, status: 'normal' | 'out_of_stock' | 'discontinued', expectedRestockDate?: string) => Promise<void>;
   addVendor: (vendor: Vendor) => Promise<void>;
   editVendor: (vendor: Vendor) => Promise<void>;
   deleteVendor: (vendorId: string) => Promise<void>;
@@ -2124,6 +2163,7 @@ export const useStore = create<AppState>((set, get) => ({
           if (rawStatusStr.includes('停產') || rawStatusStr.includes('缺貨')) isOutOfStock = true;
 
           const isReallyOutOfStock = isOutOfStock || isDiscontinued;
+          const expectedDateVal = p.expected_restock_date ?? p['預計進貨日'] ?? p['預計到貨日'] ?? '';
 
           const cleanP = {
             ...p,
@@ -2137,7 +2177,8 @@ export const useStore = create<AppState>((set, get) => ({
             has_expiry: String(p.has_expiry).toUpperCase() === 'TRUE',
             is_discontinued: false,
             is_out_of_stock: isReallyOutOfStock,
-            status: isReallyOutOfStock ? '暫時缺貨' : '正常',
+            expected_restock_date: expectedDateVal ? String(expectedDateVal).trim() : undefined,
+            status: isReallyOutOfStock ? (expectedDateVal ? '暫時缺貨' : '停產') : '正常',
             cost_price: Number(p.cost_price) || 0,
             min_stock: (() => {
               const raw = p.min_stock ?? p['安全庫存'] ?? p['安全庫存量'] ?? p['最低庫存'] ?? p['最低庫存量'] ?? p['警示庫存'] ?? p.minstock;
@@ -2160,6 +2201,9 @@ export const useStore = create<AppState>((set, get) => ({
             }
             if (cleanP.is_out_of_stock !== undefined) {
               productMap[id].is_out_of_stock = cleanP.is_out_of_stock;
+            }
+            if (cleanP.expected_restock_date !== undefined) {
+              productMap[id].expected_restock_date = cleanP.expected_restock_date;
             }
             if (cleanP.status) {
               productMap[id].status = cleanP.status;
@@ -2715,40 +2759,56 @@ export const useStore = create<AppState>((set, get) => ({
     showToast(nextStatus ? `🟡 【${prod.name}】已標記為「暫時缺貨」` : `🟢 【${prod.name}】已恢復為正常供應`);
   },
 
-  toggleOutOfStock: async (productId: string) => {
+  toggleOutOfStock: async (productId: string, expectedRestockDate?: string) => {
     const { products, editProduct, showToast } = get();
     const prod = products.find(p => p.product_id === productId);
     if (!prod) return;
     const isCurrentlyOut = Boolean(prod.is_out_of_stock || prod.is_discontinued);
     const nextStatus = !isCurrentlyOut;
+    const expDate = nextStatus ? (expectedRestockDate !== undefined ? expectedRestockDate.trim() : (prod.expected_restock_date || '')) : undefined;
     const updated = {
       ...prod,
       is_discontinued: false,
       is_out_of_stock: nextStatus,
-      status: nextStatus ? '暫時缺貨' : '正常'
+      expected_restock_date: expDate || undefined,
+      status: nextStatus ? (expDate ? '暫時缺貨' : '停產') : '正常'
     };
     await editProduct(updated);
-    showToast(nextStatus ? `🟡 【${prod.name}】已標記為「暫時缺貨」` : `🟢 【${prod.name}】已恢復為正常供應`);
+    if (nextStatus) {
+      if (expDate) {
+        showToast(`🟡 【${prod.name}】已標記為「暫時缺貨 (預計 ${expDate} 到貨)」`);
+      } else {
+        showToast(`🔴 【${prod.name}】未設定預計進貨日，已自動標記為「停產」`);
+      }
+    } else {
+      showToast(`🟢 【${prod.name}】已恢復為「正常供應」`);
+    }
   },
 
-  setProductAvailability: async (productId: string, status: 'normal' | 'out_of_stock' | 'discontinued') => {
+  setProductAvailability: async (productId: string, status: 'normal' | 'out_of_stock' | 'discontinued', expectedRestockDate?: string) => {
     const { products, editProduct, showToast } = get();
     const prod = products.find(p => p.product_id === productId);
     if (!prod) return;
     const isOut = status === 'out_of_stock' || status === 'discontinued';
-    const statusLabel = isOut ? '暫時缺貨' : '正常';
+    const expDate = isOut ? (expectedRestockDate !== undefined ? expectedRestockDate.trim() : (prod.expected_restock_date || '')) : undefined;
+    const statusLabel = isOut ? (expDate ? '暫時缺貨' : '停產') : '正常';
     const updated = {
       ...prod,
       is_discontinued: false,
       is_out_of_stock: isOut,
+      expected_restock_date: expDate || undefined,
       status: statusLabel
     };
     await editProduct(updated);
-    showToast(
-      isOut
-        ? `🟡 【${prod.name}】已設定為「暫時缺貨」`
-        : `🟢 【${prod.name}】已恢復為「正常供應」`
-    );
+    if (isOut) {
+      if (expDate) {
+        showToast(`🟡 【${prod.name}】已設定為「暫時缺貨 (預計 ${expDate} 到貨)」`);
+      } else {
+        showToast(`🔴 【${prod.name}】未填寫預計進貨日，已自動認定為「停產」狀態`);
+      }
+    } else {
+      showToast(`🟢 【${prod.name}】已恢復為「正常供應」`);
+    }
   },
 
   addVendor: async (vendor) => {
@@ -2783,7 +2843,7 @@ export const useStore = create<AppState>((set, get) => ({
         body: JSON.stringify({})
       });
       if (res.ok) {
-        get().showToast('✅ 資料庫已重新排版並派發 ID！');
+        get().showToast('✅ 資料庫已重新排版、補齊最新欄位表頭並派發缺失 ID！');
         await get().fetchRemoteData();
       } else {
         throw new Error('伺服器回應異常');
@@ -2867,10 +2927,32 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   deleteTransaction: async (targetId: string) => {
-    const { stock, transactions, products } = get();
+    const { stock, transactions, products, syncQueue } = get();
     // Match by item unique ID first, or fall back to transaction_id
     const tx = transactions.find(t => t.id === targetId) || transactions.find(t => t.transaction_id === targetId);
     if (!tx) return;
+
+    // Purge any pending in-flight stockOut or transaction sync items for this deleted record
+    const targetTxId = tx.transaction_id;
+    const targetRowId = tx.id;
+    const targetOrderId = tx.online_order_id;
+    const cleanQueue = syncQueue.filter(q => {
+      const p = q.payload;
+      if (!p) return true;
+      if (targetRowId && p.id === targetRowId) return false;
+      if (targetTxId && (p.transaction_id === targetTxId || p.id === targetTxId)) return false;
+      if (targetOrderId && (p.online_order_id === targetOrderId || p.order_id === targetOrderId)) return false;
+      return true;
+    });
+
+    if (cleanQueue.length !== syncQueue.length) {
+      set({ syncQueue: cleanQueue });
+      for (const q of syncQueue) {
+        if (!cleanQueue.includes(q)) {
+          await dbSyncQueue.removeItem(q.id);
+        }
+      }
+    }
 
     const updatedStock = await revertTransactionStockEffect(stock, tx, products);
 
@@ -2910,7 +2992,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   deleteTransactionGroup: async (groupIdOrIds: string | string[]) => {
-    const { stock, transactions, products } = get();
+    const { stock, transactions, products, syncQueue } = get();
     let groupTxs: Transaction[] = [];
 
     if (Array.isArray(groupIdOrIds)) {
@@ -2935,6 +3017,35 @@ export const useStore = create<AppState>((set, get) => ({
     }
 
     if (groupTxs.length === 0) return;
+
+    // Purge pending syncQueue actions matching any of these transactions or orders
+    const targetIdSet = new Set<string>();
+    groupTxs.forEach(t => {
+      if (t.id) targetIdSet.add(String(t.id));
+      if (t.transaction_id) targetIdSet.add(String(t.transaction_id));
+      if (t.online_order_id) targetIdSet.add(String(t.online_order_id));
+      if (t.batch_id) targetIdSet.add(String(t.batch_id));
+      if (t.batch_tx_id) targetIdSet.add(String(t.batch_tx_id));
+    });
+
+    const cleanQueue = syncQueue.filter(q => {
+      const p = q.payload;
+      if (!p) return true;
+      if (p.id && targetIdSet.has(String(p.id))) return false;
+      if (p.transaction_id && targetIdSet.has(String(p.transaction_id))) return false;
+      if (p.online_order_id && targetIdSet.has(String(p.online_order_id))) return false;
+      if (p.order_id && targetIdSet.has(String(p.order_id))) return false;
+      return true;
+    });
+
+    if (cleanQueue.length !== syncQueue.length) {
+      set({ syncQueue: cleanQueue });
+      for (const q of syncQueue) {
+        if (!cleanQueue.includes(q)) {
+          await dbSyncQueue.removeItem(q.id);
+        }
+      }
+    }
 
     let updatedStock = [...stock];
     for (const tx of groupTxs) {

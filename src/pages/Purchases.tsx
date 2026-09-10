@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { useStore, getOnOrderStockQty, parseSpecifications, isSpecificationMatch, getResolvedPoItems } from '../store/useStore';
+import { useStore, getOnOrderStockQty, parseSpecifications, isSpecificationMatch, getResolvedPoItems, getProductStatusInfo } from '../store/useStore';
 import { Product, PurchaseOrder, PurchaseOrderItem, Vendor } from '../lib/db';
 import { performLocalInvoiceOcr, calculateSimilarity, optimizeImageForUpload } from '../lib/localOcrEngine';
 import { format } from 'date-fns';
@@ -803,6 +803,18 @@ export default function Purchases() {
   // Handlers for creating manual PO
   const handleAddProductToNewPO = (p: Product, qty: number = 1, specification?: string) => {
     if (!p) return;
+
+    // Check availability status: Out of stock or discontinued cannot be purchased!
+    const statusInfo = getProductStatusInfo(p);
+    if (statusInfo.isPaused) {
+      if (statusInfo.isDiscontinued) {
+        showToast(`❌ 【${p.name || p.product_id}】為「停產」商品，禁止採購！`);
+      } else {
+        showToast(`❌ 【${p.name || p.product_id}】目前為「暫時缺貨」狀態${statusInfo.expectedDate ? ` (預計 ${statusInfo.expectedDate} 到貨)` : ''}，禁止採購！`);
+      }
+      return;
+    }
+
     const targetSpec = specification !== undefined ? specification : (p.specification || '');
     const subSpecs = parseSpecifications(targetSpec);
 
@@ -948,6 +960,22 @@ export default function Purchases() {
     if (!finalVendorName) {
       showToast('❌ 請選擇或填寫供應商！');
       return;
+    }
+
+    // Check if any item in the PO is Out of Stock or Discontinued
+    for (const it of newPOItems) {
+      const catalogProd = products.find(p => p.product_id === it.product_id || (p.name && p.name.trim() === (it.name || '').trim()));
+      if (catalogProd) {
+        const statusInfo = getProductStatusInfo(catalogProd);
+        if (statusInfo.isPaused) {
+          if (statusInfo.isDiscontinued) {
+            showToast(`❌ 商品【${catalogProd.name}】為「停產」商品，禁止採購！請從採購清單中移除後再儲存。`);
+          } else {
+            showToast(`❌ 商品【${catalogProd.name}】目前為「暫時缺貨」狀態${statusInfo.expectedDate ? ` (預計 ${statusInfo.expectedDate} 到貨)` : ''}，禁止採購！請從採購清單中移除後再儲存。`);
+          }
+          return;
+        }
+      }
     }
 
     // Check if any product has specifications in system product catalog, but the PO item left specification empty!
@@ -2240,6 +2268,8 @@ export default function Purchases() {
                   </div>
                   <div className="flex items-center gap-1.5 flex-wrap max-h-24 overflow-y-auto custom-scrollbar">
                     {currentVendorProducts.slice(0, 10).map(p => {
+                      const statusInfo = getProductStatusInfo(p);
+                      const isBlocked = statusInfo.isPaused;
                       const isAdded = newPOItems.some(it => it.product_id === p.product_id);
                       const inStock = productTotalStockMap.get(p.product_id) || 0;
                       const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification);
@@ -2247,15 +2277,29 @@ export default function Purchases() {
                         <button
                           key={p.product_id}
                           type="button"
-                          onClick={() => handleAddProductToNewPO(p, 1)}
-                          className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
-                            isAdded
-                              ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 font-bold'
-                              : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300 hover:text-white'
+                          onClick={() => {
+                            if (isBlocked) {
+                              showToast(`❌ 【${p.name}】目前為「${statusInfo.isDiscontinued ? '停產' : '暫時缺貨'}」狀態，禁止採購！`);
+                              return;
+                            }
+                            handleAddProductToNewPO(p, 1);
+                          }}
+                          disabled={isBlocked}
+                          className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg border transition-all ${
+                            isBlocked
+                              ? 'bg-rose-950/20 border-rose-500/30 text-rose-300 opacity-60 cursor-not-allowed'
+                              : isAdded
+                              ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 font-bold cursor-pointer'
+                              : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300 hover:text-white cursor-pointer'
                           }`}
                         >
-                          <span>{isAdded ? '✓' : '+'}</span>
+                          <span>{isBlocked ? '✕' : isAdded ? '✓' : '+'}</span>
                           <span>{p.name}</span>
+                          {isBlocked && (
+                            <span className="text-[9px] bg-rose-500/30 text-rose-200 px-1 rounded font-bold">
+                              {statusInfo.isDiscontinued ? '停產' : '缺貨'}
+                            </span>
+                          )}
                           {p.specification && <span className="text-[10px] text-slate-400">({p.specification})</span>}
                           <span className="text-[10px] text-sky-300 font-mono">現存:{inStock}</span>
                           {onOrderQty > 0 ? (
@@ -2349,26 +2393,35 @@ export default function Purchases() {
                           </button>
                         </div>
                         {matchedList.map(p => {
+                          const statusInfo = getProductStatusInfo(p);
+                          const isBlocked = statusInfo.isPaused;
                           const subSpecs = parseSpecifications(p.specification);
                           const inStock = productTotalStockMap.get(p.product_id) || 0;
                           const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification, transactions);
-
                           const addedForProduct = newPOItems.filter(it => it.product_id === p.product_id);
                           const totalAddedQty = addedForProduct.reduce((s, it) => s + Number(it.ordered_quantity || 0), 0);
 
                           return (
                             <div
                               key={p.product_id}
-                              className="p-2.5 hover:bg-indigo-500/15 rounded-xl transition-colors group space-y-1.5"
+                              className={`p-2.5 rounded-xl transition-colors group space-y-1.5 ${
+                                isBlocked ? 'bg-rose-950/20 border border-rose-500/20 opacity-70' : 'hover:bg-indigo-500/15'
+                              }`}
                             >
                               <div className="flex items-center justify-between">
                                 <div className="space-y-0.5 flex-1 pr-3">
                                   <div className="font-bold text-xs text-white group-hover:text-indigo-200 flex items-center gap-2">
                                     <span>{p.name}</span>
-                                    {totalAddedQty > 0 && (
-                                      <span className="text-[10px] px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded font-mono font-bold">
-                                        已加入共 x{totalAddedQty}
+                                    {isBlocked ? (
+                                      <span className="text-[10px] px-1.5 py-0.5 bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded font-mono font-bold">
+                                        {statusInfo.isDiscontinued ? '停產' : `缺貨 (預計: ${statusInfo.expectedDate || '未定'})`}
                                       </span>
+                                    ) : (
+                                      totalAddedQty > 0 && (
+                                        <span className="text-[10px] px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded font-mono font-bold">
+                                          已加入共 x{totalAddedQty}
+                                        </span>
+                                      )
                                     )}
                                   </div>
                                   <div className="text-[10px] text-slate-400 flex items-center gap-2 flex-wrap">
@@ -2387,7 +2440,11 @@ export default function Purchases() {
                                   </div>
                                 </div>
 
-                                {subSpecs.length <= 1 ? (
+                                {isBlocked ? (
+                                  <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-rose-900/30 border border-rose-500/30 text-rose-300 shrink-0">
+                                    禁止採購
+                                  </span>
+                                ) : subSpecs.length <= 1 ? (
                                   <button
                                     type="button"
                                     onClick={() => handleAddProductToNewPO(p, 1)}
@@ -2410,7 +2467,7 @@ export default function Purchases() {
                               </div>
 
                               {/* If product has multiple specifications, show clickable pills to add specific spec */}
-                              {subSpecs.length > 1 && (
+                              {!isBlocked && subSpecs.length > 1 && (
                                 <div className="flex items-center gap-1.5 flex-wrap pl-2 pt-1 border-t border-white/5">
                                   <span className="text-[10px] text-slate-400 font-medium">可選規格:</span>
                                   {subSpecs.map(spec => {
@@ -2503,17 +2560,33 @@ export default function Purchases() {
                               {idx + 1}
                             </td>
                             <td className="py-2.5 px-3">
-                              <input
-                                type="text"
-                                value={item.name}
-                                placeholder="請輸入品名..."
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, name: val } : it));
-                                }}
-                                className="w-full bg-transparent hover:bg-white/5 focus:bg-white/10 border border-transparent focus:border-white/20 rounded px-1.5 py-1 text-xs text-white font-bold focus:outline-none"
-                              />
-                              <span className="block text-[10px] font-mono text-slate-500 px-1.5">{item.product_id}</span>
+                              {(() => {
+                                const catalogProd = products.find(p => p.product_id === item.product_id || (p.name && p.name.trim() === (item.name || '').trim()));
+                                const statusInfo = catalogProd ? getProductStatusInfo(catalogProd) : null;
+                                return (
+                                  <div>
+                                    <input
+                                      type="text"
+                                      value={item.name}
+                                      placeholder="請輸入品名..."
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        setNewPOItems(prev => prev.map((it, i) => i === idx ? { ...it, name: val } : it));
+                                      }}
+                                      className="w-full bg-transparent hover:bg-white/5 focus:bg-white/10 border border-transparent focus:border-white/20 rounded px-1.5 py-1 text-xs text-white font-bold focus:outline-none"
+                                    />
+                                    <div className="flex items-center gap-1.5 flex-wrap px-1.5">
+                                      <span className="text-[10px] font-mono text-slate-500">{item.product_id}</span>
+                                      {statusInfo?.isPaused && (
+                                        <span className="text-[9px] px-1.5 py-0.2 bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded font-bold inline-flex items-center gap-0.5">
+                                          <AlertTriangle className="w-2.5 h-2.5 text-rose-400" />
+                                          {statusInfo.isDiscontinued ? '停產商品 (禁止採購)' : `暫時缺貨 (預計: ${statusInfo.expectedDate || '未定'})`}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
                             </td>
                             <td className="py-2.5 px-2">
                               {(() => {

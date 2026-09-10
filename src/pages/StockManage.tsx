@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { useStore, formatConsistentTxDate, getDominantDateSeparator, getProductSpecifications, isSpecificationMatch } from '../store/useStore';
-import { ArrowLeft, Save, Search, X, Filter, Plus, ScanBarcode, FileText, ShoppingBag } from 'lucide-react';
+import { useStore, formatConsistentTxDate, getDominantDateSeparator, getProductSpecifications, isSpecificationMatch, getProductStatusInfo } from '../store/useStore';
+import { ArrowLeft, Save, Search, X, Filter, Plus, ScanBarcode, FileText, ShoppingBag, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
 import OutboundCart from '../components/OutboundCart';
 import QuantityInput from '../components/QuantityInput';
@@ -190,6 +190,18 @@ export default function StockManage() {
     setIsSubmitting(true);
 
     const targetPid = product.product_id;
+
+    // Check availability status: Out of stock or Discontinued cannot be stocked in or stocked out
+    const statusInfo = getProductStatusInfo(product);
+    if (statusInfo.isPaused) {
+      if (statusInfo.isDiscontinued) {
+        showToast(`❌ 【${product.name}】為「停產」商品，禁止進行進貨或出貨操作！`);
+      } else {
+        showToast(`❌ 【${product.name}】目前為「暫時缺貨」狀態${statusInfo.expectedDate ? ` (預計 ${statusInfo.expectedDate} 到貨)` : ''}，禁止進行進貨或出貨操作！`);
+      }
+      setIsSubmitting(false);
+      return;
+    }
 
     const parsedQty = Number(quantity);
     if (isNaN(parsedQty) || (type !== 'adjust' && parsedQty <= 0) || (type === 'adjust' && parsedQty < 0)) {
@@ -403,8 +415,22 @@ export default function StockManage() {
             </button>
           </div>
           {product && (
-            <div className="mt-2 text-xs flex flex-col gap-1">
+            <div className="mt-2 text-xs flex flex-col gap-1.5">
                <p className="text-[var(--color-accent-green)] font-medium">已找到: {product.name} {product.brand ? `(${product.brand})` : ''}</p>
+               {(() => {
+                 const statusInfo = getProductStatusInfo(product);
+                 if (!statusInfo.isPaused) return null;
+                 return (
+                   <div className="flex items-center gap-1.5 p-2 rounded-lg bg-rose-500/20 border border-rose-500/40 text-rose-300 font-bold text-xs animate-pulse">
+                     <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                     <span>
+                       {statusInfo.isDiscontinued
+                         ? '【停產商品】此商品無預計進貨日，系統已自動判定為停產，禁止進貨、出貨與盤點！'
+                         : `【暫時缺貨】預計進貨日：${statusInfo.expectedDate || '未設定'}，目前禁止進貨、出貨與盤點！`}
+                     </span>
+                   </div>
+                 );
+               })()}
                {product?.has_expiry && (
                  <p className="text-orange-400 font-bold bg-orange-400/10 inline-block px-2 py-1 rounded w-fit">
                    商品需要記錄有效日期
@@ -611,15 +637,35 @@ export default function StockManage() {
         <div className="pt-4 pb-12">
           {type === 'adjust' && operator !== 'admin' ? (
              <p className="text-[#f87171] text-sm font-bold text-center">僅管理員能進行庫存盤點與調整。</p>
-          ) : (
-            <button
-              type="submit"
-              className="w-full flex items-center justify-center py-4 px-4 border border-transparent rounded-2xl shadow-sm text-base font-bold text-[#0f172a] bg-[var(--color-accent-blue)] hover:opacity-90 transition-opacity outline-none"
-            >
-              <Save className="w-5 h-5 mr-2" />
-              儲存{type === 'stock_in' ? '進貨' : type === 'stock_out' ? '出貨' : '調整'}
-            </button>
-          )}
+          ) : (() => {
+            const statusInfo = product ? getProductStatusInfo(product) : null;
+            const isBlocked = statusInfo?.isPaused;
+
+            return (
+              <div className="space-y-2">
+                {isBlocked && (
+                  <div className="p-3 bg-rose-500/20 border border-rose-500/40 rounded-xl text-center text-xs font-bold text-rose-300 flex items-center justify-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-400" />
+                    <span>此商品目前為「{statusInfo.isDiscontinued ? '停產' : '暫時缺貨'}」狀態，系統已鎖定進出貨與盤點功能</span>
+                  </div>
+                )}
+                <button
+                  type="submit"
+                  disabled={isBlocked || isSubmitting}
+                  className={`w-full flex items-center justify-center py-4 px-4 border border-transparent rounded-2xl shadow-sm text-base font-bold transition-all outline-none ${
+                    isBlocked
+                      ? 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-60'
+                      : 'text-[#0f172a] bg-[var(--color-accent-blue)] hover:opacity-90 cursor-pointer'
+                  }`}
+                >
+                  <Save className="w-5 h-5 mr-2" />
+                  {isBlocked
+                    ? `【${statusInfo.isDiscontinued ? '停產' : '暫時缺貨'}】無法${type === 'stock_in' ? '進貨' : type === 'stock_out' ? '出貨' : '調整'}`
+                    : `儲存${type === 'stock_in' ? '進貨' : type === 'stock_out' ? '出貨' : '調整'}`}
+                </button>
+              </div>
+            );
+          })()}
         </div>
 
       </form>
@@ -708,23 +754,49 @@ export default function StockManage() {
                     {searchResults.length === 0 ? (
                       <div className="text-center py-8 text-white/40 text-sm">找不到相關商品</div>
                     ) : (
-                      searchResults.map(p => (
-                        <div 
-                          key={p.product_id}
-                          onClick={() => {
-                            setPid(p.product_id);
-                            setIsSearchModalOpen(false);
-                            setSearchTerm('');
-                          }}
-                          className="glass-panel p-3 rounded-xl border border-white/5 hover:border-[var(--color-accent-blue)]/50 cursor-pointer active:scale-[0.98] transition-all flex items-center justify-between w-full"
-                        >
-                           <div className="overflow-hidden pr-2">
-                             <div className="font-bold text-white text-sm truncate">{p.name}</div>
-                             <div className="text-xs text-white/40 tracking-wider truncate mt-1">{p.product_id}</div>
-                           </div>
-                           <Plus className="w-5 h-5 text-[var(--color-accent-blue)] shrink-0" />
-                        </div>
-                      ))
+                      searchResults.map(p => {
+                        const statusInfo = getProductStatusInfo(p);
+                        return (
+                          <div 
+                            key={p.product_id}
+                            onClick={() => {
+                              setPid(p.product_id);
+                              setIsSearchModalOpen(false);
+                              setSearchTerm('');
+                            }}
+                            className={`glass-panel p-3 rounded-xl border cursor-pointer active:scale-[0.98] transition-all flex items-center justify-between w-full ${
+                              statusInfo.isPaused 
+                                ? 'border-rose-500/30 bg-rose-500/5 hover:border-rose-500/50' 
+                                : 'border-white/5 hover:border-[var(--color-accent-blue)]/50'
+                            }`}
+                          >
+                             <div className="overflow-hidden pr-2">
+                               <div className="font-bold text-white text-sm truncate flex items-center gap-1.5">
+                                 <span>{p.name}</span>
+                                 {statusInfo.isPaused && (
+                                   statusInfo.isDiscontinued ? (
+                                     <span className="text-[10px] px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold shrink-0">
+                                       🔴 停產
+                                     </span>
+                                   ) : (
+                                     <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold shrink-0">
+                                       🟡 暫時缺貨 {statusInfo.expectedDate ? `(${statusInfo.expectedDate})` : ''}
+                                     </span>
+                                   )
+                                 )}
+                               </div>
+                               <div className="text-xs text-white/40 tracking-wider truncate mt-1">{p.product_id}</div>
+                             </div>
+                             {statusInfo.isPaused ? (
+                               <span className="text-[11px] font-bold text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded shrink-0">
+                                 禁止進出貨
+                               </span>
+                             ) : (
+                               <Plus className="w-5 h-5 text-[var(--color-accent-blue)] shrink-0" />
+                             )}
+                          </div>
+                        );
+                      })
                     )}
                   </div>
                 </div>

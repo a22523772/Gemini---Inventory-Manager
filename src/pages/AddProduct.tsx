@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import { useStore } from '../store/useStore';
-import { ArrowLeft, Save, ScanBarcode, PackagePlus, Pencil } from 'lucide-react';
+import { ArrowLeft, Save, ScanBarcode, PackagePlus, Pencil, Calendar, AlertTriangle, AlertCircle, X } from 'lucide-react';
 
 export default function AddProduct() {
   const navigate = useNavigate();
@@ -35,6 +35,7 @@ export default function AddProduct() {
   const [vendorId, setVendorId] = useState('');
   const [hasExpiry, setHasExpiry] = useState(false);
   const [productStatus, setProductStatus] = useState<'normal' | 'out_of_stock'>('normal');
+  const [expectedRestockDate, setExpectedRestockDate] = useState('');
   const [minStock, setMinStock] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
 
@@ -55,6 +56,7 @@ export default function AddProduct() {
         setHasExpiry(draft.hasExpiry || false);
         const isDraftOut = draft.productStatus === 'out_of_stock' || draft.productStatus === 'discontinued' || draft.isDiscontinued || draft.isOutOfStock;
         setProductStatus(isDraftOut ? 'out_of_stock' : 'normal');
+        setExpectedRestockDate(draft.expectedRestockDate || '');
         setMinStock(draft.minStock || '');
         if (draft.expiryDate) setExpiryDate(draft.expiryDate);
       } catch (e) {
@@ -90,6 +92,7 @@ export default function AddProduct() {
       
       const isOut = existingProduct.is_out_of_stock || existingProduct.is_discontinued || existingProduct.status === 'out_of_stock' || existingProduct.status === 'discontinued' || String(existingProduct.status).includes('缺貨') || String(existingProduct.status).includes('停產');
       setProductStatus(isOut ? 'out_of_stock' : 'normal');
+      setExpectedRestockDate(existingProduct.expected_restock_date || '');
       setMinStock(existingProduct.min_stock?.toString() || '');
     }
   }, [existingProduct]);
@@ -118,6 +121,7 @@ export default function AddProduct() {
     }
 
     const isOutOfStockVal = productStatus === 'out_of_stock';
+    const trimmedRestockDate = isOutOfStockVal ? (expectedRestockDate.trim() || undefined) : undefined;
 
     const productData = {
       product_id: productId,
@@ -130,9 +134,10 @@ export default function AddProduct() {
       cost_price: Number(costPrice) || 0,
       vendor_id: actualVendorId,
       has_expiry: hasExpiry,
-      status: isOutOfStockVal ? '暫時缺貨' : '正常',
-      is_discontinued: false,
+      status: isOutOfStockVal ? (trimmedRestockDate ? '暫時缺貨' : '停產') : '正常',
+      is_discontinued: isOutOfStockVal && !trimmedRestockDate,
       is_out_of_stock: isOutOfStockVal,
+      expected_restock_date: trimmedRestockDate,
       min_stock: minStock !== '' ? Number(minStock) : undefined
     };
 
@@ -217,6 +222,8 @@ export default function AddProduct() {
                     costPrice,
                     vendorId,
                     hasExpiry,
+                    productStatus,
+                    expectedRestockDate,
                     minStock,
                     expiryDate
                   }));
@@ -339,11 +346,94 @@ export default function AddProduct() {
                 >
                   <div className="flex items-center gap-1.5 font-bold text-xs">
                     <span className="text-amber-400">🟡</span>
-                    <span className={productStatus === 'out_of_stock' ? 'text-amber-300' : 'text-zinc-300'}>暫時缺貨</span>
+                    <span className={productStatus === 'out_of_stock' ? 'text-amber-300' : 'text-zinc-300'}>
+                      暫時缺貨 / 停產
+                    </span>
                   </div>
-                  <div className="text-[10px] text-zinc-400 mt-1 leading-tight">獨立於專報，不納入日常補貨警示</div>
+                  <div className="text-[10px] text-zinc-400 mt-1 leading-tight">
+                    阻擋進貨、出貨、採購；填寫進貨日為暫時缺貨，未填則視為停產
+                  </div>
                 </div>
               </div>
+
+              {/* 暫時缺貨詳細設定：預計進貨日 (若未填寫即為停產) */}
+              {productStatus === 'out_of_stock' && (
+                <div className="mt-3 p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-2.5 animate-fadeIn">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-amber-400" />
+                      <span>預計進貨日 (選填)</span>
+                    </label>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                      expectedRestockDate 
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' 
+                        : 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+                    }`}>
+                      {expectedRestockDate ? `🟡 暫時缺貨 (預計: ${expectedRestockDate})` : '🔴 停產商品 (未填預計日)'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type="date"
+                        value={expectedRestockDate}
+                        onChange={(e) => setExpectedRestockDate(e.target.value)}
+                        className="w-full bg-slate-900/80 border border-amber-500/30 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400 transition-colors"
+                      />
+                    </div>
+                    {expectedRestockDate && (
+                      <button
+                        type="button"
+                        onClick={() => setExpectedRestockDate('')}
+                        className="px-2.5 py-2 bg-white/5 hover:bg-white/10 text-slate-300 hover:text-rose-300 rounded-xl text-xs font-bold border border-white/10 transition-colors flex items-center gap-1 shrink-0"
+                        title="清空日期以設為停產"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>清除 (設為停產)</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-slate-400">
+                    <span className="text-[10px] text-slate-400">快速填入：</span>
+                    {[
+                      { label: '+3 天', days: 3 },
+                      { label: '+7 天 (一週)', days: 7 },
+                      { label: '+14 天 (兩週)', days: 14 },
+                      { label: '+30 天 (一個月)', days: 30 }
+                    ].map(btn => (
+                      <button
+                        key={btn.label}
+                        type="button"
+                        onClick={() => {
+                          const d = new Date();
+                          d.setDate(d.getDate() + btn.days);
+                          const yyyy = d.getFullYear();
+                          const mm = String(d.getMonth() + 1).padStart(2, '0');
+                          const dd = String(d.getDate()).padStart(2, '0');
+                          setExpectedRestockDate(`${yyyy}-${mm}-${dd}`);
+                        }}
+                        className="px-2 py-0.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 border border-amber-500/20 rounded text-[10px] font-medium transition-colors"
+                      >
+                        {btn.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="text-[11px] text-slate-300/90 leading-relaxed bg-slate-950/40 p-2.5 rounded-lg border border-white/5 flex items-start gap-2">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>業務規則提示：</strong>
+                      {expectedRestockDate ? (
+                        <>已指定預計進貨日，系統會標示為「<strong>🟡 暫時缺貨</strong>」。商品將<strong>全面禁止出貨、進貨與採購</strong>，直到狀態調回正常供應。</>
+                      ) : (
+                        <>未填寫預計進貨日，系統將直接判定為「<strong>🔴 停產</strong>」。商品同樣<strong>全面禁止出貨、進貨與採購</strong>，並在全系統列表標記紅色停產標籤。</>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
