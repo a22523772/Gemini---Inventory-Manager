@@ -325,13 +325,13 @@ export default function SetupGuide() {
 
              <section>
                 <h3 className="text-base font-bold text-[var(--color-text-main)]">1. Google Sheets 結構設定</h3>
-                <p className="text-[var(--color-text-dim)] mt-1">請建立一個新的 Google Sheet，並確保下方有這六個工作表 (區分大小寫，系統亦會於首次寫入時自動建立)：</p>
+                <p className="text-[var(--color-text-dim)] mt-1">請建立一個 Google Sheet，並確保下方有這六個工作表（<strong>欄位順序無須固定，系統會依照第 1 列的表頭名稱自動動態對齊，只要包含該欄位即可</strong>）：</p>
                 <ul className="list-disc pl-5 mt-2 space-y-1 text-white/80 font-mono text-xs">
                   <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, specification, min_stock, is_discontinued, expected_restock_date, created_at</li>
                   <li><strong>vendors</strong> (供應商): vendor_id, vendor_name, contact, phone</li>
                   <li><strong>stock</strong> (庫存表): stock_id, product_id, name, location, floor, area, quantity, expiry_date, specification, last_update</li>
-                  <li><strong>transactions</strong> (交易紀錄): transaction_id, product_id, name, type, quantity, location, floor, area, specification, cost_price, vendor_id, date, note, operator</li>
-                  <li><strong>purchase_orders</strong> (採購單): po_id, vendor_id, vendor_name, product_id, name, specification, ordered_quantity, received_quantity, cost_price, status, order_date, expected_date, note, operator, invoice_number, invoice_image_url</li>
+                  <li><strong>transactions</strong> (交易明細表): transaction_id, online_order_id, platform, product_id, name, type, quantity, price, location, floor, area, specification, cost_price, vendor_id, date, note, operator</li>
+                  <li><strong>purchase_orders</strong> (採購單表): po_id, vendor_id, vendor_name, product_id, name, specification, ordered_quantity, received_quantity, cost_price, status, order_date, expected_date, note, operator, invoice_number, invoice_image_url</li>
                   <li><strong>網路訂單</strong> (網路訂單): order_id (訂單編號), platform (來源平台), product_id (商品編號), product_name (商品名稱), quantity (數量), price (金額), customer_name (買家), 最晚出貨期限 (shipping_deadline), order_status (訂單狀態), created_at (下單時間), specification (規格), shipping_method (物流方式)</li>
                 </ul>
              </section>
@@ -340,7 +340,34 @@ export default function SetupGuide() {
                 <h3 className="text-base font-bold text-[var(--color-text-main)] mt-6">2. Google Apps Script 伺服器代碼</h3>
                 <p className="text-[var(--color-text-dim)] mt-1">在您的 Google Sheet 中，點選選單的 「擴充功能 &gt; Apps Script」。將以下代碼完全貼上，並部署為「網頁應用程式 (任何人皆可存取)」：</p>
                 <pre className="bg-black/40 border border-white/10 text-[var(--color-text-dim)] p-4 rounded-xl mt-3 overflow-x-auto text-xs font-mono">
-{`function doPost(e) {
+{`function getProdNameMap(ss) {
+  var pSheet = ss.getSheetByName('products');
+  var map = {};
+  if (pSheet && pSheet.getLastRow() > 1) {
+    var pHeaders = pSheet.getRange(1, 1, 1, pSheet.getLastColumn()).getValues()[0];
+    var pidIdx = -1;
+    var nameIdx = -1;
+    for (var i = 0; i < pHeaders.length; i++) {
+      var h = String(pHeaders[i] || '').trim().toLowerCase();
+      if (h === 'product_id' || h === '商品代碼' || h === '商品編號' || h === '商品id' || h === 'id') pidIdx = i;
+      if (h === 'name' || h === 'product_name' || h === '商品名稱' || h === '品名' || h === '名稱') nameIdx = i;
+    }
+    if (pidIdx !== -1 && nameIdx !== -1) {
+      var pVals = pSheet.getDataRange().getValues();
+      for (var r = 1; r < pVals.length; r++) {
+        var pid = String(pVals[r][pidIdx] || '').trim();
+        var pname = String(pVals[r][nameIdx] || '').trim();
+        if (pid && pname) {
+          map[pid] = pname;
+          map[pid.toLowerCase()] = pname;
+        }
+      }
+    }
+  }
+  return map;
+}
+
+function doPost(e) {
   var action = e.parameter.action;
   var data = JSON.parse(e.postData.contents);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -438,12 +465,23 @@ export default function SetupGuide() {
     var transSheet = ss.getSheetByName('transactions');
     if (transSheet && transSheet.getLastRow() > 0) {
        var tHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
-       if (tHeaders.indexOf('name') === -1) {
-         transSheet.insertColumnsBefore(3, 1);
-         transSheet.getRange(1, 3).setValue('name');
-         tHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
-       }
        var tNameIdx = tHeaders.indexOf('name');
+       if (tNameIdx === -1) {
+         for (var th = 0; th < tHeaders.length; th++) {
+           var thStr = String(tHeaders[th] || '').trim().toLowerCase();
+           if (thStr === 'product_name' || thStr === '商品名稱' || thStr === '品名') {
+             transSheet.getRange(1, th + 1).setValue('name');
+             tHeaders[th] = 'name';
+             tNameIdx = th;
+             break;
+           }
+         }
+         if (tNameIdx === -1) {
+           tHeaders.push('name');
+           transSheet.getRange(1, tHeaders.length).setValue('name');
+           tNameIdx = tHeaders.length - 1;
+         }
+       }
        var tCostIdx = tHeaders.indexOf('cost_price');
        var tPidIdx = tHeaders.indexOf('product_id');
        var tPriceIdx = tHeaders.indexOf('price');
@@ -495,6 +533,22 @@ export default function SetupGuide() {
          poSheet.getRange(1, poHeaders.length).setValue('invoice_image_url');
        }
        var poNameIdx = poHeaders.indexOf('name');
+       if (poNameIdx === -1) {
+         for (var ph = 0; ph < poHeaders.length; ph++) {
+           var phStr = String(poHeaders[ph] || '').trim().toLowerCase();
+           if (phStr === 'product_name' || phStr === '商品名稱' || phStr === '品名') {
+             poSheet.getRange(1, ph + 1).setValue('name');
+             poHeaders[ph] = 'name';
+             poNameIdx = ph;
+             break;
+           }
+         }
+         if (poNameIdx === -1) {
+           poHeaders.push('name');
+           poSheet.getRange(1, poHeaders.length).setValue('name');
+           poNameIdx = poHeaders.length - 1;
+         }
+       }
        var poPidIdx = poHeaders.indexOf('product_id');
        if (poSheet.getLastRow() > 1 && poNameIdx !== -1 && poPidIdx !== -1) {
          var poValues = poSheet.getDataRange().getValues();
@@ -691,10 +745,21 @@ export default function SetupGuide() {
       transSheet.appendRow(transHeaders);
     } else {
       transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
-      if (transHeaders.indexOf('name') === -1) {
-        transSheet.insertColumnsBefore(3, 1);
-        transSheet.getRange(1, 3).setValue('name');
-        transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+      var tNameColIdx = transHeaders.indexOf('name');
+      if (tNameColIdx === -1) {
+        for (var th = 0; th < transHeaders.length; th++) {
+          var thStr = String(transHeaders[th] || '').trim().toLowerCase();
+          if (thStr === 'product_name' || thStr === '商品名稱' || thStr === '品名') {
+            transSheet.getRange(1, th + 1).setValue('name');
+            transHeaders[th] = 'name';
+            tNameColIdx = th;
+            break;
+          }
+        }
+        if (tNameColIdx === -1) {
+          transHeaders.push('name');
+          transSheet.getRange(1, transHeaders.length).setValue('name');
+        }
       }
       var requiredTransCols = ['online_order_id', 'platform', 'price', 'specification', 'cost_price', 'vendor_id'];
       requiredTransCols.forEach(function(col) {
@@ -710,12 +775,14 @@ export default function SetupGuide() {
     data.date = data.date || now;
     data.note = data.note || '';
     
+    var prodNameMap = getProdNameMap(ss);
+    var cleanDataPid = String(data.product_id || '').trim().toLowerCase();
     var trRow = [];
     for (var k = 0; k < transHeaders.length; k++) {
       var kName = transHeaders[k];
       var val = data[kName];
       if ((val === undefined || val === '') && (kName === 'name' || kName === 'product_name')) {
-        val = data.name || data.product_name || '';
+        val = data.name || data.product_name || (cleanDataPid ? prodNameMap[cleanDataPid] : '') || '';
       }
       trRow.push(val !== undefined ? val : '');
     }
@@ -782,10 +849,21 @@ export default function SetupGuide() {
     }
     
     var transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
-    if (transHeaders.indexOf('name') === -1) {
-      transSheet.insertColumnsBefore(3, 1);
-      transSheet.getRange(1, 3).setValue('name');
-      transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+    var tOutNameIdx = transHeaders.indexOf('name');
+    if (tOutNameIdx === -1) {
+      for (var th = 0; th < transHeaders.length; th++) {
+        var thStr = String(transHeaders[th] || '').trim().toLowerCase();
+        if (thStr === 'product_name' || thStr === '商品名稱' || thStr === '品名') {
+          transSheet.getRange(1, th + 1).setValue('name');
+          transHeaders[th] = 'name';
+          tOutNameIdx = th;
+          break;
+        }
+      }
+      if (tOutNameIdx === -1) {
+        transHeaders.push('name');
+        transSheet.getRange(1, transHeaders.length).setValue('name');
+      }
     }
     data.transaction_id = data.transaction_id || data.batch_id || data.batch_tx_id || Utilities.getUuid();
     data.type = data.type || 'stock_out';
@@ -795,12 +873,14 @@ export default function SetupGuide() {
     data.price = (data.price !== undefined && data.price !== null && data.price !== '') ? Number(data.price) || 0 : 0;
     data.vendor_id = data.vendor_id || '';
     
+    var prodNameMapOut = getProdNameMap(ss);
+    var cleanOutPid = String(data.product_id || '').trim().toLowerCase();
     var trRow = [];
     for (var k = 0; k < transHeaders.length; k++) {
       var kName = transHeaders[k];
       var val = data[kName];
       if ((val === undefined || val === '') && (kName === 'name' || kName === 'product_name')) {
-        val = data.name || data.product_name || '';
+        val = data.name || data.product_name || (cleanOutPid ? prodNameMapOut[cleanOutPid] : '') || '';
       }
       trRow.push(val !== undefined ? val : '');
     }
@@ -848,10 +928,21 @@ export default function SetupGuide() {
     }
     
     var transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
-    if (transHeaders.indexOf('name') === -1) {
-      transSheet.insertColumnsBefore(3, 1);
-      transSheet.getRange(1, 3).setValue('name');
-      transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+    var tAdjNameIdx = transHeaders.indexOf('name');
+    if (tAdjNameIdx === -1) {
+      for (var th = 0; th < transHeaders.length; th++) {
+        var thStr = String(transHeaders[th] || '').trim().toLowerCase();
+        if (thStr === 'product_name' || thStr === '商品名稱' || thStr === '品名') {
+          transSheet.getRange(1, th + 1).setValue('name');
+          transHeaders[th] = 'name';
+          tAdjNameIdx = th;
+          break;
+        }
+      }
+      if (tAdjNameIdx === -1) {
+        transHeaders.push('name');
+        transSheet.getRange(1, transHeaders.length).setValue('name');
+      }
     }
     data.transaction_id = data.transaction_id || Utilities.getUuid();
     data.type = 'adjust';
@@ -860,12 +951,14 @@ export default function SetupGuide() {
     data.price = (data.price !== undefined && data.price !== null && data.price !== '') ? Number(data.price) || 0 : 0;
     data.vendor_id = data.vendor_id || '';
     
+    var prodNameMapAdj = getProdNameMap(ss);
+    var cleanAdjPid = String(data.product_id || '').trim().toLowerCase();
     var trRow = [];
     for (var k = 0; k < transHeaders.length; k++) {
       var kName = transHeaders[k];
       var val = data[kName];
       if ((val === undefined || val === '') && (kName === 'name' || kName === 'product_name')) {
-        val = data.name || data.product_name || '';
+        val = data.name || data.product_name || (cleanAdjPid ? prodNameMapAdj[cleanAdjPid] : '') || '';
       }
       trRow.push(val !== undefined ? val : '');
     }
@@ -903,22 +996,40 @@ export default function SetupGuide() {
   if (action === 'overwriteTransactions') {
     var transSheet = ss.getSheetByName('transactions');
     if (!transSheet) transSheet = ss.insertSheet('transactions');
+    var transHeaders = ['transaction_id', 'online_order_id', 'platform', 'product_id', 'name', 'type', 'quantity', 'price', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
     if (transSheet.getLastRow() > 0) {
+      var existingTH = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+      if (existingTH && existingTH.length > 0 && String(existingTH[0]).trim()) {
+        transHeaders = existingTH;
+        if (transHeaders.indexOf('name') === -1) {
+          var foundAlias = false;
+          for (var th = 0; th < transHeaders.length; th++) {
+            var thStr = String(transHeaders[th] || '').trim().toLowerCase();
+            if (thStr === 'product_name' || thStr === '商品名稱' || thStr === '品名') {
+              transHeaders[th] = 'name';
+              foundAlias = true;
+              break;
+            }
+          }
+          if (!foundAlias) transHeaders.push('name');
+        }
+      }
       transSheet.clear();
       transSheet.clearFormats();
     }
-    var transHeaders = ['transaction_id', 'online_order_id', 'platform', 'product_id', 'name', 'type', 'quantity', 'price', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
     transSheet.appendRow(transHeaders);
     if (data && data.length > 0) {
+      var prodNameMapOverwrite = getProdNameMap(ss);
       var rows = [];
       for (var i = 0; i < data.length; i++) {
         var item = data[i];
+        var cleanTxPid = String(item.product_id || '').trim().toLowerCase();
         var row = [];
         for (var j = 0; j < transHeaders.length; j++) {
           var k = transHeaders[j];
           var val = item[k];
           if ((val === undefined || val === '') && (k === 'name' || k === 'product_name')) {
-            val = item.name || item.product_name || '';
+            val = item.name || item.product_name || (cleanTxPid ? prodNameMapOverwrite[cleanTxPid] : '') || '';
           }
           if (k === 'cost_price' || k === 'price' || k === 'quantity') {
             val = (val !== undefined && val !== null && val !== '') ? Number(val) || 0 : 0;
@@ -1053,7 +1164,7 @@ export default function SetupGuide() {
     var poSheet = ss.getSheetByName('purchase_orders');
     if (!poSheet) {
       poSheet = ss.insertSheet('purchase_orders');
-      poSheet.appendRow(['po_id', 'vendor_id', 'vendor_name', 'product_id', 'name', 'specification', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_number', 'invoice_image_url']);
+      poSheet.appendRow(['po_id', 'vendor_id', 'vendor_name', 'product_id', 'specification', 'name', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_number', 'invoice_image_url']);
     }
     var headers = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
     if (headers.indexOf('invoice_number') === -1) {
@@ -1064,9 +1175,26 @@ export default function SetupGuide() {
       headers.push('invoice_image_url');
       poSheet.getRange(1, headers.length).setValue('invoice_image_url');
     }
+    var poNameColIdx = headers.indexOf('name');
+    if (poNameColIdx === -1) {
+      for (var ph = 0; ph < headers.length; ph++) {
+        var phStr = String(headers[ph] || '').trim().toLowerCase();
+        if (phStr === 'product_name' || phStr === '商品名稱' || phStr === '品名') {
+          poSheet.getRange(1, ph + 1).setValue('name');
+          headers[ph] = 'name';
+          poNameColIdx = ph;
+          break;
+        }
+      }
+      if (poNameColIdx === -1) {
+        headers.push('name');
+        poSheet.getRange(1, headers.length).setValue('name');
+      }
+    }
     var poIdIdx = headers.indexOf('po_id');
     
     var poList = Array.isArray(data) ? data : [data];
+    var prodNameMapPO = getProdNameMap(ss);
     for (var p = 0; p < poList.length; p++) {
       var po = poList[p];
       if (poSheet.getLastRow() > 1 && poIdIdx !== -1) {
@@ -1090,6 +1218,7 @@ export default function SetupGuide() {
       
       for (var it = 0; it < items.length; it++) {
         var item = items[it];
+        var cleanPoPid = String(item.product_id || '').trim().toLowerCase();
         var row = [];
         for (var h = 0; h < headers.length; h++) {
           var colName = headers[h];
@@ -1098,7 +1227,7 @@ export default function SetupGuide() {
           else if (colName === 'vendor_id') val = po.vendor_id || '';
           else if (colName === 'vendor_name') val = po.vendor_name || '';
           else if (colName === 'product_id') val = item.product_id || '';
-          else if (colName === 'name') val = item.name || item.product_name || '';
+          else if (colName === 'name') val = item.name || item.product_name || (cleanPoPid ? prodNameMapPO[cleanPoPid] : '') || '';
           else if (colName === 'specification') val = item.specification || '';
           else if (colName === 'ordered_quantity') val = Number(item.ordered_quantity) || 0;
           else if (colName === 'received_quantity') val = Number(item.received_quantity) || 0;
@@ -1121,13 +1250,30 @@ export default function SetupGuide() {
   if (action === 'overwritePurchaseOrders') {
     var poSheet = ss.getSheetByName('purchase_orders');
     if (!poSheet) poSheet = ss.insertSheet('purchase_orders');
+    var poHeaders = ['po_id', 'vendor_id', 'vendor_name', 'product_id', 'specification', 'name', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_number', 'invoice_image_url'];
     if (poSheet.getLastRow() > 0) {
+      var existingPOH = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
+      if (existingPOH && existingPOH.length > 0 && String(existingPOH[0]).trim()) {
+        poHeaders = existingPOH;
+        if (poHeaders.indexOf('name') === -1) {
+          var foundPoAlias = false;
+          for (var ph = 0; ph < poHeaders.length; ph++) {
+            var phStr = String(poHeaders[ph] || '').trim().toLowerCase();
+            if (phStr === 'product_name' || phStr === '商品名稱' || phStr === '品名') {
+              poHeaders[ph] = 'name';
+              foundPoAlias = true;
+              break;
+            }
+          }
+          if (!foundPoAlias) poHeaders.push('name');
+        }
+      }
       poSheet.clear();
       poSheet.clearFormats();
     }
-    var poHeaders = ['po_id', 'vendor_id', 'vendor_name', 'product_id', 'name', 'specification', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_number', 'invoice_image_url'];
     poSheet.appendRow(poHeaders);
     if (data && data.length > 0) {
+      var prodNameMapPOOverwrite = getProdNameMap(ss);
       var rows = [];
       for (var p = 0; p < data.length; p++) {
         var po = data[p];
@@ -1142,6 +1288,7 @@ export default function SetupGuide() {
         }];
         for (var it = 0; it < items.length; it++) {
           var item = items[it];
+          var cleanPoItPid = String(item.product_id || '').trim().toLowerCase();
           var row = [];
           for (var h = 0; h < poHeaders.length; h++) {
             var colName = poHeaders[h];
@@ -1150,7 +1297,7 @@ export default function SetupGuide() {
             else if (colName === 'vendor_id') val = po.vendor_id || '';
             else if (colName === 'vendor_name') val = po.vendor_name || '';
             else if (colName === 'product_id') val = item.product_id || '';
-            else if (colName === 'name') val = item.name || item.product_name || '';
+            else if (colName === 'name') val = item.name || item.product_name || (cleanPoItPid ? prodNameMapPOOverwrite[cleanPoItPid] : '') || '';
             else if (colName === 'specification') val = item.specification || '';
             else if (colName === 'ordered_quantity') val = Number(item.ordered_quantity) || 0;
             else if (colName === 'received_quantity') val = Number(item.received_quantity) || 0;
@@ -1304,6 +1451,7 @@ function doGet(e) {
     var data = dataRange.getDisplayValues(); // Fix: use getDisplayValues
     if(data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var keys = data[0];
+    var prodNameMapGet = getProdNameMap(ss);
     var result = [];
     var tidIdx = keys.indexOf('transaction_id');
     for(var i=data.length-1; i>=1; i--){ // reverse order for latest first, limited
@@ -1319,6 +1467,10 @@ function doGet(e) {
         }
         if (keys[j] === 'price') val = Number(val) || 0;
         obj[keys[j]] = val; 
+      }
+      var cleanPid = String(obj.product_id || '').trim().toLowerCase();
+      if (!obj.name && cleanPid && prodNameMapGet[cleanPid]) {
+        obj.name = prodNameMapGet[cleanPid];
       }
       result.push(obj);
     }
@@ -1354,6 +1506,7 @@ function doGet(e) {
     var data = dataRange.getDisplayValues();
     if (data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
     var keys = data[0];
+    var prodNameMapGetPO = getProdNameMap(ss);
     var poMap = {};
     for (var i = 1; i < data.length; i++) {
       if (!data[i].join('').trim()) continue;
@@ -1390,10 +1543,13 @@ function doGet(e) {
         poMap[poid].invoice_number = invNum;
       }
 
+      var cleanPoPid = String(obj.product_id || '').trim().toLowerCase();
+      var resolvedPoName = obj.name || obj.product_name || (cleanPoPid ? prodNameMapGetPO[cleanPoPid] : '') || '';
+
       poMap[poid].items.push({
         product_id: obj.product_id || '',
-        name: obj.name || '',
-        product_name: obj.name || '',
+        name: resolvedPoName,
+        product_name: resolvedPoName,
         specification: obj.specification || '',
         ordered_quantity: Number(obj.ordered_quantity) || 0,
         received_quantity: Number(obj.received_quantity) || 0,

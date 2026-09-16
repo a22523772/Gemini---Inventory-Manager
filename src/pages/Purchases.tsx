@@ -24,6 +24,7 @@ import PurchaseOrderPhotoModal from '../components/PurchaseOrderPhotoModal';
 interface ScannedInvoiceItem {
   temp_id: string;
   product_id: string;
+  name?: string;
   product_name: string;
   matched_system_product?: Product;
   specification: string;
@@ -97,6 +98,7 @@ export default function Purchases() {
   const [confirmImageUrls, setConfirmImageUrls] = useState<string[]>([]);
   const [confirmActiveImageIndex, setConfirmActiveImageIndex] = useState<number>(0);
   const [isSavingStockIn, setIsSavingStockIn] = useState<boolean>(false);
+  const [completingPOId, setCompletingPOId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -442,6 +444,7 @@ export default function Purchases() {
       return {
         temp_id: `ITEM_${Date.now()}_${idx}`,
         product_id: pid,
+        name: prodName,
         product_name: prodName,
         matched_system_product: matchedP,
         specification: finalSpec,
@@ -781,12 +784,20 @@ export default function Purchases() {
 
     const resolvedItems = getResolvedPoItems(po, transactions || []);
     const checkInItems: ScannedInvoiceItem[] = resolvedItems.flatMap((it, idx) => {
-      const remaining = it.remaining_quantity;
-      const targetQty = remaining > 0 ? remaining : Number(it.ordered_quantity || 1);
+      const remaining = Number(it.remaining_quantity !== undefined ? it.remaining_quantity : (Number(it.ordered_quantity || 0) - Number(it.received_quantity || 0)));
+      const targetQty = Math.max(0, remaining);
       const defLoc = productDefaultLocationMap.get(it.product_id);
       const cleanPid = String(it.product_id || '').trim().toLowerCase();
       const matchedP = products.find(p => String(p.product_id || '').trim().toLowerCase() === cleanPid);
-      const resolvedName = (it.name || (it as any).product_name || matchedP?.name || it.product_id || '').trim();
+      const resolvedName = (
+        it.name ||
+        (it as any).product_name ||
+        (it as any)['商品名稱'] ||
+        (it as any)['品名'] ||
+        matchedP?.name ||
+        it.product_id ||
+        '未命名商品'
+      ).trim();
 
       const subSpecs = parseSpecifications(it.specification);
       if (subSpecs.length > 1) {
@@ -1598,16 +1609,32 @@ export default function Purchases() {
                         {/* One-Click Complete & Stock In */}
                         {po.status !== 'completed' && (
                           <button
+                            disabled={completingPOId === po.po_id}
                             onClick={async () => {
-                              if (window.confirm(`確定要將採購單 ${po.po_id} 全部品項直接全數驗收入庫並完成結案嗎？\n系統將自動建立對應的進貨交易紀錄並更新庫存！`)) {
-                                await completeAndStockInAllRemainingPO(po.po_id);
+                              if (completingPOId) return;
+                              if (window.confirm(`確定要將採購單 ${po.po_id} 剩餘待入庫品項全數驗收入庫並完成結案嗎？\n系統將自動建立對應的進貨交易紀錄並更新庫存！`)) {
+                                try {
+                                  setCompletingPOId(po.po_id);
+                                  await completeAndStockInAllRemainingPO(po.po_id);
+                                } finally {
+                                  setCompletingPOId(null);
+                                }
                               }
                             }}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-lg text-xs font-black shadow-md shadow-sky-500/20 transition-all cursor-pointer"
-                            title="一鍵將此單全部品項入庫並自動完成結案，確保交易紀錄完整"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-lg text-xs font-black shadow-md shadow-sky-500/20 transition-all disabled:opacity-50 cursor-pointer"
+                            title="一鍵將此單全部剩餘品項入庫並自動完成結案，確保交易紀錄完整"
                           >
-                            <Boxes className="w-4 h-4 stroke-[2.5]" />
-                            <span>一鍵全數入庫結案</span>
+                            {completingPOId === po.po_id ? (
+                              <>
+                                <RefreshCw className="w-4 h-4 animate-spin" />
+                                <span>結案入庫中...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Boxes className="w-4 h-4 stroke-[2.5]" />
+                                <span>一鍵全數入庫結案</span>
+                              </>
+                            )}
                           </button>
                         )}
 
@@ -3123,6 +3150,7 @@ export default function Purchases() {
                         {
                           temp_id: `ADD_${Date.now()}`,
                           product_id: '',
+                          name: '',
                           product_name: '',
                           specification: '',
                           quantity: 1,
@@ -3166,10 +3194,10 @@ export default function Purchases() {
                                   value={item.product_name}
                                   onChange={(e) => {
                                     const val = e.target.value;
-                                    setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, product_name: val } : it));
+                                    setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, name: val, product_name: val } : it));
                                   }}
                                   className={`w-full bg-[#1e293b] border rounded px-2 py-1 text-xs text-white font-bold placeholder-slate-500 ${
-                                    !item.product_name?.trim() ? 'border-amber-500/80 ring-1 ring-amber-500/50 focus:border-amber-400' : 'border-white/10'
+                                    !(item.name || item.product_name)?.trim() ? 'border-amber-500/80 ring-1 ring-amber-500/50 focus:border-amber-400' : 'border-white/10'
                                   }`}
                                   placeholder="單據品名 (必填，可手動修改)"
                                 />
@@ -3181,11 +3209,13 @@ export default function Purchases() {
                                 products={products}
                                 onSelect={(matchedP) => {
                                   const defLoc = productDefaultLocationMap.get(matchedP.product_id);
+                                  const pName = (matchedP.name || item.name || item.product_name || '未命名商品').trim();
                                   setConfirmItems(prev => prev.map((it, i) => i === idx ? {
                                     ...it,
                                     product_id: matchedP.product_id,
                                     matched_system_product: matchedP,
-                                    product_name: (matchedP.name || it.product_name || '未命名商品').trim(),
+                                    name: pName,
+                                    product_name: pName,
                                     specification: it.specification || matchedP.specification || '',
                                     cost_price: it.cost_price || matchedP.cost_price || 0,
                                     location: defLoc?.location || it.location || '倉庫',

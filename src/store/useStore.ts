@@ -689,6 +689,14 @@ export const mergeAndProtectPurchaseOrders = (remotePOs: any[], currentLocalPOs:
     }
   });
 
+  const stateProducts = (useStore.getState ? useStore.getState().products : []) || [];
+  const prodCatalogMap = new Map<string, string>();
+  stateProducts.forEach(prod => {
+    if (prod && prod.product_id && prod.name) {
+      prodCatalogMap.set(String(prod.product_id).trim().toLowerCase(), prod.name.trim());
+    }
+  });
+
   const processedList: PurchaseOrder[] = (remotePOs || []).map((remote: any) => {
     const poId = String(remote.po_id || '').trim();
     const local = localPOMap.get(poId);
@@ -736,17 +744,29 @@ export const mergeAndProtectPurchaseOrders = (remotePOs: any[], currentLocalPOs:
     const rawItems = Array.isArray(remote.items) ? remote.items : [];
     const items = rawItems.map((it: any) => {
       const pid = String(it.product_id || '').trim();
-      const localItem = local?.items?.find(li => String(li.product_id || '').trim().toLowerCase() === pid.toLowerCase());
-      const resolvedName = String(it.name || it.product_name || localItem?.name || localItem?.product_name || pid || '').trim();
+      const cleanPid = pid.toLowerCase();
+      const localItem = local?.items?.find(li => String(li.product_id || '').trim().toLowerCase() === cleanPid);
+      const resolvedName = String(
+        it.name ||
+        it.product_name ||
+        it['商品名稱'] ||
+        it['品名'] ||
+        localItem?.name ||
+        localItem?.product_name ||
+        (cleanPid ? prodCatalogMap.get(cleanPid) : '') ||
+        pid ||
+        '未命名商品'
+      ).trim();
+
       return {
         product_id: pid,
-        product_name: resolvedName,
         name: resolvedName,
-        specification: String(it.specification || '').trim(),
-        ordered_quantity: Number(it.ordered_quantity) || 0,
-        received_quantity: Number(it.received_quantity) || 0,
-        cost_price: Number(it.cost_price) || 0,
-        note: String(it.note || '').trim()
+        product_name: resolvedName,
+        specification: String(it.specification || it['規格'] || localItem?.specification || '').trim(),
+        ordered_quantity: Number(it.ordered_quantity !== undefined ? it.ordered_quantity : (it.quantity || 1)) || 0,
+        received_quantity: Number(it.received_quantity !== undefined ? it.received_quantity : (localItem?.received_quantity || 0)) || 0,
+        cost_price: Number(it.cost_price !== undefined ? it.cost_price : (localItem?.cost_price || 0)) || 0,
+        note: it.note || ''
       };
     });
 
@@ -3506,7 +3526,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   completeAndStockInAllRemainingPO: async (poId: string) => {
-    const { purchaseOrders, products, batchStockInFromInvoice, showToast } = get();
+    const { purchaseOrders, products, batchStockInFromInvoice, updatePurchaseOrder, showToast } = get();
     const po = purchaseOrders.find(p => p.po_id === poId);
     if (!po) {
       showToast('⚠️ 找不到指定的採購訂單');
@@ -3516,36 +3536,47 @@ export const useStore = create<AppState>((set, get) => ({
     const itemsToStockIn: any[] = [];
     (po.items || []).forEach(it => {
       const remaining = Math.max(0, Number(it.ordered_quantity || 0) - Number(it.received_quantity || 0));
-      const qty = remaining > 0 ? remaining : Number(it.ordered_quantity || 1);
-      if (qty > 0) {
+      // Only stock in items that have a positive remaining quantity!
+      if (remaining > 0) {
         const cleanPid = String(it.product_id || '').trim().toLowerCase();
         const p = products.find(prod => String(prod.product_id || '').trim().toLowerCase() === cleanPid);
-        const resolvedName = (it.name || (it as any).product_name || p?.name || it.product_id || '').trim();
+        const resolvedName = (
+          it.name ||
+          (it as any).product_name ||
+          (it as any)['商品名稱'] ||
+          (it as any)['品名'] ||
+          p?.name ||
+          it.product_id ||
+          '未命名商品'
+        ).trim();
+
         itemsToStockIn.push({
           product_id: it.product_id,
           product_name: resolvedName,
           name: resolvedName,
-          specification: it.specification || '',
-          quantity: qty,
-          cost_price: Number(it.cost_price || 0),
-          vendor_id: po.vendor_id || '',
+          specification: it.specification || p?.specification || '',
+          quantity: remaining,
+          cost_price: Number(it.cost_price !== undefined ? it.cost_price : (p?.cost_price || 0)),
+          vendor_id: po.vendor_id || p?.vendor_id || '',
           location: '倉庫',
           floor: '1F',
           area: 'A區',
-          note: `採購單全數結案入庫 (${po.po_id})`
+          note: `採購單剩餘品項結案入庫 (${po.po_id})`
         });
       }
     });
 
     if (itemsToStockIn.length === 0) {
-      showToast('⚠️ 此採購單無待入庫品項');
+      // All items were already fully received! Directly complete PO without adding duplicate inventory.
+      await updatePurchaseOrder(po.po_id, { status: 'completed' });
+      showToast(`✅ 採購單 ${po.po_id} 所有品項先前已全數到貨，已直接標記為結案！`);
       return;
     }
 
     await batchStockInFromInvoice({
       items: itemsToStockIn,
       po_id: po.po_id,
-      invoice_number: '',
+      invoice_number: po.invoice_number || '',
       invoice_image_url: po.invoice_image_url || '',
       is_close_remaining_po: true
     });
