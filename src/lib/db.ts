@@ -105,6 +105,7 @@ export type Transaction = {
   platform?: string; // 來源平台 (例如 蝦皮購物、MOMO購物網)
   product_id: string;
   product_name?: string; // 直接記錄商品名稱
+  name?: string; // Alias for product_name to sync with GAS transactions column
   type: string; // 'stock_in' | 'stock_out' | 'adjust' | 平台名稱 (例如 蝦皮購物)
   quantity: number;
   delta?: number; // 盤點變化量 (如 +2 或 -3)

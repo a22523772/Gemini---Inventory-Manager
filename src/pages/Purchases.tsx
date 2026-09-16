@@ -435,7 +435,7 @@ export default function Purchases() {
       }
 
       const pid = matchedP ? matchedP.product_id : (it.product_id || `TEMP_${Date.now()}_${idx}`);
-      const prodName = matchedP ? matchedP.name : rawName;
+      const prodName = (matchedP ? matchedP.name : (rawName || (pid ? products.find(p => p.product_id === pid)?.name : '') || '未命名商品')).trim();
       const finalSpec = rawSpec || (matchedP?.specification || '');
       const defLoc = matchedP ? productDefaultLocationMap.get(matchedP.product_id) : undefined;
 
@@ -674,6 +674,23 @@ export default function Purchases() {
       return;
     }
 
+    // Validate each item has a product name
+    for (let i = 0; i < confirmItems.length; i++) {
+      const item = confirmItems[i];
+      const cleanPid = String(item.product_id || '').trim().toLowerCase();
+      const p = products.find(prod => String(prod.product_id || '').trim().toLowerCase() === cleanPid);
+      const nameCandidate = (
+        item.product_name ||
+        item.matched_system_product?.name ||
+        p?.name ||
+        ''
+      ).trim();
+      if (!nameCandidate) {
+        showToast(`❌ 第 ${i + 1} 列商品缺少「商品名稱」，請填寫品名或選擇對應系統商品！`);
+        return;
+      }
+    }
+
     setIsSavingStockIn(true);
     try {
       // 1. Upload photos to Google Drive (if configured) or keep base64
@@ -700,19 +717,32 @@ export default function Purchases() {
       }
 
       // 2. Format items for stock-in
-      const itemsToStockIn = confirmItems.map(item => ({
-        product_id: item.product_id,
-        product_name: item.product_name,
-        specification: item.specification,
-        quantity: item.quantity,
-        cost_price: item.cost_price,
-        vendor_id: confirmVendorId,
-        location: item.location,
-        floor: item.floor,
-        area: item.area,
-        expiry_date: item.expiry_date,
-        note: item.note
-      }));
+      const itemsToStockIn = confirmItems.map(item => {
+        const cleanPid = String(item.product_id || '').trim().toLowerCase();
+        const p = products.find(prod => String(prod.product_id || '').trim().toLowerCase() === cleanPid);
+        const resolvedName = (
+          item.product_name ||
+          item.matched_system_product?.name ||
+          p?.name ||
+          item.product_id ||
+          '未命名商品'
+        ).trim();
+
+        return {
+          product_id: item.product_id,
+          product_name: resolvedName,
+          name: resolvedName,
+          specification: item.specification,
+          quantity: item.quantity,
+          cost_price: item.cost_price,
+          vendor_id: confirmVendorId,
+          location: item.location,
+          floor: item.floor,
+          area: item.area,
+          expiry_date: item.expiry_date,
+          note: item.note
+        };
+      });
 
       // 3. Batch stock in & update PO status
       await batchStockInFromInvoice({
@@ -754,7 +784,9 @@ export default function Purchases() {
       const remaining = it.remaining_quantity;
       const targetQty = remaining > 0 ? remaining : Number(it.ordered_quantity || 1);
       const defLoc = productDefaultLocationMap.get(it.product_id);
-      const matchedP = products.find(p => p.product_id === it.product_id);
+      const cleanPid = String(it.product_id || '').trim().toLowerCase();
+      const matchedP = products.find(p => String(p.product_id || '').trim().toLowerCase() === cleanPid);
+      const resolvedName = (it.name || (it as any).product_name || matchedP?.name || it.product_id || '').trim();
 
       const subSpecs = parseSpecifications(it.specification);
       if (subSpecs.length > 1) {
@@ -768,7 +800,8 @@ export default function Purchases() {
           return {
             temp_id: `PO_CHK_${Date.now()}_${idx}_${sIdx}`,
             product_id: it.product_id,
-            product_name: it.name,
+            product_name: resolvedName,
+            name: resolvedName,
             matched_system_product: matchedP,
             specification: subSpec,
             quantity: Math.max(0, targetQty - subReceived),
@@ -784,7 +817,8 @@ export default function Purchases() {
       return [{
         temp_id: `PO_CHK_${Date.now()}_${idx}`,
         product_id: it.product_id,
-        product_name: it.name,
+        product_name: resolvedName,
+        name: resolvedName,
         matched_system_product: matchedP,
         specification: it.specification || '',
         quantity: targetQty,
@@ -845,6 +879,7 @@ export default function Purchases() {
           temp_id: `NEW_PO_ITEM_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
           product_id: p.product_id || `P_${Date.now()}`,
           name: p.name || '未命名商品',
+          product_name: p.name || '未命名商品',
           specification: targetSpec,
           ordered_quantity: Math.max(1, qty),
           cost_price: Number(p.cost_price) || 0,
@@ -914,12 +949,23 @@ export default function Purchases() {
     detectedVendor?: { vendor_id: string; vendor_name: string },
     detectedExpectedDate?: string
   ) => {
+    const sanitizedImported = importedItems.map(item => {
+      const cleanPid = String(item.product_id || '').trim().toLowerCase();
+      const p = products.find(prod => String(prod.product_id || '').trim().toLowerCase() === cleanPid);
+      const resolvedName = (item.name || p?.name || item.product_id || '未命名商品').trim();
+      return {
+        ...item,
+        name: resolvedName,
+        product_name: resolvedName
+      };
+    });
+
     if (mode === 'replace') {
-      setNewPOItems(importedItems);
+      setNewPOItems(sanitizedImported);
     } else {
       setNewPOItems(prev => {
         const nextList = [...prev];
-        importedItems.forEach(item => {
+        sanitizedImported.forEach(item => {
           const matchIdx = nextList.findIndex(it => 
             (it.product_id && item.product_id && it.product_id === item.product_id) ||
             (it.name.trim().toLowerCase() === item.name.trim().toLowerCase() && 
@@ -1014,16 +1060,21 @@ export default function Purchases() {
       }
     }
 
-    const poItems: PurchaseOrderItem[] = newPOItems.map(it => ({
-      product_id: it.product_id,
-      product_name: it.name,
-      name: it.name,
-      specification: it.specification,
-      ordered_quantity: Number(it.ordered_quantity) || 1,
-      received_quantity: 0,
-      cost_price: Number(it.cost_price) || 0,
-      note: it.note
-    }));
+    const poItems: PurchaseOrderItem[] = newPOItems.map(it => {
+      const cleanPid = String(it.product_id || '').trim().toLowerCase();
+      const catalogProd = products.find(p => String(p.product_id || '').trim().toLowerCase() === cleanPid);
+      const resolvedName = (it.name || (it as any).product_name || catalogProd?.name || it.product_id || '未命名商品').trim();
+      return {
+        product_id: it.product_id,
+        product_name: resolvedName,
+        name: resolvedName,
+        specification: it.specification,
+        ordered_quantity: Number(it.ordered_quantity) || 1,
+        received_quantity: 0,
+        cost_price: Number(it.cost_price) || 0,
+        note: it.note
+      };
+    });
 
     await addPurchaseOrder({
       po_id: `PO_${format(new Date(), 'yyyyMMdd')}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
@@ -3117,8 +3168,10 @@ export default function Purchases() {
                                     const val = e.target.value;
                                     setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, product_name: val } : it));
                                   }}
-                                  className="w-full bg-[#1e293b] border border-white/10 rounded px-2 py-1 text-xs text-white font-bold placeholder-slate-500"
-                                  placeholder="單據品名 (可手動修改)"
+                                  className={`w-full bg-[#1e293b] border rounded px-2 py-1 text-xs text-white font-bold placeholder-slate-500 ${
+                                    !item.product_name?.trim() ? 'border-amber-500/80 ring-1 ring-amber-500/50 focus:border-amber-400' : 'border-white/10'
+                                  }`}
+                                  placeholder="單據品名 (必填，可手動修改)"
                                 />
                               </div>
 
@@ -3132,7 +3185,7 @@ export default function Purchases() {
                                     ...it,
                                     product_id: matchedP.product_id,
                                     matched_system_product: matchedP,
-                                    product_name: it.product_name || matchedP.name,
+                                    product_name: (matchedP.name || it.product_name || '未命名商品').trim(),
                                     specification: it.specification || matchedP.specification || '',
                                     cost_price: it.cost_price || matchedP.cost_price || 0,
                                     location: defLoc?.location || it.location || '倉庫',

@@ -392,6 +392,7 @@ export default function SetupGuide() {
     // 1. Refresh Products table
     var prodSheet = ss.getSheetByName('products');
     var prodCostMap = {};
+    var prodNameMap = {};
     if (prodSheet && prodSheet.getLastRow() > 0) {
        var headers = ['product_id', 'barcode', 'name', 'category', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'created_at', 'brand', 'specification', 'min_stock', 'is_discontinued', 'expected_restock_date'];
        var existingHeaders = prodSheet.getRange(1, 1, 1, prodSheet.getLastColumn()).getValues()[0];
@@ -403,18 +404,20 @@ export default function SetupGuide() {
        
        var values = prodSheet.getDataRange().getValues();
        var idIdx = existingHeaders.indexOf('product_id');
+       var nameIdx = existingHeaders.indexOf('name');
        var costIdx = existingHeaders.indexOf('cost_price');
        var lastIdNum = 0;
        
-       // Pass 1: Find max ID & map cost prices
+       // Pass 1: Find max ID & map cost prices & product names
        for(var i=1; i<values.length; i++) {
-         var cid = String(values[i][idIdx] || '');
+         var cid = String(values[i][idIdx] || '').trim();
          if(cid.indexOf('P') === 0) {
            var n = parseInt(cid.substring(1));
            if(!isNaN(n) && n > lastIdNum) lastIdNum = n;
          }
-         if (cid && costIdx !== -1) {
-           prodCostMap[cid] = Number(values[i][costIdx]) || 0;
+         if (cid) {
+           if (costIdx !== -1) prodCostMap[cid] = Number(values[i][costIdx]) || 0;
+           if (nameIdx !== -1) prodNameMap[cid] = String(values[i][nameIdx] || '').trim();
          }
        }
        
@@ -424,42 +427,62 @@ export default function SetupGuide() {
            lastIdNum++;
            var nid = 'P' + String(lastIdNum).padStart(6, '0');
            prodSheet.getRange(i+1, idIdx + 1).setValue(nid);
+           if (nameIdx !== -1 && values[i][nameIdx]) {
+             prodNameMap[nid] = String(values[i][nameIdx]).trim();
+           }
          }
        }
     }
 
-    // 2. Fix transactions sheet headers and cost_price formatting/date corruption
+    // 2. Fix transactions sheet headers and cost_price formatting/date corruption and missing product names
     var transSheet = ss.getSheetByName('transactions');
     if (transSheet && transSheet.getLastRow() > 0) {
        var tHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+       if (tHeaders.indexOf('name') === -1) {
+         transSheet.insertColumnsBefore(3, 1);
+         transSheet.getRange(1, 3).setValue('name');
+         tHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+       }
+       var tNameIdx = tHeaders.indexOf('name');
        var tCostIdx = tHeaders.indexOf('cost_price');
        var tPidIdx = tHeaders.indexOf('product_id');
        var tPriceIdx = tHeaders.indexOf('price');
        var tDateIdx = tHeaders.indexOf('date');
 
-       if (tCostIdx !== -1 && transSheet.getLastRow() > 1) {
-         var costColNum = tCostIdx + 1;
-         transSheet.getRange(2, costColNum, transSheet.getLastRow() - 1, 1).setNumberFormat('0.##');
+       if (transSheet.getLastRow() > 1) {
          var tValues = transSheet.getDataRange().getValues();
-         
+         if (tCostIdx !== -1) {
+           transSheet.getRange(2, tCostIdx + 1, transSheet.getLastRow() - 1, 1).setNumberFormat('0.##');
+         }
+         if (tPriceIdx !== -1) {
+           transSheet.getRange(2, tPriceIdx + 1, transSheet.getLastRow() - 1, 1).setNumberFormat('0.##');
+         }
+         if (tDateIdx !== -1) {
+           transSheet.getRange(2, tDateIdx + 1, transSheet.getLastRow() - 1, 1).setNumberFormat('@');
+         }
+
          for (var ti = 1; ti < tValues.length; ti++) {
-           var rawCost = tValues[ti][tCostIdx];
-           var rawPid = tPidIdx !== -1 ? String(tValues[ti][tPidIdx] || '') : '';
-           if (rawCost instanceof Date || String(rawCost).indexOf('1899') !== -1 || isNaN(Number(rawCost))) {
-             var fixedCost = prodCostMap[rawPid] || 0;
-             transSheet.getRange(ti + 1, costColNum).setValue(fixedCost);
+           var rawPid = tPidIdx !== -1 ? String(tValues[ti][tPidIdx] || '').trim() : '';
+           // Fix cost price
+           if (tCostIdx !== -1) {
+             var rawCost = tValues[ti][tCostIdx];
+             if (rawCost instanceof Date || String(rawCost).indexOf('1899') !== -1 || isNaN(Number(rawCost))) {
+               var fixedCost = prodCostMap[rawPid] || 0;
+               transSheet.getRange(ti + 1, tCostIdx + 1).setValue(fixedCost);
+             }
+           }
+           // Fix missing product name
+           if (tNameIdx !== -1 && rawPid && prodNameMap[rawPid]) {
+             var rawName = String(tValues[ti][tNameIdx] || '').trim();
+             if (!rawName) {
+               transSheet.getRange(ti + 1, tNameIdx + 1).setValue(prodNameMap[rawPid]);
+             }
            }
          }
        }
-       if (tPriceIdx !== -1 && transSheet.getLastRow() > 1) {
-         transSheet.getRange(2, tPriceIdx + 1, transSheet.getLastRow() - 1, 1).setNumberFormat('0.##');
-       }
-       if (tDateIdx !== -1 && transSheet.getLastRow() > 1) {
-         transSheet.getRange(2, tDateIdx + 1, transSheet.getLastRow() - 1, 1).setNumberFormat('@');
-       }
     }
 
-    // 3. Fix purchase_orders sheet headers
+    // 3. Fix purchase_orders sheet headers and missing product names
     var poSheet = ss.getSheetByName('purchase_orders');
     if (poSheet && poSheet.getLastRow() > 0) {
        var poHeaders = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
@@ -471,9 +494,21 @@ export default function SetupGuide() {
          poHeaders.push('invoice_image_url');
          poSheet.getRange(1, poHeaders.length).setValue('invoice_image_url');
        }
+       var poNameIdx = poHeaders.indexOf('name');
+       var poPidIdx = poHeaders.indexOf('product_id');
+       if (poSheet.getLastRow() > 1 && poNameIdx !== -1 && poPidIdx !== -1) {
+         var poValues = poSheet.getDataRange().getValues();
+         for (var pi = 1; pi < poValues.length; pi++) {
+           var pPid = String(poValues[pi][poPidIdx] || '').trim();
+           var pName = String(poValues[pi][poNameIdx] || '').trim();
+           if (!pName && pPid && prodNameMap[pPid]) {
+             poSheet.getRange(pi + 1, poNameIdx + 1).setValue(prodNameMap[pPid]);
+           }
+         }
+       }
     }
 
-    return ContentService.createTextOutput(JSON.stringify({success:true, message: 'Database reformatted and transactions/purchase_orders repaired.'})).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({success:true, message: 'Database reformatted, product names populated, and transactions/purchase_orders repaired.'})).setMimeType(ContentService.MimeType.JSON);
   }
 
   if (action === 'editProduct') {
@@ -678,7 +713,11 @@ export default function SetupGuide() {
     var trRow = [];
     for (var k = 0; k < transHeaders.length; k++) {
       var kName = transHeaders[k];
-      trRow.push(data[kName] !== undefined ? data[kName] : '');
+      var val = data[kName];
+      if ((val === undefined || val === '') && (kName === 'name' || kName === 'product_name')) {
+        val = data.name || data.product_name || '';
+      }
+      trRow.push(val !== undefined ? val : '');
     }
 
     // Always append every stock-in event as an independent transaction ledger record
@@ -759,7 +798,11 @@ export default function SetupGuide() {
     var trRow = [];
     for (var k = 0; k < transHeaders.length; k++) {
       var kName = transHeaders[k];
-      trRow.push(data[kName] !== undefined ? data[kName] : '');
+      var val = data[kName];
+      if ((val === undefined || val === '') && (kName === 'name' || kName === 'product_name')) {
+        val = data.name || data.product_name || '';
+      }
+      trRow.push(val !== undefined ? val : '');
     }
 
     // Always append every stock-out event as an independent transaction ledger record
@@ -820,7 +863,11 @@ export default function SetupGuide() {
     var trRow = [];
     for (var k = 0; k < transHeaders.length; k++) {
       var kName = transHeaders[k];
-      trRow.push(data[kName] !== undefined ? data[kName] : '');
+      var val = data[kName];
+      if ((val === undefined || val === '') && (kName === 'name' || kName === 'product_name')) {
+        val = data.name || data.product_name || '';
+      }
+      trRow.push(val !== undefined ? val : '');
     }
 
     // Always append inventory adjustments as an independent ledger record
@@ -870,6 +917,9 @@ export default function SetupGuide() {
         for (var j = 0; j < transHeaders.length; j++) {
           var k = transHeaders[j];
           var val = item[k];
+          if ((val === undefined || val === '') && (k === 'name' || k === 'product_name')) {
+            val = item.name || item.product_name || '';
+          }
           if (k === 'cost_price' || k === 'price' || k === 'quantity') {
             val = (val !== undefined && val !== null && val !== '') ? Number(val) || 0 : 0;
           }

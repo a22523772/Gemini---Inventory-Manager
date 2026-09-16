@@ -734,16 +734,21 @@ export const mergeAndProtectPurchaseOrders = (remotePOs: any[], currentLocalPOs:
 
     // Normalize items
     const rawItems = Array.isArray(remote.items) ? remote.items : [];
-    const items = rawItems.map((it: any) => ({
-      product_id: String(it.product_id || '').trim(),
-      product_name: String(it.product_name || it.name || '').trim(),
-      name: String(it.name || it.product_name || '').trim(),
-      specification: String(it.specification || '').trim(),
-      ordered_quantity: Number(it.ordered_quantity) || 0,
-      received_quantity: Number(it.received_quantity) || 0,
-      cost_price: Number(it.cost_price) || 0,
-      note: String(it.note || '').trim()
-    }));
+    const items = rawItems.map((it: any) => {
+      const pid = String(it.product_id || '').trim();
+      const localItem = local?.items?.find(li => String(li.product_id || '').trim().toLowerCase() === pid.toLowerCase());
+      const resolvedName = String(it.name || it.product_name || localItem?.name || localItem?.product_name || pid || '').trim();
+      return {
+        product_id: pid,
+        product_name: resolvedName,
+        name: resolvedName,
+        specification: String(it.specification || '').trim(),
+        ordered_quantity: Number(it.ordered_quantity) || 0,
+        received_quantity: Number(it.received_quantity) || 0,
+        cost_price: Number(it.cost_price) || 0,
+        note: String(it.note || '').trim()
+      };
+    });
 
     return {
       po_id: poId,
@@ -1348,9 +1353,12 @@ export const getResolvedPoItems = (
     const effective = Math.max(stored, fromTx);
     const ordered = Number(it.ordered_quantity || 0);
     const remaining = Math.max(0, ordered - effective);
+    const resolvedName = (it.name || (it as any).product_name || it.product_id || '').trim();
 
     return {
       ...it,
+      name: resolvedName,
+      product_name: resolvedName,
       received_quantity: effective,
       effective_received_quantity: effective,
       remaining_quantity: remaining
@@ -1693,11 +1701,22 @@ export const useStore = create<AppState>((set, get) => ({
         }
       }
 
+      const prodNameMap = new Map(pList.map(p => [String(p.product_id || '').toLowerCase().trim(), p.name]));
+      const enrichedTList = tList.map(t => {
+        const cleanPid = String(t.product_id || '').toLowerCase().trim();
+        const resolvedName = (t.name || t.product_name || (cleanPid ? prodNameMap.get(cleanPid) : '') || t.product_id || '').trim();
+        return {
+          ...t,
+          name: resolvedName,
+          product_name: resolvedName
+        };
+      });
+
       set({ 
         products: pList, 
         stock: sList, 
         vendors: vList, 
-        transactions: tList.sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date)),
+        transactions: enrichedTList.sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date)),
         onlineOrders: oList,
         purchaseOrders: poList
       });
@@ -1721,13 +1740,14 @@ export const useStore = create<AppState>((set, get) => ({
   enqueueAction: async (action, payload) => {
     // Fill in product name for GAS if missing first!
     const { products } = get();
-    const product = products.find(p => p.product_id === payload.product_id);
-    const updatedPayload = { ...payload };
-    if (updatedPayload.product_name) {
-        updatedPayload.name = updatedPayload.product_name;
-    } else if (product && !updatedPayload.name) {
-        updatedPayload.name = product.name;
-    }
+    const cleanPid = String(payload.product_id || '').trim().toLowerCase();
+    const product = products.find(p => String(p.product_id || '').trim().toLowerCase() === cleanPid);
+    const resolvedName = (payload.name || payload.product_name || product?.name || payload.product_id || '').trim();
+    const updatedPayload = { 
+      ...payload,
+      name: resolvedName,
+      product_name: resolvedName
+    };
 
     // Deterministic or generated transaction ID
     const targetTxId = updatedPayload.transaction_id || `TX_${Date.now()}_${Math.random().toString(36).substring(2,6)}`;
@@ -1789,7 +1809,8 @@ export const useStore = create<AppState>((set, get) => ({
             batch_tx_id: updatedPayload.batch_tx_id || updatedPayload.batch_id || '',
             platform: updatedPayload.platform || (updatedPayload.type && !['stock_in', 'stock_out', 'adjust'].includes(updatedPayload.type) ? updatedPayload.type.replace(/^stock_out\s*/, '') : '') || '',
             product_id: updatedPayload.product_id || '',
-            product_name: updatedPayload.product_name || updatedPayload.name || product?.name || '',
+            product_name: resolvedName,
+            name: resolvedName,
             type: updatedPayload.type || 'stock_in',
             quantity: Number(updatedPayload.quantity),
             location: updatedPayload.location,
@@ -1910,7 +1931,8 @@ export const useStore = create<AppState>((set, get) => ({
             batch_tx_id: updatedPayload.batch_tx_id || updatedPayload.batch_id || '',
             platform: updatedPayload.platform || (updatedPayload.type && !['stock_in', 'stock_out', 'adjust'].includes(updatedPayload.type) ? updatedPayload.type.replace(/^stock_out\s*/, '') : '') || '',
             product_id: updatedPayload.product_id || '',
-            product_name: updatedPayload.product_name || updatedPayload.name || product?.name || '',
+            product_name: resolvedName,
+            name: resolvedName,
             type: updatedPayload.type || 'stock_out',
             quantity: Number(updatedPayload.quantity),
             location: updatedPayload.location,
@@ -1976,7 +1998,8 @@ export const useStore = create<AppState>((set, get) => ({
             online_order_id: updatedPayload.online_order_id || updatedPayload.order_id || '',
             platform: updatedPayload.platform || (updatedPayload.type && !['stock_in', 'stock_out', 'adjust'].includes(updatedPayload.type) ? updatedPayload.type.replace(/^stock_out\s*/, '') : '') || '',
             product_id: updatedPayload.product_id || '',
-            product_name: updatedPayload.product_name || updatedPayload.name || product?.name || '',
+            product_name: resolvedName,
+            name: resolvedName,
             type: updatedPayload.type || 'adjust',
             quantity: Number(updatedPayload.quantity),
             delta: updatedPayload.delta,
@@ -2321,9 +2344,11 @@ export const useStore = create<AppState>((set, get) => ({
         const dT = await rT.json();
         const currentProds = get().products;
         const prodCostMap = new Map<string, number>();
+        const prodNameMap = new Map<string, string>();
         currentProds.forEach(p => {
           if (p.product_id) {
             prodCostMap.set(p.product_id, Number(p.cost_price) || 0);
+            prodNameMap.set(String(p.product_id).toLowerCase().trim(), p.name);
           }
         });
 
@@ -2367,7 +2392,16 @@ export const useStore = create<AppState>((set, get) => ({
             }
           }
           const platformVal = norm.platform || norm['平台'] || norm['銷售平台'] || (norm.type && !['stock_in', 'stock_out', 'adjust'].includes(norm.type) ? norm.type.replace(/^stock_out\s*/, '') : '') || '';
-          const product_name = norm.product_name || norm.name || norm['商品名稱'] || norm['名稱'] || '';
+          const cleanPid = pid.toLowerCase().trim();
+          const product_name = (
+            norm.product_name ||
+            norm.name ||
+            norm['商品名稱'] ||
+            norm['名稱'] ||
+            (cleanPid ? prodNameMap.get(cleanPid) : '') ||
+            pid ||
+            ''
+          ).trim();
           const priceVal = Number(norm.price || norm['金額'] || norm['售價']) || 0;
 
           // Clean cost_price: prevent date string contamination (e.g. 1899/12/30 0:00:00)
@@ -2391,7 +2425,8 @@ export const useStore = create<AppState>((set, get) => ({
             online_order_id: String(online_order_id).trim(),
             platform: String(platformVal).trim(),
             product_id: pid,
-            product_name: String(product_name).trim(),
+            product_name: product_name,
+            name: product_name,
             type: norm.type ? String(norm.type).trim() : 'stock_out',
             quantity: Number(norm.quantity) || 0,
             cost_price: costPriceVal,
@@ -2887,6 +2922,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const prodCostMap = new Map(products.map(p => [p.product_id, Number(p.cost_price) || 0]));
+      const prodNameMap = new Map(products.map(p => [String(p.product_id || '').toLowerCase().trim(), p.name]));
       const sanitized = transactions.map(t => {
         let cp = Number(t.cost_price);
         if (isNaN(cp) || cp === 0) {
@@ -2896,8 +2932,12 @@ export const useStore = create<AppState>((set, get) => ({
             cp = 0;
           }
         }
+        const cleanPid = String(t.product_id || '').toLowerCase().trim();
+        const resolvedName = (t.name || t.product_name || (cleanPid ? prodNameMap.get(cleanPid) : '') || t.product_id || '').trim();
         return {
           ...t,
+          name: resolvedName,
+          product_name: resolvedName,
           date: formatConsistentTxDate(t.date),
           cost_price: cp,
           price: Number(t.price) || 0,
@@ -3253,14 +3293,27 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   overwriteCloudPurchaseOrders: async () => {
-    const { gasApiUrl, purchaseOrders } = get();
+    const { gasApiUrl, purchaseOrders, products } = get();
     if (!gasApiUrl) return false;
     set({ isLoading: true, error: null });
     try {
+      const prodNameMap = new Map(products.map(p => [String(p.product_id || '').toLowerCase().trim(), p.name]));
+      const sanitized = purchaseOrders.map(po => ({
+        ...po,
+        items: (po.items || []).map(it => {
+          const cleanPid = String(it.product_id || '').toLowerCase().trim();
+          const resolvedName = (it.name || (it as any).product_name || (cleanPid ? prodNameMap.get(cleanPid) : '') || it.product_id || '').trim();
+          return {
+            ...it,
+            name: resolvedName,
+            product_name: resolvedName
+          };
+        })
+      }));
       const res = await fetch(`${gasApiUrl}?action=overwritePurchaseOrders`, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(purchaseOrders)
+        body: JSON.stringify(sanitized)
       });
       if (res.ok) {
         const d = await res.json();
@@ -3333,7 +3386,9 @@ export const useStore = create<AppState>((set, get) => ({
     // 1. Process each item into inventory
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      const p = products.find(prod => prod.product_id === item.product_id);
+      const cleanPid = String(item.product_id || '').trim().toLowerCase();
+      const p = products.find(prod => String(prod.product_id || '').trim().toLowerCase() === cleanPid);
+      const resolvedName = (item.product_name || (item as any).name || p?.name || item.product_id || '').trim();
       const uniqueItemId = `TX_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 7)}`;
       const stockInPayload = {
         transaction_id: batchTxId, // PO ID or batch ID for spreadsheet
@@ -3343,8 +3398,8 @@ export const useStore = create<AppState>((set, get) => ({
         po_id: po_id || (batchTxId.startsWith('PO_') ? batchTxId : ''),
         invoice_number: invoice_number || '',
         product_id: item.product_id,
-        product_name: item.product_name || p?.name || '',
-        name: item.product_name || p?.name || '',
+        product_name: resolvedName,
+        name: resolvedName,
         quantity: Number(item.quantity) || 1,
         location: item.location || '倉庫',
         floor: item.floor || '1F',
@@ -3451,7 +3506,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   completeAndStockInAllRemainingPO: async (poId: string) => {
-    const { purchaseOrders, batchStockInFromInvoice, showToast } = get();
+    const { purchaseOrders, products, batchStockInFromInvoice, showToast } = get();
     const po = purchaseOrders.find(p => p.po_id === poId);
     if (!po) {
       showToast('⚠️ 找不到指定的採購訂單');
@@ -3463,9 +3518,13 @@ export const useStore = create<AppState>((set, get) => ({
       const remaining = Math.max(0, Number(it.ordered_quantity || 0) - Number(it.received_quantity || 0));
       const qty = remaining > 0 ? remaining : Number(it.ordered_quantity || 1);
       if (qty > 0) {
+        const cleanPid = String(it.product_id || '').trim().toLowerCase();
+        const p = products.find(prod => String(prod.product_id || '').trim().toLowerCase() === cleanPid);
+        const resolvedName = (it.name || (it as any).product_name || p?.name || it.product_id || '').trim();
         itemsToStockIn.push({
           product_id: it.product_id,
-          product_name: it.name || (it as any).product_name || '',
+          product_name: resolvedName,
+          name: resolvedName,
           specification: it.specification || '',
           quantity: qty,
           cost_price: Number(it.cost_price || 0),

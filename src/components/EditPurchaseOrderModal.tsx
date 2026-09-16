@@ -46,10 +46,17 @@ export default function EditPurchaseOrderModal({
       setNote(po.note || '');
       setInvoiceNumber(po.invoice_number || '');
       const resolved = getResolvedPoItems(po, transactions || []);
-      setItems(resolved.map(it => ({
-        ...it,
-        received_quantity: it.effective_received_quantity
-      })));
+      setItems(resolved.map(it => {
+        const cleanPid = String(it.product_id || '').trim().toLowerCase();
+        const prod = products.find(p => String(p.product_id || '').trim().toLowerCase() === cleanPid);
+        const resolvedName = (it.name || (it as any).product_name || prod?.name || it.product_id || '').trim();
+        return {
+          ...it,
+          name: resolvedName,
+          product_name: resolvedName,
+          received_quantity: it.effective_received_quantity
+        };
+      }));
     }
   }, [po, transactions]);
 
@@ -131,6 +138,17 @@ export default function EditPurchaseOrderModal({
 
     try {
       setIsSaving(true);
+      const cleanItems = items.map(it => {
+        const cleanPid = String(it.product_id || '').trim().toLowerCase();
+        const catalogProd = products.find(p => String(p.product_id || '').trim().toLowerCase() === cleanPid);
+        const resolvedName = (it.name || (it as any).product_name || catalogProd?.name || it.product_id || '').trim();
+        return {
+          ...it,
+          name: resolvedName,
+          product_name: resolvedName
+        };
+      });
+
       await onSave(po.po_id, {
         vendor_id: vendorId || vendorName,
         vendor_name: vendorName || vendorId,
@@ -139,7 +157,7 @@ export default function EditPurchaseOrderModal({
         status: status,
         note: note,
         invoice_number: invoiceNumber.trim(),
-        items: items
+        items: cleanItems
       });
       onClose();
     } catch (err: any) {
