@@ -833,6 +833,18 @@ export const isSpecificationMatch = (itemSpecRaw?: string, targetSpecRaw?: strin
   const clean2 = norm2.replace(/[\(\)]/g, ' ').replace(/\s+/g, ' ').trim();
   if (clean1 === clean2) return true;
 
+  // 智慧過濾促銷字詞與前綴 (例如: 【現貨免運】、01. 、加贈收納袋等)
+  const stripPromo = (str: string) => {
+    return str
+      .replace(/\(.*?(?:現貨|特惠|特價|免運|秒發|促銷|升級款|加贈|附贈|贈品|建議).*?\)/gi, ' ')
+      .replace(/^[0-9]+[\.\-、_]\s*/, '')
+      .replace(/[\s\-_/]+/g, '')
+      .trim();
+  };
+  const promoClean1 = stripPromo(norm1);
+  const promoClean2 = stripPromo(norm2);
+  if (promoClean1 && promoClean2 && promoClean1 === promoClean2) return true;
+
   const parts1 = parseSpecifications(norm1).map(s => normalizeSpecString(s));
   const parts2 = parseSpecifications(norm2).map(s => normalizeSpecString(s));
 
@@ -841,6 +853,10 @@ export const isSpecificationMatch = (itemSpecRaw?: string, targetSpecRaw?: strin
 
   if (norm1.includes(norm2) || norm2.includes(norm1)) return true;
   if (clean1.includes(clean2) || clean2.includes(clean1)) return true;
+
+  if (promoClean1 && promoClean2) {
+    if (promoClean1.includes(promoClean2) || promoClean2.includes(promoClean1)) return true;
+  }
 
   return false;
 };
@@ -3609,32 +3625,33 @@ export const getOnOrderStockQty = (purchaseOrders: PurchaseOrder[], productId: s
 
   pos.forEach(po => {
     if (isPurchaseOrderPendingOrPartial(po.status)) {
-      const allMatchingItems = (po.items || []).filter(item => {
+      const itemsList = Array.isArray(po.items) && po.items.length > 0 ? po.items : [(po as any)];
+      const allMatchingItems = itemsList.filter(item => {
         const itemPid = String(item.product_id || '').trim().toLowerCase();
-        const itemName = String(item.name || item.product_name || '').trim().toLowerCase();
-        return (itemPid && itemPid === cleanPid) || (itemName && itemName === cleanPid);
+        const itemName = String(item.name || item.product_name || (item as any)['商品名稱'] || '').trim().toLowerCase();
+        return (cleanPid && (itemPid === cleanPid || itemName === cleanPid));
       });
 
       allMatchingItems.forEach(item => {
-        const itemSpec = (item.specification || '').trim();
+        const itemSpec = String(item.specification || (item as any)['規格'] || '').trim();
         let matchSpec = false;
 
         if (cleanTargetSpec === undefined || cleanTargetSpec === '') {
           // Target has no specification
-          // If PO item also has no specification, or this is the only matching item for this product in the PO, count it!
           matchSpec = !itemSpec || allMatchingItems.length === 1 || isSpecificationMatch(itemSpec, '');
         } else {
           // Target has a specification
           if (isSpecificationMatch(itemSpec, cleanTargetSpec)) {
             matchSpec = true;
           } else if (!itemSpec && allMatchingItems.length === 1) {
-            // PO item has no specification, but there is only 1 item for this product in the PO -> attribute as on-order!
             matchSpec = true;
           }
         }
 
         if (matchSpec) {
-          const remaining = Math.max(0, Number(item.ordered_quantity || 0) - Number(item.received_quantity || 0));
+          const ordered = Number(item.ordered_quantity ?? (item as any).order_quantity ?? (item as any).quantity ?? (item as any)['採購數量'] ?? (item as any)['訂購數量'] ?? 0);
+          const received = Number(item.received_quantity ?? (item as any).delivered_quantity ?? (item as any)['已到貨數量'] ?? (item as any)['已收數量'] ?? 0);
+          const remaining = Math.max(0, ordered - received);
           count += remaining;
         }
       });

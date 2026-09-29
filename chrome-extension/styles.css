@@ -1,0 +1,781 @@
+/* 電商賣場出貨與真實利潤助手 - Shadow DOM 專用樣式 */
+
+:host {
+  all: initial;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans TC", sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #1e293b;
+  box-sizing: border-box;
+  z-index: 2147483647;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/* 浮動展開標籤 (固定在右側) */
+.drawer-toggle-btn {
+  position: fixed;
+  right: 0;
+  top: 40%;
+  transform: translateY(-50%);
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #ffffff;
+  padding: 12px 10px 12px 14px;
+  border-radius: 12px 0 0 12px;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 12px;
+  user-select: none;
+  transition: all 0.25s ease;
+  z-index: 2147483646;
+}
+
+.drawer-toggle-btn:hover {
+  background: linear-gradient(135deg, #1d4ed8, #1e40af);
+  padding-left: 18px;
+  box-shadow: -6px 0 20px rgba(37, 99, 235, 0.4);
+}
+
+.drawer-toggle-badge {
+  background: #10b981;
+  color: #fff;
+  font-size: 10px;
+  padding: 2px 5px;
+  border-radius: 10px;
+  font-weight: 700;
+}
+
+/* 主面板容器 */
+.drawer-panel {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 420px;
+  max-width: 90vw;
+  background: #0f172a;
+  color: #f1f5f9;
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
+  z-index: 2147483647;
+  overflow: hidden;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.drawer-panel.open {
+  transform: translateX(0);
+}
+
+/* 頂部控制列 */
+.drawer-header {
+  padding: 12px 16px;
+  background: #1e293b;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.header-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.brand-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14px;
+  color: #f8fafc;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.icon-btn {
+  background: #334155;
+  border: none;
+  color: #cbd5e1;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  transition: all 0.15s ease;
+}
+
+.icon-btn:hover {
+  background: #475569;
+  color: #ffffff;
+}
+
+.icon-btn.close:hover {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+/* 透明度控制滑桿 */
+.opacity-control-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: #94a3b8;
+  padding-top: 4px;
+}
+
+.opacity-slider {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: #334155;
+  outline: none;
+  cursor: pointer;
+  accent-color: #3b82f6;
+}
+
+/* 內容可捲動區域 */
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.drawer-body::-webkit-scrollbar {
+  width: 6px;
+}
+.drawer-body::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+
+/* 訂單頂部資訊 */
+.order-banner {
+  background: #1e293b;
+  border-radius: 10px;
+  padding: 12px;
+  border: 1px solid #334155;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.platform-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #ea580c;
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.order-id-display {
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: #38bdf8;
+}
+
+/* 財務利潤重點看板 (嚴格不顯示總售價) */
+.profit-hero-card {
+  background: linear-gradient(135deg, #064e3b 0%, #022c22 100%);
+  border: 1px solid #059669;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 4px 12px rgba(5, 150, 105, 0.2);
+}
+
+.profit-hero-card.negative {
+  background: linear-gradient(135deg, #881337 0%, #4c0519 100%);
+  border: 1px solid #e11d48;
+  box-shadow: 0 4px 12px rgba(225, 29, 72, 0.2);
+}
+
+.profit-title {
+  font-size: 12px;
+  color: #a7f3d0;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.profit-hero-card.negative .profit-title {
+  color: #fecdd3;
+}
+
+.profit-amount {
+  font-size: 26px;
+  font-weight: 800;
+  color: #ffffff;
+  font-family: monospace;
+}
+
+.profit-rate-badge {
+  font-size: 15px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(4px);
+  color: #ffffff;
+}
+
+/* 財務拆解小卡格 (3格) */
+.finance-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.finance-box {
+  background: #1e293b;
+  border-radius: 8px;
+  padding: 10px 8px;
+  border: 1px solid #334155;
+  text-align: center;
+}
+
+.finance-box-label {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+
+.finance-box-val {
+  font-size: 14px;
+  font-weight: 700;
+  color: #f1f5f9;
+  font-family: monospace;
+}
+
+.finance-box-val.income {
+  color: #38bdf8;
+}
+
+.finance-box-val.fee {
+  color: #f87171;
+}
+
+.finance-box-val.cost {
+  color: #fbbf24;
+}
+
+/* 品項清單標題 */
+.section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* 品項卡片清單 */
+.items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.item-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 0.15s ease;
+}
+
+.item-card.checked {
+  border-color: #10b981;
+  background: #0f2922;
+}
+
+.item-main-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.item-checkbox {
+  margin-top: 3px;
+  width: 18px;
+  height: 18px;
+  accent-color: #10b981;
+  cursor: pointer;
+}
+
+.item-details {
+  flex: 1;
+}
+
+.item-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f8fafc;
+  line-height: 1.3;
+}
+
+.item-spec {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+
+.item-qty-tag {
+  font-weight: 700;
+  color: #38bdf8;
+}
+
+/* 庫存與在途採購燈號徽章 */
+.stock-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #0f172a;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.status-badge.green {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+}
+
+.status-badge.yellow {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+}
+
+.status-badge.red {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
+.po-transit-text {
+  color: #38bdf8;
+  font-weight: 600;
+}
+
+.po-transit-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.po-transit-badge.active {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.po-transit-badge.none {
+  background: rgba(255, 255, 255, 0.05);
+  color: #64748b;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* 底部動作列 */
+.drawer-footer {
+  padding: 16px;
+  background: #1e293b;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-ship {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: #ffffff;
+  border: none;
+  padding: 14px 20px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
+  transition: all 0.2s ease;
+}
+
+.btn-ship:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+  transform: translateY(-1px);
+}
+
+.btn-ship:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 出貨成功綠色狀態按鈕 */
+.btn-ship-success {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+  color: #ffffff;
+  border: none;
+  padding: 12px 18px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 4px 14px rgba(5, 150, 105, 0.4);
+}
+
+.reset-ship-link {
+  text-align: center;
+  font-size: 11px;
+  color: #94a3b8;
+  cursor: pointer;
+  text-decoration: underline;
+  margin-top: 2px;
+}
+.reset-ship-link:hover {
+  color: #cbd5e1;
+}
+
+/* 設定頁面視窗 (在 Drawer 內覆蓋) */
+.settings-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-title {
+  font-weight: 700;
+  font-size: 13px;
+  color: #f1f5f9;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-label {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.form-input {
+  background: #0f172a;
+  border: 1px solid #334155;
+  color: #f8fafc;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: monospace;
+  outline: none;
+}
+.form-input:focus {
+  border-color: #3b82f6;
+}
+
+.selector-input-row {
+  display: flex;
+  gap: 6px;
+}
+
+.selector-input-row .form-input {
+  flex: 1;
+}
+
+.btn-pick {
+  background: #3b82f6;
+  color: #ffffff;
+  border: none;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.btn-pick:hover {
+  background: #2563eb;
+}
+
+.btn-secondary {
+  background: #334155;
+  color: #f1f5f9;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-secondary:hover {
+  background: #475569;
+}
+
+.btn-primary {
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-primary:hover {
+  background: #1d4ed8;
+}
+
+/* 提示訊息列 */
+.alert-box {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.alert-box.info {
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  color: #38bdf8;
+}
+.alert-box.warning {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #fbbf24;
+}
+
+/* 載入中轉圈 */
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 訂單編號手動輸入與抓取群組 */
+.order-id-input-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 4px 8px;
+  margin-top: 4px;
+}
+
+.order-id-input-group:focus-within {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 1px #38bdf8;
+}
+
+.order-id-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #38bdf8;
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 700;
+  outline: none;
+}
+
+.order-id-input::placeholder {
+  color: #64748b;
+  font-weight: normal;
+  font-size: 11px;
+}
+
+.btn-xs {
+  background: #1e293b;
+  border: 1px solid #3b82f6;
+  color: #38bdf8;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-xs:hover {
+  background: #3b82f6;
+  color: #ffffff;
+}
+
+/* 設定頁：即時抓取預覽徽章 */
+.selector-preview-badge {
+  font-size: 11px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  word-break: break-all;
+}
+
+.selector-preview-badge.success {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #34d399;
+}
+
+.selector-preview-badge.muted {
+  background: rgba(100, 116, 139, 0.15);
+  border: 1px solid rgba(100, 116, 139, 0.25);
+  color: #94a3b8;
+}
+
+/* 選項 A: 規格對齊與下拉選單樣式 */
+.spec-highlight {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.spec-match-container {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.spec-match-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+}
+
+.spec-match-label {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.spec-match-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.spec-match-badge.auto {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+}
+
+.spec-match-badge.manual {
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+}
+
+.spec-match-badge.warn {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+}
+
+.spec-match-badge.forced {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
+.spec-select {
+  width: 100%;
+  background: #1e293b;
+  color: #f1f5f9;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+  font-weight: 500;
+  transition: border-color 0.15s ease;
+}
+
+.spec-select:focus {
+  border-color: #38bdf8;
+}
+
+.spec-select option {
+  background: #1e293b;
+  color: #f1f5f9;
+}
+
+

@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "電商賣場出貨與真實利潤助手",
+  "version": "1.0.0",
+  "description": "即時呈現訂單真實淨利、庫存與在途採購燈號，並連動 Google Apps Script 一鍵同步出貨與扣庫存 (支援蝦皮、MO店+、酷澎)",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "電商賣場出貨與真實利潤助手"
+  },
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "*://seller.shopee.tw/*",
+    "*://*.shopee.tw/*",
+    "*://*.momo.com.tw/*",
+    "*://*.coupang.com/*",
+    "*://*.coupang.tw/*",
+    "*://script.google.com/*",
+    "*://script.googleusercontent.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://seller.shopee.tw/*",
+        "*://*.shopee.tw/*",
+        "*://*.momo.com.tw/*",
+        "*://*.coupang.com/*",
+        "*://*.coupang.tw/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["styles.css", "icons/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

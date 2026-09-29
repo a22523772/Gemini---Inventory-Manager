@@ -242,8 +242,8 @@ export default function Home() {
 
   const totalStock = stock.reduce((acc, curr) => acc + curr.quantity, 0);
 
-  // Helper to validate single item health status (stock checks only)
-  const checkItemHealth = (item: any) => {
+  // Helper to get comprehensive item inventory and in-transit procurement status
+  const getItemInventoryStatus = (item: any) => {
     const itemPid = String(item.product_id || '').trim().toLowerCase();
     const itemName = String(item.product_name || '').trim().toLowerCase();
     const product = products.find(p => 
@@ -251,37 +251,9 @@ export default function Home() {
       (itemName && String(p.name || '').trim().toLowerCase() === itemName) ||
       (itemName && String(p.product_id || '').trim().toLowerCase() === itemName)
     );
-    if (!product) return { ok: false, message: '系統找不到此商品的資料，請先新增商品。' };
 
-    // Check Out of Stock or Discontinued status: strictly block shipping!
-    const statusInfo = getProductStatusInfo(product);
-    if (statusInfo.isPaused) {
-      if (statusInfo.isDiscontinued) {
-        return { ok: false, message: '出貨安全阻擋！此商品已被系統標註為「停產」，禁止出貨！' };
-      } else {
-        return { 
-          ok: false, 
-          message: `出貨安全阻擋！此商品目前為「暫時缺貨」狀態${statusInfo.expectedDate ? ` (預計 ${statusInfo.expectedDate} 到貨)` : ''}，禁止出貨！` 
-        };
-      }
-    }
-
-    const itemSpec = item.specification ? String(item.specification).trim() : '';
-    const productStock = stock.filter(s => {
-      const sPid = String(s.product_id || '').trim().toLowerCase();
-      const sName = String((s as any).name || '').trim().toLowerCase();
-      const pidMatch = (itemPid && sPid === itemPid) || (product.product_id && sPid === product.product_id.toLowerCase()) || (itemName && sName === itemName);
-      if (!pidMatch) return false;
-      if (itemSpec) {
-        return isSpecificationMatch(s.specification, itemSpec);
-      }
-      return true;
-    });
-    const totalQty = productStock.reduce((acc, curr) => acc + curr.quantity, 0);
-    const specLabel = itemSpec ? ` [規格: ${itemSpec}]` : '';
-    if (totalQty < item.quantity) {
-      return { ok: false, message: `庫存量不足！需要 ${item.quantity}${specLabel}，但目前在席庫存僅剩 ${totalQty}。` };
-    }
+    const matchedPid = product?.product_id || item.product_id || '';
+    const itemSpec = item.specification ? String(item.specification).trim() : (product?.specification || '');
 
     const isExpired = (expiryStr?: string) => {
       if (!expiryStr) return false;
@@ -291,10 +263,70 @@ export default function Home() {
       today.setHours(0,0,0,0);
       return exp < today;
     };
-    const validStock = productStock.filter(s => !isExpired(s.expiry_date));
-    const totalValid = validStock.reduce((acc, curr) => acc + curr.quantity, 0);
-    if (totalValid < item.quantity) {
-      return { ok: false, message: `出貨安全阻擋！雖有庫存 ${totalQty}${specLabel}，但皆已過期！可用健康庫存僅剩 ${totalValid}。` };
+
+    const productStock = stock.filter(s => {
+      const sPid = String(s.product_id || '').trim().toLowerCase();
+      const sName = String((s as any).name || '').trim().toLowerCase();
+      const pidMatch = (itemPid && sPid === itemPid) || (matchedPid && sPid === matchedPid.toLowerCase()) || (itemName && sName === itemName);
+      if (!pidMatch) return false;
+      if (itemSpec) {
+        return isSpecificationMatch(s.specification, itemSpec);
+      }
+      return true;
+    });
+
+    const totalStock = productStock.reduce((acc, curr) => acc + curr.quantity, 0);
+    const validStock = productStock.filter(s => !isExpired(s.expiry_date)).reduce((acc, curr) => acc + curr.quantity, 0);
+    const expiredStock = totalStock - validStock;
+
+    // 計算在途採購數量 (從 purchaseOrders 取得)
+    const onOrderQty = getOnOrderStockQty(purchaseOrders, matchedPid || itemPid || itemName, itemSpec, transactions);
+    const reqQty = Number(item.quantity) || 1;
+    const shortfall = Math.max(0, reqQty - totalStock);
+    const isShortage = totalStock < reqQty || validStock < reqQty;
+
+    const statusInfo = product ? getProductStatusInfo(product) : { isPaused: false, isDiscontinued: false, expectedDate: undefined };
+
+    return {
+      product,
+      matchedPid,
+      itemSpec,
+      reqQty,
+      totalStock,
+      validStock,
+      expiredStock,
+      onOrderQty,
+      shortfall,
+      isShortage,
+      statusInfo
+    };
+  };
+
+  // Helper to validate single item health status (stock checks only)
+  const checkItemHealth = (item: any) => {
+    const inv = getItemInventoryStatus(item);
+    if (!inv.product) return { ok: false, message: '系統找不到此商品的資料，請先新增商品。' };
+
+    // Check Out of Stock or Discontinued status: strictly block shipping!
+    if (inv.statusInfo.isPaused) {
+      if (inv.statusInfo.isDiscontinued) {
+        return { ok: false, message: '出貨安全阻擋！此商品已被系統標註為「停產」，禁止出貨！' };
+      } else {
+        return { 
+          ok: false, 
+          message: `出貨安全阻擋！此商品目前為「暫時缺貨」狀態${inv.statusInfo.expectedDate ? ` (預計 ${inv.statusInfo.expectedDate} 到貨)` : ''}，禁止出貨！` 
+        };
+      }
+    }
+
+    const specLabel = inv.itemSpec ? ` [規格: ${inv.itemSpec}]` : '';
+    if (inv.totalStock < inv.reqQty) {
+      const poNote = inv.onOrderQty > 0 ? ` (在途採購有 ${inv.onOrderQty} 件未到貨)` : ' (目前無在途採購)';
+      return { ok: false, message: `庫存量不足！需要 ${inv.reqQty}${specLabel}，但目前在席庫存僅剩 ${inv.totalStock} (短缺 ${inv.shortfall} 件)${poNote}。` };
+    }
+
+    if (inv.validStock < inv.reqQty) {
+      return { ok: false, message: `出貨安全阻擋！雖有庫存 ${inv.totalStock}${specLabel}，但皆已過期！可用健康庫存僅剩 ${inv.validStock}。` };
     }
 
     return { ok: true, message: '正常' };
@@ -684,7 +716,7 @@ export default function Home() {
 
     const result = Array.from(itemMap.values()).map(item => {
       const shortfall = Math.max(0, item.total_ordered_qty - item.current_stock_qty);
-      const onOrderQty = getOnOrderStockQty(purchaseOrders, item.product_id, item.specification, transactions);
+      const onOrderQty = getOnOrderStockQty(purchaseOrders, item.product_id || item.product_name, item.specification, transactions);
       return {
         ...item,
         shortfall_qty: shortfall,
@@ -1738,6 +1770,67 @@ export default function Home() {
 
                                 {/* 訂單狀態 Badge + Manual Edit Button */}
                                 <div className="flex items-center gap-1.5 shrink-0">
+                                  {(() => {
+                                    const shortageItems = order.items
+                                      .map((it: any) => getItemInventoryStatus(it))
+                                      .filter((inv: any) => inv.isShortage || inv.statusInfo.isPaused);
+
+                                    if (shortageItems.length === 0) return null;
+
+                                    const isAnyDiscontinued = shortageItems.some((inv: any) => inv.statusInfo.isDiscontinued);
+                                    const isAnyPaused = shortageItems.some((inv: any) => inv.statusInfo.isPaused);
+                                    const isAnyExpired = shortageItems.some((inv: any) => inv.validStock < inv.reqQty && inv.totalStock >= inv.reqQty);
+
+                                    if (isAnyDiscontinued) {
+                                      return (
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center gap-1">
+                                          🚫 包含停產
+                                        </span>
+                                      );
+                                    }
+
+                                    if (isAnyPaused) {
+                                      return (
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+                                          ⏸️ 暫停出貨
+                                        </span>
+                                      );
+                                    }
+
+                                    if (isAnyExpired) {
+                                      return (
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center gap-1">
+                                          ⚠️ 庫存已過期
+                                        </span>
+                                      );
+                                    }
+
+                                    const totalShortfall = shortageItems.reduce((sum: number, inv: any) => sum + inv.shortfall, 0);
+                                    const totalOnOrder = shortageItems.reduce((sum: number, inv: any) => sum + inv.onOrderQty, 0);
+
+                                    // 單一品項或多品項彙整顯示
+                                    const prefix = shortageItems.length > 1 ? '合計缺貨' : '缺貨';
+
+                                    if (totalOnOrder >= totalShortfall) {
+                                      return (
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1 shadow-sm">
+                                          🟡 {prefix} {totalShortfall} 件 (已採購 {totalOnOrder} 件在途)
+                                        </span>
+                                      );
+                                    } else if (totalOnOrder > 0) {
+                                      return (
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40 flex items-center gap-1 shadow-sm">
+                                          🔴 {prefix} {totalShortfall} 件 (已採購 {totalOnOrder} 件仍不足)
+                                        </span>
+                                      );
+                                    } else {
+                                      return (
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40 flex items-center gap-1 shadow-sm">
+                                          🔴 {prefix} {totalShortfall} 件 (無在途採購)
+                                        </span>
+                                      );
+                                    }
+                                  })()}
                                   <span className={`text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-lg flex items-center gap-1 ${statusStyle.color}`}>
                                     {statusStyle.text}
                                   </span>
@@ -2351,15 +2444,82 @@ export default function Home() {
                           </div>
                         </div>
 
-                        {/* Safety Checks for each item */}
-                        <div className={`mt-2 p-2 rounded-lg text-[11px] flex items-center gap-1.5 border ${
-                          health.ok 
-                            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300' 
-                            : 'bg-red-500/10 border-red-500/20 text-red-300'
-                        }`}>
-                          <span className="shrink-0">{health.ok ? '🟢' : '🔴'}</span>
-                          <span>{health.ok ? '庫存安全檢測正常，符合出貨規定' : health.message}</span>
-                        </div>
+                        {/* 訂單詳細 UI：完整展示庫存現況、在途採購數量與健康診斷 */}
+                        {(() => {
+                          const inv = getItemInventoryStatus(item);
+                          const isHealthy = !inv.isShortage && !inv.statusInfo.isPaused;
+                          const isPoCovered = inv.isShortage && inv.onOrderQty >= inv.shortfall;
+
+                          return (
+                            <div className={`mt-2.5 p-3 rounded-xl border text-xs space-y-2 ${
+                              isHealthy
+                                ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200'
+                                : inv.statusInfo.isPaused
+                                ? 'bg-rose-950/20 border-rose-500/30 text-rose-200'
+                                : isPoCovered
+                                ? 'bg-amber-950/20 border-amber-500/30 text-amber-200'
+                                : 'bg-rose-950/20 border-rose-500/30 text-rose-200'
+                            }`}>
+                              {/* 頂部標題與診斷 */}
+                              <div className="flex items-center justify-between font-bold flex-wrap gap-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span>{isHealthy ? '🟢' : isPoCovered ? '🟡' : '🔴'}</span>
+                                  <span>
+                                    {inv.statusInfo.isDiscontinued
+                                      ? '商品已被標註為「停產」，禁止出貨！'
+                                      : inv.statusInfo.isPaused
+                                      ? `商品為「暫時缺貨」狀態${inv.statusInfo.expectedDate ? ` (預計 ${inv.statusInfo.expectedDate} 到貨)` : ''}`
+                                      : inv.validStock < inv.reqQty && inv.totalStock >= inv.reqQty
+                                      ? '庫存已過期，無可用健康庫存！'
+                                      : isHealthy
+                                      ? '庫存充足安全，符合正常出貨規定'
+                                      : isPoCovered
+                                      ? `現有庫存不足 (短缺 ${inv.shortfall} 件)，但在途採購已足額訂購！`
+                                      : inv.onOrderQty > 0
+                                      ? `嚴重缺貨！短缺 ${inv.shortfall} 件，在途採購僅 ${inv.onOrderQty} 件仍不足！`
+                                      : `庫存短缺 ${inv.shortfall} 件，且無任何在途採購單！`}
+                                  </span>
+                                </div>
+                                <span className="text-[11px] font-mono opacity-80">
+                                  訂單需求: <strong className="text-white">{inv.reqQty}</strong> 件
+                                </span>
+                              </div>
+
+                              {/* 庫存與在途採購數據拆解 */}
+                              <div className="pt-2 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="bg-black/40 px-2 py-0.5 rounded font-mono border border-white/5">
+                                    📦 在席現貨: <strong className="text-white">{inv.totalStock}</strong> 件
+                                    {inv.expiredStock > 0 && <span className="text-rose-400"> (含過期 {inv.expiredStock} 件)</span>}
+                                  </span>
+                                  <span className={`px-2 py-0.5 rounded font-mono font-bold border ${
+                                    inv.onOrderQty > 0
+                                      ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+                                      : 'bg-black/30 text-slate-400 border-white/5'
+                                  }`}>
+                                    🚚 在途採購: {inv.onOrderQty > 0 ? `+${inv.onOrderQty} 件 (待到貨)` : '0 件 (無在途)'}
+                                  </span>
+                                </div>
+                                {inv.shortfall > 0 && (
+                                  <span className="font-mono font-bold text-rose-300 bg-rose-500/20 px-2 py-0.5 rounded border border-rose-500/30">
+                                    庫存缺口: -{inv.shortfall} 件
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* 行動建議提示 */}
+                              <p className="text-[11px] opacity-80 leading-relaxed pt-0.5">
+                                {isHealthy
+                                  ? `目前有效在席庫存 (${inv.validStock} 件) 足以直接出貨，點擊下方「出貨」即可自動 FIFO 扣減庫存。`
+                                  : isPoCovered
+                                  ? `目前在途已有 ${inv.onOrderQty} 件採購單，建議待採購品到貨驗收入庫後再行出貨；若有特殊急單可使用強行出貨。`
+                                  : inv.onOrderQty > 0
+                                  ? `現有庫存與在途採購合計仍短缺 ${inv.shortfall - inv.onOrderQty} 件，請盡速至採購模組追加訂貨。`
+                                  : `目前完全沒有此商品的在途採購單，請至「採購訂貨管理」新增採購以備出貨。`}
+                              </p>
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })}

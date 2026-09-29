@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>電商賣場出貨與真實利潤助手</title>
+  <style>
+    body {
+      width: 320px;
+      margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #f1f5f9;
+      font-size: 13px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 15px;
+      border-bottom: 1px solid #334155;
+      padding-bottom: 10px;
+      margin-bottom: 12px;
+    }
+    .status-badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .status-connected {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+      border: 1px solid #059669;
+    }
+    .status-disconnected {
+      background: rgba(239, 68, 68, 0.2);
+      color: #f87171;
+      border: 1px solid #dc2626;
+    }
+    label {
+      font-size: 11px;
+      color: #94a3b8;
+      display: block;
+      margin-bottom: 4px;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #fff;
+      font-size: 12px;
+      font-family: monospace;
+      outline: none;
+      margin-bottom: 8px;
+    }
+    input:focus {
+      border-color: #3b82f6;
+    }
+    button {
+      width: 100%;
+      padding: 8px 12px;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    button:hover {
+      background: #1d4ed8;
+    }
+    .platforms {
+      margin-top: 14px;
+      padding: 10px;
+      background: #1e293b;
+      border-radius: 8px;
+      border: 1px solid #334155;
+    }
+    .platform-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #cbd5e1;
+      margin-bottom: 4px;
+    }
+    .platform-item:last-child {
+      margin-bottom: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span>🛒</span>
+    <span>出貨與真實利潤助手</span>
+  </div>
+
+  <div id="status-display" class="status-badge status-disconnected">
+    ⚪ 檢查連線狀態中...
+  </div>
+
+  <label for="gas-url">Google Apps Script Web App URL：</label>
+  <input type="text" id="gas-url" placeholder="https://script.google.com/macros/s/.../exec">
+  <button id="btn-save">💾 儲存並同步</button>
+
+  <div class="platforms">
+    <div style="font-weight: 700; font-size: 11px; color: #94a3b8; margin-bottom: 6px;">支援賣場平台自動注入：</div>
+    <div class="platform-item">🟠 蝦皮賣家中心 (Shopee)</div>
+    <div class="platform-item">🟣 MO店+ 賣家後台 (Momo)</div>
+    <div class="platform-item">🔵 酷澎賣家後台 (Coupang Wing)</div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
