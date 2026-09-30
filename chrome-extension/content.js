@@ -23,6 +23,11 @@
     opacity: 0.95,
     gasUrl: '',
     currentOrderId: '',
+    togglePos: {
+      top: 38,
+      isPercent: true,
+      side: 'right'
+    },
     platformSelectors: {
       shopee: { incomeSelector: '', feeSelector: '', orderIdSelector: '' },
       momo: { incomeSelector: '', feeSelector: '', orderIdSelector: '' },
@@ -61,7 +66,7 @@
 
   // 3. 初始載入本地設定與快取
   chrome.storage.local.get(
-    ['gasUrl', 'opacity', 'platformSelectors', 'cachedCloudData', 'shippedOrders', 'isOpen', 'lastOrderId'],
+    ['gasUrl', 'opacity', 'platformSelectors', 'cachedCloudData', 'shippedOrders', 'isOpen', 'lastOrderId', 'togglePos'],
     (res) => {
       if (res.gasUrl) state.gasUrl = res.gasUrl;
       if (res.opacity !== undefined) state.opacity = Number(res.opacity);
@@ -78,6 +83,7 @@
       if (res.shippedOrders) state.shippedOrders = res.shippedOrders;
       if (res.isOpen !== undefined) state.isOpen = res.isOpen;
       if (res.lastOrderId && !state.currentOrderId) state.currentOrderId = res.lastOrderId;
+      if (res.togglePos) state.togglePos = { ...state.togglePos, ...res.togglePos };
 
       // 依網頁 Selector 嘗試自動抓取訂單編號 (完全不使用 URL)
       detectOrderId();
@@ -215,22 +221,233 @@
     }
   }
 
-  // 6. 背景靜默更新雲端資料
-  function silentRefreshCloudData() {
-    if (!state.gasUrl || state.isSyncing) return;
+  // 6. 背景靜默更新雲端資料 (支援手動觸發與防死鎖安全計時器)
+  let syncTimeoutId = null;
+  function silentRefreshCloudData(isManual = false) {
+    if (!state.gasUrl) {
+      if (isManual) alert('⚠️ 尚未設定 Google Apps Script Web App URL，請點擊右上角 ⚙️ 進行設定');
+      return;
+    }
+    if (state.isSyncing && !isManual) return;
+
     state.isSyncing = true;
     render();
+
+    if (syncTimeoutId) clearTimeout(syncTimeoutId);
+    // 安全計時器：30 秒自動解除鎖定，容納 Google Apps Script 冷啟動延遲
+    syncTimeoutId = setTimeout(() => {
+      if (state.isSyncing) {
+        state.isSyncing = false;
+        render();
+        if (isManual) alert('⚠️ 試算表同步逾時，請檢查 Google Apps Script 網址與網路連線');
+      }
+    }, 30000);
 
     chrome.runtime.sendMessage(
       { type: 'FETCH_CLOUD_DATA', gasUrl: state.gasUrl },
       (res) => {
+        if (syncTimeoutId) clearTimeout(syncTimeoutId);
         state.isSyncing = false;
+
+        if (chrome.runtime.lastError) {
+          if (isManual) alert(`❌ 插件背景通訊異常: ${chrome.runtime.lastError.message}`);
+          render();
+          return;
+        }
+
         if (res && res.success && res.data) {
           state.cloudData = res.data;
+          if (isManual) {
+            const counts = res.data.fetchedCounts || {};
+            alert(`✅ 試算表資料同步成功！\n- 網路訂單：${counts.onlineOrders ?? res.data.onlineOrders?.length ?? 0} 筆\n- 系統商品：${counts.products ?? res.data.products?.length ?? 0} 項\n- 現有庫存：${counts.stock ?? res.data.stock?.length ?? 0} 筆\n- 在途採購：${counts.purchaseOrders ?? res.data.purchaseOrders?.length ?? 0} 筆`);
+          }
+        } else if (isManual) {
+          alert(`❌ 同步失敗: ${res?.error || '無法讀取資料，請確認 Web App 已發布為「任何人皆可存取」'}`);
         }
         render();
       }
     );
+  }
+
+  // 規格化網路訂單欄位 (支援中英文欄位別名、去除空白符號、多品項訂單向上繼承 fill-down)
+  function normalizeOnlineOrders(rawOrders) {
+    if (!Array.isArray(rawOrders)) return [];
+
+    const strip = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]/g, '');
+    let lastHeader = null;
+    const normalized = [];
+
+    for (const raw of rawOrders) {
+      if (!raw || typeof raw !== 'object') continue;
+
+      const map = {};
+      for (const k of Object.keys(raw)) {
+        const val = typeof raw[k] === 'string' ? raw[k].trim() : raw[k];
+        map[k.trim().toLowerCase()] = val;
+        map[k.trim()] = val;
+        const sk = strip(k);
+        if (sk) map[sk] = val;
+      }
+
+      const getVal = (aliases) => {
+        for (const alias of aliases) {
+          if (map[alias] !== undefined && map[alias] !== '') return map[alias];
+          const lower = alias.toLowerCase();
+          if (map[lower] !== undefined && map[lower] !== '') return map[lower];
+          const sk = strip(alias);
+          if (map[sk] !== undefined && map[sk] !== '') return map[sk];
+          for (const mk of Object.keys(map)) {
+            const strippedMk = strip(mk);
+            if (strippedMk && sk && (strippedMk === sk || strippedMk.includes(sk) || sk.includes(strippedMk))) {
+              if (map[mk] !== undefined && map[mk] !== '') return map[mk];
+            }
+          }
+        }
+        return '';
+      };
+
+      let order_id = String(getVal(['order_id', '訂單編號', '訂單id', 'id', '訂單號', '單號', '訂單序號', 'ordersn', 'order_sn'])).trim();
+      let platform = String(getVal(['platform', '來源平台', '平台'])).trim();
+      let customer_name = String(getVal(['customer_name', '收件人', '顧客姓名', '買家', '顧客', '姓名', '買家帳號'])).trim();
+      let shipping_deadline = String(getVal(['最晚出貨期限', 'shipping_deadline', '最晚出貨時間', '出貨期限', 'deadline'])).trim();
+      let order_status = String(getVal(['order_status', '訂單狀態', '狀態', 'status'])).trim();
+      let created_at = String(getVal(['created_at', '下單時間', '下單日期', '建立時間', '日期', '時間'])).trim();
+      let shipping_method = String(getVal(['shipping_method', '物流方式', '物流', '寄送方式'])).trim();
+      let price = Number(getVal(['price', 'totalprice', 'totalamount', 'orderprice', '價格', '售價', '金額', '訂單金額', '總金額', '總價'])) || 0;
+
+      // 多品項訂單向上補齊 (第 2 列以後常留白訂單號或單號相同留白標題)
+      if (lastHeader && (!order_id || order_id === lastHeader.order_id)) {
+        if (!order_id) order_id = lastHeader.order_id;
+        if (!platform) platform = lastHeader.platform;
+        if (!customer_name) customer_name = lastHeader.customer_name;
+        if (!shipping_deadline) shipping_deadline = lastHeader.shipping_deadline;
+        if (!order_status) order_status = lastHeader.order_status;
+        if (!created_at) created_at = lastHeader.created_at;
+        if (!shipping_method) shipping_method = lastHeader.shipping_method;
+        if (!price) price = lastHeader.price;
+      }
+
+      if (!order_id) continue;
+
+      lastHeader = {
+        order_id,
+        platform,
+        customer_name,
+        shipping_deadline,
+        order_status,
+        created_at,
+        shipping_method,
+        price
+      };
+
+      let product_id = String(getVal([
+        'product_id', 'productid', 'product_no', 'productno', 'item_id', 'itemid', 'sku',
+        '商品編號', '商品代碼', '商品id', '商品ID', '商品料號', '商品貨號', '商品條碼',
+        '產品編號', '產品id', '產品料號', '代碼', '料號', '貨號', '條碼', 'SKU', 'PID', '品號'
+      ])).trim();
+
+      // 若未透過表頭找到，嘗試以第 4 欄 (Index 3) 提取
+      if (!product_id) {
+        const rawKeys = Object.keys(raw);
+        if (rawKeys.length >= 4 && raw[rawKeys[3]]) {
+          const possiblePid = String(raw[rawKeys[3]]).trim();
+          if (possiblePid && !possiblePid.includes(' ') && (possiblePid.startsWith('P') || possiblePid.length >= 3)) {
+            product_id = possiblePid;
+          }
+        }
+      }
+
+      let product_name = String(getVal([
+        'product_name', 'productname', 'item_name', 'itemname', 'name', 'title',
+        '商品名稱', '產品名稱', '品名', '名稱', '商品', '產品', '項目名稱'
+      ])).trim();
+
+      let specification = String(getVal([
+        'specification', 'spec', 'variant', '商品規格', '規格', '規格描述', '選項'
+      ])).trim();
+
+      let quantity = Number(getVal(['quantity', 'qty', 'count', '數量', '件數', '個數', '買家購買數量'])) || 1;
+
+      normalized.push({
+        ...raw,
+        order_id,
+        platform,
+        customer_name,
+        shipping_deadline,
+        order_status,
+        created_at,
+        shipping_method,
+        price,
+        product_id,
+        product_name,
+        specification,
+        quantity
+      });
+    }
+
+    return normalized;
+  }
+
+  // 規格化商品資料表欄位
+  function normalizeProducts(rawProds) {
+    if (!Array.isArray(rawProds)) return [];
+    return rawProds.map(p => ({
+      ...p,
+      product_id: String(p.product_id || p['商品編號'] || p['商品ID'] || p.id || '').trim(),
+      name: String(p.name || p.product_name || p['商品名稱'] || p['品名'] || '').trim(),
+      cost_price: Number(p.cost_price ?? p['進價'] ?? p['成本'] ?? p['成本價'] ?? 0),
+      selling_price: Number(p.selling_price ?? p['售價'] ?? p['售價金額'] ?? 0),
+      specification: String(p.specification || p['規格'] || '').trim()
+    }));
+  }
+
+  // 規格化庫存資料表欄位
+  function normalizeStock(rawStock) {
+    if (!Array.isArray(rawStock)) return [];
+    return rawStock.map((s) => {
+      if (!s || typeof s !== 'object') return null;
+      const map = {};
+      for (const k of Object.keys(s)) {
+        const val = typeof s[k] === 'string' ? s[k].trim() : s[k];
+        map[k.trim().toLowerCase()] = val;
+        map[k.trim()] = val;
+        const sk = String(k || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]/g, '');
+        if (sk) map[sk] = val;
+      }
+      const getVal = (aliases) => {
+        for (const alias of aliases) {
+          if (map[alias] !== undefined && map[alias] !== '') return map[alias];
+          const lower = alias.toLowerCase();
+          if (map[lower] !== undefined && map[lower] !== '') return map[lower];
+          const sk = String(alias || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]/g, '');
+          if (map[sk] !== undefined && map[sk] !== '') return map[sk];
+        }
+        return '';
+      };
+      const product_id = String(getVal([
+        'product_id', 'productid', '商品編號', '商品代碼', '商品id', '商品ID', '品號', '料號', '貨號', '代碼', '條碼', 'sku', 'id'
+      ])).trim();
+      const name = String(getVal(['name', 'product_name', '商品名稱', '品名', '名稱', '商品', '產品'])).trim();
+      const stock_id = String(getVal(['stock_id', '庫存id', '庫存編號', 'id'])).trim();
+      const specification = String(getVal(['specification', 'spec', '規格', '商品規格', '選項'])).trim();
+      const quantity = Number(getVal(['quantity', 'qty', '數量', '庫存量', '現有庫存'])) || 0;
+      const expiry_date = String(getVal(['expiry_date', '有效期限', '效期', '到期日'])).trim();
+      const location = String(getVal(['location', '儲位', '位置', '庫位'])).trim();
+      const floor = String(getVal(['floor', '樓層'])).trim();
+      const area = String(getVal(['area', '區域', '區'])).trim();
+      return {
+        ...s,
+        stock_id,
+        product_id,
+        name,
+        specification,
+        quantity,
+        expiry_date,
+        location,
+        floor,
+        area
+      };
+    }).filter(Boolean);
   }
 
   // 選項 A: 智能規格自動提取 (去除促銷字眼、括號、前綴序號，模糊比對)
@@ -288,48 +505,63 @@
   function getOrderAnalysis() {
     const { actualIncome, platformFee } = scrapeFinancials();
     const orderId = String(state.currentOrderId || '').trim();
-    const orders = state.cloudData.onlineOrders || [];
-    const products = state.cloudData.products || [];
-    const stockList = state.cloudData.stock || [];
+    const cleanCurrentOrderId = orderId.replace(/[^0-9a-zA-Z_-]/g, '').toLowerCase();
+
+    const rawOrders = state.cloudData.onlineOrders || [];
+    const orders = normalizeOnlineOrders(rawOrders);
+    const products = normalizeProducts(state.cloudData.products || []);
+    const stockList = normalizeStock(state.cloudData.stock || []);
     const poList = state.cloudData.purchaseOrders || [];
 
-    // 從 onlineOrders 找出該訂單的所有品項 (可能同一訂單分拆多列)
-    const matchingRows = orderId
-      ? orders.filter(
-          (o) => String(o.order_id || '').trim().toLowerCase() === orderId.toLowerCase()
-        )
+    // 從 onlineOrders 找出該訂單的所有品項 (支援完全相符、無前綴相符或純英數相符)
+    const matchingRows = cleanCurrentOrderId
+      ? orders.filter((o) => {
+          const rawOid = String(o.order_id || '').trim();
+          const cleanOid = rawOid.replace(/[^0-9a-zA-Z_-]/g, '').toLowerCase();
+          return (
+            rawOid.toLowerCase() === orderId.toLowerCase() ||
+            cleanOid === cleanCurrentOrderId ||
+            (cleanOid && cleanCurrentOrderId && (cleanOid.endsWith(cleanCurrentOrderId) || cleanCurrentOrderId.endsWith(cleanOid)))
+          );
+        })
       : [];
 
     let totalCost = 0;
     const items = matchingRows.map((row, idx) => {
-      const pid = String(row.product_id || '').trim().toLowerCase();
+      const rawPid = String(row.product_id || '').trim();
+      const pid = rawPid.toLowerCase();
+      const rowName = String(row.product_name || '').trim();
       const spec = String(row.specification || '').trim();
       const qty = Number(row.quantity) || 1;
 
-      // 比對 products 取得商品資料與進價成本 (支援 ID 與 品名 雙向比對)
-      const rowName = String(row.product_name || '').trim().toLowerCase();
+      // 比對 products 取得商品資料與進價成本 (以 product_id 優先比對，其次品名)
       const prod = products.find((p) => {
         const pPid = String(p.product_id || '').trim().toLowerCase();
         const pName = String(p.name || '').trim().toLowerCase();
-        return (pid && pPid === pid) || (rowName && (pName === rowName || pPid === rowName));
+        return (pid && pPid === pid) || (!pid && rowName && (pName === rowName.toLowerCase() || pPid === rowName.toLowerCase()));
       });
-      const resolvedPid = pid || String(prod?.product_id || '').trim().toLowerCase();
-      const resolvedName = rowName || String(prod?.name || '').trim().toLowerCase();
+      const resolvedPid = rawPid || String(prod?.product_id || '').trim();
+      const resolvedName = rowName || String(prod?.name || '').trim() || '未命名商品';
       const costPrice = prod ? Number(prod.cost_price) || 0 : 0;
       const itemTotalCost = costPrice * qty;
       totalCost += itemTotalCost;
 
-      // 取得該商品所有現有庫存項目與現存規格列表 (支援 ID 或 品名 查找)
-      const allProductStocks = stockList.filter(s => {
+      // 取得該商品在 stock 庫存表中的所有項目 (優先以 product_id 精確比對，若無 ID 則以品名比對)
+      const allProductStocks = stockList.filter((s) => {
         const sPid = String(s.product_id || '').trim().toLowerCase();
         const sName = String(s.name || '').trim().toLowerCase();
-        return (resolvedPid && sPid === resolvedPid) || (resolvedName && sName === resolvedName);
+        if (resolvedPid) {
+          return sPid === resolvedPid.toLowerCase();
+        }
+        return resolvedName && sName === resolvedName.toLowerCase();
       });
-      const availableSpecs = [...new Set(allProductStocks.map(s => String(s.specification || '').trim()).filter(Boolean))];
+
+      const isFoundInStock = allProductStocks.length > 0;
+      const availableSpecs = [...new Set(allProductStocks.map((s) => String(s.specification || '').trim()).filter(Boolean))];
 
       // 計算各規格庫存量
       const specStockMap = {};
-      allProductStocks.forEach(s => {
+      allProductStocks.forEach((s) => {
         const sSpec = String(s.specification || '').trim();
         specStockMap[sSpec] = (specStockMap[sSpec] || 0) + (Number(s.quantity) || 0);
       });
@@ -339,17 +571,37 @@
       let isAutoMatched = false;
 
       if (resolvedSpec === undefined) {
-        // 執行選項 A 智能自動提取
-        const autoMatch = smartMatchSpec(spec, availableSpecs);
-        if (autoMatch) {
-          resolvedSpec = autoMatch;
-          isAutoMatched = true;
-        } else {
+        if (!isFoundInStock) {
           resolvedSpec = '';
+        } else if (!spec) {
+          // 訂單未指定規格時：若庫存只有單一規格，自動鎖定
+          if (availableSpecs.length === 1) {
+            resolvedSpec = availableSpecs[0];
+            isAutoMatched = true;
+          } else {
+            resolvedSpec = '';
+          }
+        } else {
+          // 訂單有指定規格：精確/智能比對該規格
+          const autoMatch = smartMatchSpec(spec, availableSpecs);
+          if (autoMatch) {
+            resolvedSpec = autoMatch;
+            isAutoMatched = true;
+          } else {
+            // 訂單規格在此商品的現有庫存中不存在 (缺貨) -> 絕不盲目套用其他規格！
+            resolvedSpec = '';
+            isAutoMatched = false;
+          }
         }
         state.selectedSpecs[itemKey] = resolvedSpec;
-      } else if (resolvedSpec && resolvedSpec !== '__FORCED__' && smartMatchSpec(spec, availableSpecs) === resolvedSpec) {
-        isAutoMatched = true;
+      } else if (resolvedSpec && resolvedSpec !== '__FORCED__') {
+        if (spec) {
+          if (smartMatchSpec(spec, [resolvedSpec])) {
+            isAutoMatched = true;
+          }
+        } else if (availableSpecs.length === 1 && resolvedSpec === availableSpecs[0]) {
+          isAutoMatched = true;
+        }
       }
 
       // 依解析後 (或手動指定) 的規格篩選庫存
@@ -358,7 +610,6 @@
         if (resolvedSpec) {
           return String(s.specification || '').trim().toLowerCase() === resolvedSpec.toLowerCase();
         }
-        // 若完全沒對應到也沒選，且原單有規格，嚴格比對原規格
         if (spec) {
           return String(s.specification || '').trim().toLowerCase() === spec.toLowerCase();
         }
@@ -376,8 +627,10 @@
         const matchingPoItems = poItems.filter((pItem) => {
           const pPid = String(pItem.product_id || '').trim().toLowerCase();
           const pName = String(pItem.name || pItem.product_name || pItem['商品名稱'] || '').trim().toLowerCase();
-          const matchId = resolvedPid && pPid && (pPid === resolvedPid || pPid === resolvedName);
-          const matchName = resolvedName && pName && (pName === resolvedName || pName === resolvedPid);
+          const cleanResPid = resolvedPid ? resolvedPid.toLowerCase() : '';
+          const cleanResName = resolvedName ? resolvedName.toLowerCase() : '';
+          const matchId = cleanResPid && pPid && (pPid === cleanResPid || pPid === cleanResName);
+          const matchName = cleanResName && pName && (pName === cleanResName || pName === cleanResPid);
           return matchId || matchName;
         });
 
@@ -407,11 +660,12 @@
 
       return {
         idx,
-        product_id: row.product_id || '',
-        name: row.product_name || prod?.name || '未命名商品',
+        product_id: resolvedPid,
+        name: resolvedName,
         specification: spec,
         resolvedSpec,
         isAutoMatched,
+        isFoundInStock,
         availableSpecs,
         specStockMap,
         quantity: qty,
@@ -623,31 +877,74 @@
       return;
     }
 
-    // 檢查是否有未建檔或庫存不足之商品，提醒確認
-    const shortageItems = analysis.items.filter((i) => i.existingStock < i.quantity);
-    if (shortageItems.length > 0) {
+    if (!analysis.items || analysis.items.length === 0) {
+      alert('⚠️ 試算表「網路訂單」中目前查無此訂單品項！\n\n請確認單號是否完全相符，或點右上角 🔄 重新同步試算表後再出貨。');
+      return;
+    }
+
+    // 檢查是否有未在 stock 庫存表建檔且無在途採購之商品
+    const unrecordedItems = analysis.items.filter((i) => !i.isFoundInStock && i.inTransitPO <= 0);
+    const inTransitPendingItems = analysis.items.filter((i) => i.existingStock < i.quantity && i.inTransitPO > 0);
+    const regularShortageItems = analysis.items.filter((i) => i.isFoundInStock && i.existingStock < i.quantity && i.inTransitPO <= 0);
+
+    if (unrecordedItems.length > 0) {
+      const namesList = unrecordedItems.map((i) => `• [${i.product_id || '無編號'}] ${i.name}`).join('\n');
+      const confirmUnrecorded = confirm(
+        `⚠️ 警告提示：此訂單包含 ${unrecordedItems.length} 項【未在庫存表 (stock) 建檔且無在途採購】的商品：\n\n${namesList}\n\n出貨將無法扣除該項目的真實庫存！是否確認要【強行出貨】？\n（系統將自動標記為缺貨出貨並從試算表扣除與刪除網路訂單）`
+      );
+      if (!confirmUnrecorded) return;
+    } else if (inTransitPendingItems.length > 0) {
+      const namesList = inTransitPendingItems.map((i) => `• [${i.product_id || '無編號'}] ${i.name} (現存 ${i.existingStock} 件，在途 +${i.inTransitPO} 件)`).join('\n');
+      const confirmInTransit = confirm(
+        `🚚 提示：此訂單包含 ${inTransitPendingItems.length} 項【採購在途 (尚未到貨入庫)】的商品：\n\n${namesList}\n\n商品尚未到貨入庫，是否確認要【強行出貨】？\n（系統將標記為缺貨出貨並從試算表刪除網路訂單）`
+      );
+      if (!confirmInTransit) return;
+    } else if (regularShortageItems.length > 0) {
       const confirmForced = confirm(
-        `⚠️ 警告：此訂單包含 ${shortageItems.length} 項缺貨/未在系統建檔之商品！\n是否確認要【強行出貨】？\n（系統將自動標記為缺貨出貨並從試算表扣除與刪除網路訂單）`
+        `⚠️ 警告：此訂單包含 ${regularShortageItems.length} 項缺貨之商品！\n是否確認要【強行出貨】？\n（系統將自動標記為缺貨出貨並從試算表扣除與刪除網路訂單）`
       );
       if (!confirmForced) return;
     }
 
     state.isShipping = true;
+    state.shippingStatusText = '⚡ 秒級出貨中 (扣庫存與結案)...';
     render();
 
     try {
-      // 步驟 1: 即時先向 GAS 取得最新 stock 與 products，保證以雲端最新批次為準
-      const freshRes = await new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: 'FETCH_CLOUD_DATA', gasUrl: state.gasUrl }, resolve);
-      });
+      // 步驟 1: 極速秒級出貨方案 (直接使用記憶體中已核對呈現之 stock 與 products，杜絕出貨前再次發送 4 個 GET 請求)
+      const currentProducts = state.cloudData.products || [];
+      const currentStock = state.cloudData.stock || [];
+      const currentOrders = state.cloudData.onlineOrders || [];
 
-      const currentProducts = freshRes?.data?.products || state.cloudData.products || [];
-      const currentStock = freshRes?.data?.stock || state.cloudData.stock || [];
+      // 冪等性防護：若本地紀錄中已結案，直接標記為出貨完成
+      const cleanCurrentOrderId = orderId.replace(/[^0-9a-zA-Z_-]/g, '').toLowerCase();
+      if (state.shippedOrders[orderId]) {
+        state.shippingSuccess = true;
+        state.isShipping = false;
+        state.shippingStatusText = '';
+        render();
+        alert(`✅ 本地紀錄確認此訂單已完成出貨與銷帳！`);
+        return;
+      }
+
       const cleanOrderId = orderId.replace(/[^a-zA-Z0-9_-]/g, '_');
       const orderTxId = `TX_ORD_${cleanOrderId}`;
-      const nowStr = new Date().toISOString().slice(0, 10).replace(/-/g, '/');
 
-      // 步驟 2: 依序為每項商品進行 FIFO 批次扣減
+      // 格式化日期時間：yyyy/M/d  HH:mm:ss (24H制，雙空格)
+      const formatAppDateTime = (d = new Date()) => {
+        const y = d.getFullYear();
+        const m = d.getMonth() + 1;
+        const day = d.getDate();
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const ss = String(d.getSeconds()).padStart(2, '0');
+        return `${y}/${m}/${day}  ${hh}:${mm}:${ss}`;
+      };
+      const nowStr = formatAppDateTime(new Date());
+
+      // 步驟 2: 一次性計算打包所有品項的扣庫存項目
+      const batchItems = [];
+
       for (let itemIdx = 0; itemIdx < analysis.items.length; itemIdx++) {
         const item = analysis.items[itemIdx];
         let remainingNeeded = Number(item.quantity) || 1;
@@ -657,7 +954,9 @@
 
         // 篩選出該商品所有庫存批次，並依效期排序 (FIFO: 效期早者優先出貨)
         const productStock = (targetSpecToDeduct === '__FORCED__') ? [] : currentStock.filter((s) => {
-          const pidMatch = String(s.product_id || '').trim().toLowerCase() === targetPid;
+          const sPid = String(s.product_id || '').trim().toLowerCase();
+          const sName = String(s.name || '').trim().toLowerCase();
+          const pidMatch = targetPid ? sPid === targetPid : (item.name && sName === item.name.toLowerCase());
           if (!pidMatch) return false;
           if (targetSpecToDeduct && s.specification) {
             return String(s.specification).trim().toLowerCase() === targetSpecToDeduct.toLowerCase();
@@ -671,11 +970,15 @@
           return a.expiry_date.localeCompare(b.expiry_date);
         });
 
-        const p = currentProducts.find((prod) => String(prod.product_id || '').trim().toLowerCase() === targetPid);
+        const p = currentProducts.find((prod) => {
+          const pPid = String(prod.product_id || '').trim().toLowerCase();
+          const pName = String(prod.name || '').trim().toLowerCase();
+          return (targetPid && pPid === targetPid) || (item.name && pName === item.name.toLowerCase());
+        });
         const itemCostPrice = p ? Number(p.cost_price) || 0 : item.costPrice || 0;
         let deductIdx = 0;
 
-        // 依批次扣除現有庫存
+        // 依批次加入待扣除清單
         if (sortedStock.length > 0) {
           for (const entry of sortedStock) {
             if (remainingNeeded <= 0) break;
@@ -688,35 +991,26 @@
               ? ` | 規格對應: [${itemSpec || '無'}]->[${targetSpecToDeduct}]`
               : '';
 
-            await new Promise((resolve, reject) => {
-              chrome.runtime.sendMessage(
-                {
-                  type: 'EXECUTE_STOCK_OUT',
-                  gasUrl: state.gasUrl,
-                  payload: {
-                    id: rowUniqueId,
-                    transaction_id: orderTxId,
-                    online_order_id: orderId,
-                    platform: platformLabel,
-                    type: `stock_out ${platformLabel}`,
-                    stock_id: entry.stock_id,
-                    product_id: item.product_id || p?.product_id || '',
-                    product_name: item.name || p?.name || '',
-                    name: item.name || p?.name || '',
-                    cost_price: itemCostPrice,
-                    price: 0,
-                    quantity: deductQty,
-                    location: entry.location || '',
-                    floor: entry.floor || '',
-                    area: entry.area || '',
-                    expiry_date: entry.expiry_date,
-                    specification: targetSpecToDeduct !== '__FORCED__' ? (targetSpecToDeduct || entry.specification || item.specification || '') : (item.specification || ''),
-                    date: nowStr,
-                    note: `網路訂單出貨 | 訂單號: ${orderId}${noteSpecText} | 平台: ${platformLabel}`
-                  }
-                },
-                (res) => (res && res.success ? resolve(res) : reject(new Error(res?.error || '扣除庫存失敗')))
-              );
+            batchItems.push({
+              id: rowUniqueId,
+              transaction_id: orderTxId,
+              online_order_id: orderId,
+              platform: platformLabel,
+              type: `stock_out ${platformLabel}`,
+              stock_id: entry.stock_id,
+              product_id: item.product_id || p?.product_id || entry.product_id || '',
+              product_name: item.name || p?.name || entry.name || '',
+              name: item.name || p?.name || entry.name || '',
+              cost_price: itemCostPrice,
+              price: 0,
+              quantity: deductQty,
+              location: entry.location || '',
+              floor: entry.floor || '',
+              area: entry.area || '',
+              expiry_date: entry.expiry_date,
+              specification: targetSpecToDeduct !== '__FORCED__' ? (targetSpecToDeduct || entry.specification || item.specification || '') : (item.specification || ''),
+              date: nowStr,
+              note: `網路訂單出貨 | 訂單號: ${orderId}${noteSpecText} | 平台: ${platformLabel}`
             });
 
             remainingNeeded -= deductQty;
@@ -727,60 +1021,102 @@
         // 若庫存不足或非系統商品，強行出貨剩餘件數 (註記缺貨)
         if (remainingNeeded > 0) {
           const rowUniqueId = `${orderTxId}_${itemIdx}_forced_${deductIdx}_${Math.random().toString(36).substring(2, 6)}`;
-          await new Promise((resolve, reject) => {
-            chrome.runtime.sendMessage(
-              {
-                type: 'EXECUTE_STOCK_OUT',
-                gasUrl: state.gasUrl,
-                payload: {
-                  id: rowUniqueId,
-                  transaction_id: orderTxId,
-                  online_order_id: orderId,
-                  platform: platformLabel,
-                  type: `stock_out ${platformLabel}`,
-                  product_id: item.product_id || p?.product_id || '',
-                  product_name: item.name || p?.name || '',
-                  name: item.name || p?.name || '',
-                  cost_price: itemCostPrice,
-                  price: 0,
-                  quantity: remainingNeeded,
-                  location: '',
-                  floor: '',
-                  area: '',
-                  specification: item.specification || '',
-                  date: nowStr,
-                  note: `[強行出貨-缺貨紀錄] 網路訂單出貨 | 訂單號: ${orderId} | 平台: ${platformLabel}`
-                }
-              },
-              (res) => (res && res.success ? resolve(res) : reject(new Error(res?.error || '強行出貨紀錄失敗')))
-            );
+          batchItems.push({
+            id: rowUniqueId,
+            transaction_id: orderTxId,
+            online_order_id: orderId,
+            platform: platformLabel,
+            type: `stock_out ${platformLabel}`,
+            product_id: item.product_id || p?.product_id || '',
+            product_name: item.name || p?.name || '',
+            name: item.name || p?.name || '',
+            cost_price: itemCostPrice,
+            price: 0,
+            quantity: remainingNeeded,
+            location: '',
+            floor: '',
+            area: '',
+            specification: item.specification || '',
+            date: nowStr,
+            note: `[強行出貨-缺貨紀錄] 網路訂單出貨 | 訂單號: ${orderId} | 平台: ${platformLabel}`
           });
         }
       }
 
-      // 步驟 3: 呼叫 GAS 刪除網路訂單工作表對應記錄
+      // 步驟 3: 單一 HTTP POST 請求執行雲端批次出貨 (扣庫存 + 寫交易明細 + 刪除網路訂單)
+      state.shippingStatusText = '🚀 雲端單一請求批次銷帳中...';
+      render();
+
       await new Promise((resolve, reject) => {
         chrome.runtime.sendMessage(
           {
-            type: 'DELETE_ONLINE_ORDER',
+            type: 'EXECUTE_BATCH_SHIPMENT',
             gasUrl: state.gasUrl,
-            orderId: orderId
+            payload: {
+              order_id: orderId,
+              platform: platformLabel,
+              items: batchItems
+            }
           },
-          (res) => (res && res.success ? resolve(res) : reject(new Error(res?.error || '刪除網路訂單失敗')))
+          (res) => (res && res.success ? resolve(res) : reject(new Error(res?.error || '批次出貨失敗')))
         );
       });
 
-      // 記錄到本地已出貨清單
-      state.shippedOrders[orderId] = new Date().toISOString();
-      chrome.storage.local.set({ shippedOrders: state.shippedOrders });
+      // 步驟 4: 極速樂觀更新（秒級體感核心）
+      // A. 本地庫存即時扣除對應數量，使用者無需等待試算表重新讀取
+      if (Array.isArray(state.cloudData.stock)) {
+        for (const bItm of batchItems) {
+          const qtyToDeduct = Number(bItm.quantity) || 0;
+          if (qtyToDeduct <= 0) continue;
+          if (bItm.stock_id) {
+            const stockRow = state.cloudData.stock.find((s) => s.stock_id === bItm.stock_id);
+            if (stockRow) {
+              stockRow.quantity = Math.max(0, (Number(stockRow.quantity) || 0) - qtyToDeduct);
+            }
+          } else if (bItm.product_id) {
+            const stockRow = state.cloudData.stock.find(
+              (s) => String(s.product_id || '').trim().toLowerCase() === String(bItm.product_id || '').trim().toLowerCase()
+            );
+            if (stockRow) {
+              stockRow.quantity = Math.max(0, (Number(stockRow.quantity) || 0) - qtyToDeduct);
+            }
+          }
+        }
+        // 清理數量已歸零的庫存記錄
+        state.cloudData.stock = state.cloudData.stock.filter((s) => (Number(s.quantity) || 0) > 0);
+      }
 
+      // B. 從記憶體中的 onlineOrders 立即移除該訂單
+      state.cloudData.onlineOrders = state.cloudData.onlineOrders.filter((o) => {
+        const oId = String(o.order_id || o['訂單編號'] || '').trim().replace(/[^0-9a-zA-Z_-]/g, '').toLowerCase();
+        return oId !== cleanCurrentOrderId;
+      });
+
+      // C. 寫入本地已出貨紀錄與儲存快取
+      state.shippedOrders[orderId] = new Date().toISOString();
+      chrome.storage.local.set({
+        shippedOrders: state.shippedOrders,
+        cachedCloudData: state.cloudData
+      });
+
+      // D. 立即切換為出貨成功，耗時僅需 2~3 秒！
       state.shippingSuccess = true;
-      // 再次背景刷新雲端資料
-      silentRefreshCloudData();
+      state.isShipping = false;
+      state.shippingStatusText = '';
+      render();
+
+      // E. 背景延遲靜默同步 (10 秒後在背景溫和更新，避免阻塞下一筆出貨)
+      setTimeout(() => {
+        if (!state.isShipping) {
+          silentRefreshCloudData(false);
+        }
+      }, 10000);
     } catch (err) {
-      alert(`❌ 出貨失敗: ${err.message}`);
+      alert(`❌ 出貨失敗: ${err.message}\n\n系統將自動重新同步試算表最新狀態。`);
+      silentRefreshCloudData();
     } finally {
       state.isShipping = false;
+      state.shippingStatusText = '';
       render();
     }
   }
@@ -791,6 +1127,8 @@
     delete state.shippedOrders[orderId];
     chrome.storage.local.set({ shippedOrders: state.shippedOrders });
     state.shippingSuccess = false;
+    // 立即向試算表重新抓取最新資料（以恢復被本地樂觀更新移出的品項）
+    silentRefreshCloudData();
     render();
   }
 
@@ -864,6 +1202,21 @@
             </div>
 
             <button id="btn-save-selectors" class="btn-primary" style="width: 100%; margin-top: 6px;">💾 儲存此平台選取器</button>
+          </div>
+
+          <!-- 浮動按鈕位置設定 -->
+          <div class="settings-card">
+            <div class="settings-title">📍 浮動展開按鈕位置 (防止遮擋網頁重要按鈕)</div>
+            <div style="font-size: 11px; color: #94a3b8; margin-bottom: 8px;">
+              提示：您也可以在網頁上直接<b>「按住浮動按鈕 ⠿ 上下拖曳」</b>至任意高度（或拖到左側邊緣）。
+            </div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              <button class="btn-pos-preset" data-pos="top-right">靠右上 (20%)</button>
+              <button class="btn-pos-preset" data-pos="mid-right">靠右中 (38%)</button>
+              <button class="btn-pos-preset" data-pos="bottom-right">靠右下 (70%)</button>
+              <button class="btn-pos-preset" data-pos="mid-left">靠左中 (38%)</button>
+              <button class="btn-pos-preset" data-pos="reset">🔄 恢復預設</button>
+            </div>
           </div>
 
           <div style="text-align: center;">
@@ -958,18 +1311,28 @@
                     // 庫存健康度燈號
                     let badgeClass = 'green';
                     let badgeText = `🟢 現貨充足 (${item.existingStock}件)`;
-                    if (item.existingStock < item.quantity) {
-                      const shortfall = item.quantity - item.existingStock;
+
+                    if (item.existingStock >= item.quantity) {
+                      badgeClass = 'green';
+                      badgeText = `🟢 現貨充足 (${item.existingStock}件)`;
+                    } else if (item.inTransitPO > 0) {
                       if (item.existingStock + item.inTransitPO >= item.quantity) {
                         badgeClass = 'yellow';
-                        badgeText = `🟡 現貨不足 (在途採購已補齊)`;
-                      } else if (item.inTransitPO > 0) {
-                        badgeClass = 'red';
-                        badgeText = `🔴 缺貨 ${shortfall} 件 (在途僅 ${item.inTransitPO} 件仍不足)`;
+                        badgeText = item.existingStock > 0
+                          ? `🟡 現貨不足 (在途採購 +${item.inTransitPO} 件已補齊)`
+                          : `🟡 現貨 0 件 (在途採購 +${item.inTransitPO} 件已補齊)`;
                       } else {
+                        const shortfall = item.quantity - item.existingStock - item.inTransitPO;
                         badgeClass = 'red';
-                        badgeText = `🔴 缺貨預警 (現存 ${item.existingStock} 件，無在途採購)`;
+                        badgeText = `🔴 缺貨 ${shortfall} 件 (在途僅 +${item.inTransitPO} 件仍不足)`;
                       }
+                    } else if (!item.isFoundInStock) {
+                      badgeClass = 'red';
+                      badgeText = `🔴 未在庫存表建檔 (現存 0件)`;
+                    } else {
+                      const shortfall = item.quantity - item.existingStock;
+                      badgeClass = 'red';
+                      badgeText = `🔴 缺貨預警 (現存 ${item.existingStock} 件，無在途採購)`;
                     }
 
                     return `
@@ -978,6 +1341,7 @@
                           <input type="checkbox" class="item-checkbox" data-check-key="${checkKey}" ${isChecked ? 'checked' : ''} />
                           <div class="item-details">
                             <div class="item-name">${escapeHtml(item.name)}</div>
+                            ${item.product_id ? `<div style="font-size: 11px; color: #38bdf8; font-family: monospace; font-weight: 600; margin-top: 1px;">編號: #${escapeHtml(item.product_id)}</div>` : ''}
                             ${item.specification ? `<div class="item-spec">賣場訂單規格: <span class="spec-highlight">${escapeHtml(item.specification)}</span></div>` : ''}
                             <div style="font-size: 11px; margin-top: 4px; display: flex; justify-content: space-between;">
                               <span>需求數量: <span class="item-qty-tag">${item.quantity} 件</span></span>
@@ -986,26 +1350,43 @@
                           </div>
                         </div>
 
-                        <!-- 選項 A: 規格對齊與下拉選單 -->
-                        <div class="spec-match-container">
-                          <div class="spec-match-label-row">
-                            <span class="spec-match-label">🎯 扣減庫存規格：</span>
-                            ${
-                              item.isAutoMatched
-                                ? `<span class="spec-match-badge auto">⚡ 自動對齊</span>`
-                                : item.resolvedSpec && item.resolvedSpec !== '__FORCED__'
-                                ? `<span class="spec-match-badge manual">✍️ 手動指定</span>`
-                                : item.resolvedSpec === '__FORCED__'
-                                ? `<span class="spec-match-badge forced">⚠️ 缺貨強出</span>`
-                                : `<span class="spec-match-badge warn">⚠️ 規格未對齊</span>`
-                            }
-                          </div>
-                          ${
-                            item.availableSpecs.length > 0
-                              ? `<select class="spec-select" data-spec-key="${checkKey}">
+                        ${
+                          item.inTransitPO > 0 && item.existingStock < item.quantity
+                            ? `<div style="font-size: 11px; color: #38bdf8; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 6px; padding: 6px 8px; margin-top: 6px; line-height: 1.4;">
+                                 🚚 <strong>採購在途補貨中</strong>：已有採購單待入庫 <strong>+${item.inTransitPO} 件</strong>（現存 ${item.existingStock} 件，待到貨入庫後即可出貨）
+                               </div>`
+                            : !item.isFoundInStock
+                            ? `<div style="font-size: 11px; color: #f87171; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 6px; padding: 6px 8px; margin-top: 6px; line-height: 1.4;">
+                                 ⚠️ stock 庫存現存 0 件且無在途採購，請先建立採購單或至庫存表建檔
+                               </div>`
+                            : (item.isAutoMatched && item.resolvedSpec)
+                            ? `<div class="spec-match-container" style="background: rgba(15, 23, 42, 0.4); border-color: rgba(56, 189, 248, 0.2); margin-top: 6px;">
+                                 <div class="spec-match-label-row">
+                                   <span class="spec-match-label">🎯 扣減庫存：</span>
+                                   <span class="spec-match-badge auto">⚡ 自動鎖定現貨</span>
+                                 </div>
+                                 <div style="font-size: 11px; color: #94a3b8; margin-top: 3px;">
+                                   規格：<span style="color: #38bdf8; font-weight: 600;">${escapeHtml(item.resolvedSpec)}</span> (現存: ${item.existingStock} 件)
+                                 </div>
+                               </div>`
+                            : `<!-- 規格選擇與缺貨下拉選單 -->
+                               <div class="spec-match-container">
+                                 <div class="spec-match-label-row">
+                                   <span class="spec-match-label">🎯 扣減庫存規格：</span>
+                                   ${
+                                     item.resolvedSpec && item.resolvedSpec !== '__FORCED__'
+                                       ? `<span class="spec-match-badge manual">✍️ 手動指定</span>`
+                                       : item.resolvedSpec === '__FORCED__'
+                                       ? `<span class="spec-match-badge forced">⚠️ 缺貨強出</span>`
+                                       : item.specification
+                                       ? `<span class="spec-match-badge warn">⚠️ [${escapeHtml(item.specification)}] 缺貨中</span>`
+                                       : `<span class="spec-match-badge warn">⚠️ 請選擇規格</span>`
+                                   }
+                                 </div>
+                                 <select class="spec-select" data-spec-key="${checkKey}">
                                    ${
                                      !item.resolvedSpec
-                                       ? `<option value="" selected>-- ⚠️ 請點選要扣減的庫存規格 --</option>`
+                                       ? `<option value="" selected>-- ⚠️ 訂單規格 ${item.specification ? `[${escapeHtml(item.specification)}] 缺貨中 (0件)` : '請點選要扣減的庫存規格'} --</option>`
                                        : ''
                                    }
                                    ${item.availableSpecs
@@ -1015,11 +1396,10 @@
                                        return `<option value="${escapeHtml(s)}" ${isSel ? 'selected' : ''}>${escapeHtml(s)} (現存: ${sQty}件)</option>`;
                                      })
                                      .join('')}
-                                   <option value="__FORCED__" ${item.resolvedSpec === '__FORCED__' ? 'selected' : ''}>⚠️ 強行出貨 (不扣此規格庫存)</option>
-                                 </select>`
-                              : `<div style="font-size: 11px; color: #f87171; padding: 2px 0;">⚠️ 系統庫存中無此商品規格記錄 (將標記為缺貨出貨)</div>`
-                          }
-                        </div>
+                                   <option value="__FORCED__" ${item.resolvedSpec === '__FORCED__' ? 'selected' : ''}>⚠️ 強行出貨 (不扣規格庫存)</option>
+                                 </select>
+                               </div>`
+                        }
 
                         <div class="stock-status-bar">
                           <span class="status-badge ${badgeClass}">${badgeText}</span>
@@ -1053,16 +1433,23 @@
       } else {
         footerHtml = `
           <button id="btn-do-ship" class="btn-ship" ${state.isShipping || !analysis.orderId || analysis.items.length === 0 ? 'disabled' : ''}>
-            ${state.isShipping ? '<div class="spinner"></div> 出貨處理中，扣除庫存...' : '🚀 執行出貨 (同步扣庫存與刪除訂單)'}
+            ${state.isShipping ? `<div class="spinner"></div> ${escapeHtml(state.shippingStatusText || '出貨處理中，扣除庫存...')}` : '🚀 執行出貨 (同步扣庫存與刪除訂單)'}
           </button>
         `;
       }
     }
 
     // 組裝整體 Drawer 面板
+    const isDockLeft = state.togglePos.side === 'left';
+    const topStyle = state.togglePos.isPercent ? `${state.togglePos.top}%` : `${state.togglePos.top}px`;
+
     container.innerHTML = `
-      <!-- 浮動展開按鈕 (右邊緣) -->
-      <div class="drawer-toggle-btn" id="btn-drawer-toggle" style="display: ${state.isOpen ? 'none' : 'flex'};">
+      <!-- 浮動展開按鈕 (支援自由拖曳上下位置與左右側停靠，防止遮擋網頁重要按鈕) -->
+      <div class="drawer-toggle-btn ${isDockLeft ? 'dock-left' : 'dock-right'}" 
+           id="btn-drawer-toggle" 
+           title="📦 點擊展開助手（按住 ⠿ 可上下自由拖曳更換位置）"
+           style="display: ${state.isOpen ? 'none' : 'flex'}; top: ${topStyle};">
+        <div class="drawer-drag-grip" title="按住可上下拖曳調整位置">⠿</div>
         <span>📦</span>
         <span>出貨</span>
         <span>利潤</span>
@@ -1124,15 +1511,81 @@
       });
     }
 
-    // 展開/收合
+    // 展開/拖曳按鈕處理 (支援自由上下拖曳位置與左右停靠，防止誤觸面板)
     const toggleBtn = shadow.getElementById('btn-drawer-toggle');
     if (toggleBtn) {
-      toggleBtn.addEventListener('click', () => {
-        state.isOpen = true;
-        chrome.storage.local.set({ isOpen: true });
-        detectOrderId();
-        render();
-      });
+      let isPointerDown = false;
+      let hasDragged = false;
+      let startY = 0;
+      let startTopPx = 0;
+
+      const handlePointerDown = (e) => {
+        if (e.button !== undefined && e.button !== 0) return;
+        isPointerDown = true;
+        hasDragged = false;
+        startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+        const rect = toggleBtn.getBoundingClientRect();
+        startTopPx = rect.top;
+
+        const handlePointerMove = (moveEvt) => {
+          if (!isPointerDown) return;
+          const currentY = moveEvt.clientY || (moveEvt.touches && moveEvt.touches[0].clientY) || startY;
+          const currentX = moveEvt.clientX || (moveEvt.touches && moveEvt.touches[0].clientX) || 0;
+          const deltaY = currentY - startY;
+
+          if (Math.abs(deltaY) > 5) {
+            hasDragged = true;
+            toggleBtn.classList.add('is-dragging');
+          }
+
+          if (hasDragged) {
+            const btnHeight = toggleBtn.offsetHeight || 90;
+            const maxTop = window.innerHeight - btnHeight - 10;
+            const clampedTop = Math.max(10, Math.min(startTopPx + deltaY, maxTop));
+
+            // 判斷是否拖曳換邊 (靠左或靠右)
+            const side = currentX < (window.innerWidth / 2) ? 'left' : 'right';
+            if (side !== state.togglePos.side) {
+              state.togglePos.side = side;
+              toggleBtn.classList.toggle('dock-left', side === 'left');
+              toggleBtn.classList.toggle('dock-right', side === 'right');
+            }
+
+            toggleBtn.style.top = `${clampedTop}px`;
+            state.togglePos.top = clampedTop;
+            state.togglePos.isPercent = false;
+          }
+        };
+
+        const handlePointerUp = () => {
+          if (!isPointerDown) return;
+          isPointerDown = false;
+          toggleBtn.classList.remove('is-dragging');
+          window.removeEventListener('mousemove', handlePointerMove);
+          window.removeEventListener('mouseup', handlePointerUp);
+          window.removeEventListener('touchmove', handlePointerMove);
+          window.removeEventListener('touchend', handlePointerUp);
+
+          if (hasDragged) {
+            // 拖曳結束：儲存使用者設定的新位置
+            chrome.storage.local.set({ togglePos: state.togglePos });
+          } else {
+            // 純點擊：開啟面板
+            state.isOpen = true;
+            chrome.storage.local.set({ isOpen: true });
+            detectOrderId();
+            render();
+          }
+        };
+
+        window.addEventListener('mousemove', handlePointerMove, { passive: true });
+        window.addEventListener('mouseup', handlePointerUp, { passive: true });
+        window.addEventListener('touchmove', handlePointerMove, { passive: true });
+        window.addEventListener('touchend', handlePointerUp, { passive: true });
+      };
+
+      toggleBtn.addEventListener('mousedown', handlePointerDown);
+      toggleBtn.addEventListener('touchstart', handlePointerDown, { passive: true });
     }
 
     const closeBtn = shadow.getElementById('btn-close-drawer');
@@ -1310,6 +1763,26 @@
       btn.addEventListener('click', (e) => {
         const targetField = e.currentTarget.getAttribute('data-pick');
         startElementPicker(targetField);
+      });
+    });
+
+    // 設定頁：浮動按鈕快速位置切換
+    shadow.querySelectorAll('.btn-pos-preset').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const pos = e.currentTarget.getAttribute('data-pos');
+        if (pos === 'top-right') {
+          state.togglePos = { top: 20, isPercent: true, side: 'right' };
+        } else if (pos === 'mid-right') {
+          state.togglePos = { top: 38, isPercent: true, side: 'right' };
+        } else if (pos === 'bottom-right') {
+          state.togglePos = { top: 70, isPercent: true, side: 'right' };
+        } else if (pos === 'mid-left') {
+          state.togglePos = { top: 38, isPercent: true, side: 'left' };
+        } else if (pos === 'reset') {
+          state.togglePos = { top: 38, isPercent: true, side: 'right' };
+        }
+        chrome.storage.local.set({ togglePos: state.togglePos });
+        render();
       });
     });
   }

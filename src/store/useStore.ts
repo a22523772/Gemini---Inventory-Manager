@@ -122,16 +122,16 @@ export const formatTxDate = (dateVal?: any): string => {
   const d = parseToDate(dateVal);
   if (!d) return rawStr;
 
-  return format(d, 'yyyy-MM-dd HH:mm:ss');
+  return format(d, 'yyyy/M/d  HH:mm:ss');
 };
 
-export const getDominantDateSeparator = (_transactions?: Transaction[]): '-' => {
-  return '-';
+export const getDominantDateSeparator = (_transactions?: Transaction[]): '/' => {
+  return '/';
 };
 
 export const formatConsistentTxDate = (dateVal?: any, _preferredSeparator?: any): string => {
   const d = parseToDate(dateVal) || new Date();
-  return format(d, 'yyyy-MM-dd HH:mm:ss');
+  return format(d, 'yyyy/M/d  HH:mm:ss');
 };
 
 export type ProductAvailabilityStatus = 'normal' | 'out_of_stock' | 'discontinued';
@@ -408,13 +408,24 @@ const normalizeAndFillOnlineOrders = (rawItems: any[], _products?: Product[], _s
 
     let product_id = String(getVal([
       'product_id', 'productid', 'productcode', 'sku', 'itemid', 'itemcode', 'barcode',
-      '商品id', '商品ID', '商品編號', '商品料號', '商品貨號', '商品條碼', '商品代碼',
-      '產品編號', '產品id', '產品ID', '產品料號', '代碼', '料號', '貨號', '條碼', 'SKU', 'SKU編號', '主商品貨號', '規格貨號'
+      '商品id', '商品ID', '商品編號', '商品料號', '商品貨號', '商品條碼', '商品代碼', '品號',
+      '產品編號', '產品id', '產品ID', '產品料號', '代碼', '料號', '貨號', '條碼', 'SKU', 'SKU編號', '主商品貨號', '規格貨號', 'PID'
     ])).trim();
+
+    // 若未透過表頭找到，嘗試以第 4 欄 (Index 3) 提取
+    if (!product_id) {
+      const rawKeys = Object.keys(rawItem);
+      if (rawKeys.length >= 4 && rawItem[rawKeys[3]]) {
+        const possiblePid = String(rawItem[rawKeys[3]]).trim();
+        if (possiblePid && !possiblePid.includes(' ') && (possiblePid.startsWith('P') || possiblePid.length >= 3)) {
+          product_id = possiblePid;
+        }
+      }
+    }
 
     let product_name = String(getVal([
       'product_name', 'productname', 'itemname', 'name', 'title',
-      '商品名稱', '產品名稱', '品名', '名稱', '商品', '產品'
+      '商品名稱', '產品名稱', '品名', '名稱', '商品', '產品', '項目名稱'
     ])).trim();
 
     const quantity = Number(getVal(['quantity', 'qty', 'count', '數量', '件數', '個數', '買家購買數量'])) || 1;
@@ -2148,12 +2159,16 @@ export const useStore = create<AppState>((set, get) => ({
     const { gasApiUrl } = get();
     if (!gasApiUrl || !gasApiUrl.trim() || !gasApiUrl.trim().startsWith('http')) return;
 
-    const cleanUrl = gasApiUrl.trim();
+    const cleanUrl = gasApiUrl.trim().replace(/\/+$/, '');
+    const buildUrl = (action: string) => {
+      const sep = cleanUrl.includes('?') ? '&' : '?';
+      return `${cleanUrl}${sep}action=${action}`;
+    };
 
     set({ isLoading: true });
     try {
       // Products
-      const rP = await fetch(`${cleanUrl}?action=getProducts`);
+      const rP = await fetch(buildUrl('getProducts'));
       if (rP.ok) {
         const dP = await rP.json();
         
@@ -2403,7 +2418,7 @@ export const useStore = create<AppState>((set, get) => ({
           if (cleanDate) {
             const parsed = parseToDate(cleanDate);
             if (parsed) {
-              cleanDate = format(parsed, 'yyyy-MM-dd HH:mm:ss');
+              cleanDate = format(parsed, 'yyyy/M/d  HH:mm:ss');
             }
           }
 

@@ -14,33 +14,86 @@
   box-sizing: border-box;
 }
 
-/* 浮動展開標籤 (固定在右側) */
+/* 浮動展開標籤 (支援自由拖曳上下位置與左右側停靠) */
 .drawer-toggle-btn {
   position: fixed;
-  right: 0;
-  top: 40%;
-  transform: translateY(-50%);
   background: linear-gradient(135deg, #2563eb, #1d4ed8);
   color: #ffffff;
-  padding: 12px 10px 12px 14px;
-  border-radius: 12px 0 0 12px;
-  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.25);
+  padding: 8px 10px 12px 10px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   font-weight: 600;
   font-size: 12px;
   user-select: none;
-  transition: all 0.25s ease;
+  touch-action: none;
+  transition: background 0.2s ease, box-shadow 0.2s ease, padding 0.2s ease;
   z-index: 2147483646;
 }
 
-.drawer-toggle-btn:hover {
+.drawer-toggle-btn.dock-right {
+  right: 0;
+  left: auto;
+  border-radius: 12px 0 0 12px;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.25);
+}
+
+.drawer-toggle-btn.dock-right:hover {
   background: linear-gradient(135deg, #1d4ed8, #1e40af);
-  padding-left: 18px;
+  padding-left: 15px;
   box-shadow: -6px 0 20px rgba(37, 99, 235, 0.4);
+}
+
+.drawer-toggle-btn.dock-left {
+  left: 0;
+  right: auto;
+  border-radius: 0 12px 12px 0;
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.25);
+}
+
+.drawer-toggle-btn.dock-left:hover {
+  background: linear-gradient(135deg, #1d4ed8, #1e40af);
+  padding-right: 15px;
+  box-shadow: 6px 0 20px rgba(37, 99, 235, 0.4);
+}
+
+.drawer-toggle-btn.is-dragging {
+  opacity: 0.92;
+  cursor: grabbing !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+  transition: none !important;
+}
+
+.drawer-drag-grip {
+  font-size: 13px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.65);
+  cursor: grab;
+  padding: 2px 4px;
+  letter-spacing: 1px;
+}
+
+.drawer-toggle-btn:hover .drawer-drag-grip {
+  color: #ffffff;
+}
+
+.btn-pos-preset {
+  background: #1e293b;
+  color: #94a3b8;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-pos-preset:hover {
+  background: #334155;
+  color: #f8fafc;
+  border-color: #38bdf8;
 }
 
 .drawer-toggle-badge {

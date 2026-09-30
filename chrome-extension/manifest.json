@@ -17,13 +17,7 @@
     "activeTab"
   ],
   "host_permissions": [
-    "*://seller.shopee.tw/*",
-    "*://*.shopee.tw/*",
-    "*://*.momo.com.tw/*",
-    "*://*.coupang.com/*",
-    "*://*.coupang.tw/*",
-    "*://script.google.com/*",
-    "*://script.googleusercontent.com/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"

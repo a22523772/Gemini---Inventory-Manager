@@ -665,7 +665,7 @@ function doPost(e) {
     var transSheet = ss.getSheetByName('transactions');
     if (!transSheet) transSheet = ss.insertSheet('transactions');
     
-    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
+    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/M/d  HH:mm:ss");
     var stockId = data.stock_id || [data.product_id, data.location, data.floor, data.area, data.expiry_date || '', data.specification || ''].join('_').replace(/_+$/, '');
     
     // Manage stock headers dynamically
@@ -792,11 +792,147 @@ function doPost(e) {
     
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
+
+  if(action === 'batchShipment') {
+    var stockSheet = ss.getSheetByName('stock');
+    var transSheet = ss.getSheetByName('transactions');
+    var orderSheet = ss.getSheetByName('網路訂單');
+    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/M/d  HH:mm:ss");
+    var prodNameMapBatch = getProdNameMap(ss);
+
+    // 1. 處理庫存扣減與交易明細寫入
+    var items = data.items || [];
+    if (items.length > 0) {
+      var stockHeaders = [];
+      var sValues = [];
+      var sIdIdx = -1, sPidIdx = -1, sQtyIdx = -1, sUpdateIdx = -1;
+      if (stockSheet && stockSheet.getLastRow() > 1) {
+        stockHeaders = stockSheet.getRange(1, 1, 1, stockSheet.getLastColumn()).getValues()[0];
+        sIdIdx = stockHeaders.indexOf('stock_id');
+        sPidIdx = stockHeaders.indexOf('product_id');
+        sQtyIdx = stockHeaders.indexOf('quantity');
+        sUpdateIdx = stockHeaders.indexOf('last_update');
+        sValues = stockSheet.getDataRange().getValues();
+      }
+
+      var transHeaders = [];
+      if (!transSheet) transSheet = ss.insertSheet('transactions');
+      if (transSheet.getLastRow() === 0) {
+        transHeaders = ['transaction_id', 'online_order_id', 'platform', 'product_id', 'name', 'type', 'quantity', 'price', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
+        transSheet.appendRow(transHeaders);
+      } else {
+        transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+        var tBatchNameIdx = transHeaders.indexOf('name');
+        if (tBatchNameIdx === -1) {
+          for (var th = 0; th < transHeaders.length; th++) {
+            var thStr = String(transHeaders[th] || '').trim().toLowerCase();
+            if (thStr === 'product_name' || thStr === '商品名稱' || thStr === '品名') {
+              transSheet.getRange(1, th + 1).setValue('name');
+              transHeaders[th] = 'name';
+              tBatchNameIdx = th;
+              break;
+            }
+          }
+          if (tBatchNameIdx === -1) {
+            transHeaders.push('name');
+            transSheet.getRange(1, transHeaders.length).setValue('name');
+          }
+        }
+      }
+
+      for (var it = 0; it < items.length; it++) {
+        var itm = items[it];
+        var stockId = String(itm.stock_id || '').trim();
+        var productId = String(itm.product_id || '').trim();
+        var deductNeeded = Number(itm.quantity) || 0;
+
+        // 優先以 stock_id 扣減
+        if (stockSheet && sValues.length > 1 && deductNeeded > 0) {
+          if (stockId && sIdIdx !== -1) {
+            for (var r = 1; r < sValues.length && deductNeeded > 0; r++) {
+              if (String(sValues[r][sIdIdx] || '').trim() === stockId) {
+                var currQ = Number(sValues[r][sQtyIdx]) || 0;
+                var deductRow = Math.min(currQ, deductNeeded);
+                deductNeeded -= deductRow;
+                var newQ = currQ - deductRow;
+                if (newQ <= 0) {
+                  stockSheet.deleteRow(r + 1);
+                  sValues.splice(r, 1);
+                  r--;
+                } else {
+                  stockSheet.getRange(r + 1, sQtyIdx + 1).setValue(newQ);
+                  sValues[r][sQtyIdx] = newQ;
+                  if (sUpdateIdx !== -1) stockSheet.getRange(r + 1, sUpdateIdx + 1).setValue(now);
+                }
+                break;
+              }
+            }
+          }
+
+          // 次依 product_id 扣減
+          if (deductNeeded > 0 && productId && sPidIdx !== -1) {
+            for (var r2 = sValues.length - 1; r2 >= 1 && deductNeeded > 0; r2--) {
+              if (String(sValues[r2][sPidIdx] || '').trim().toLowerCase() === productId.toLowerCase()) {
+                var currQ2 = Number(sValues[r2][sQtyIdx]) || 0;
+                var deductRow2 = Math.min(currQ2, deductNeeded);
+                deductNeeded -= deductRow2;
+                var newQ2 = currQ2 - deductRow2;
+                if (newQ2 <= 0) {
+                  stockSheet.deleteRow(r2 + 1);
+                  sValues.splice(r2, 1);
+                } else {
+                  stockSheet.getRange(r2 + 1, sQtyIdx + 1).setValue(newQ2);
+                  sValues[r2][sQtyIdx] = newQ2;
+                  if (sUpdateIdx !== -1) stockSheet.getRange(r2 + 1, sUpdateIdx + 1).setValue(now);
+                }
+              }
+            }
+          }
+        }
+
+        // 寫入交易紀錄
+        itm.transaction_id = itm.transaction_id || Utilities.getUuid();
+        itm.type = itm.type || 'stock_out';
+        itm.date = itm.date || now;
+        itm.cost_price = Number(itm.cost_price) || 0;
+        itm.price = Number(itm.price) || 0;
+        var cleanBatchPid = String(itm.product_id || '').trim().toLowerCase();
+        var rowData = [];
+        for (var k = 0; k < transHeaders.length; k++) {
+          var kName = transHeaders[k];
+          var val = itm[kName];
+          if ((val === undefined || val === '') && (kName === 'name' || kName === 'product_name')) {
+            val = itm.name || itm.product_name || (cleanBatchPid ? prodNameMapBatch[cleanBatchPid] : '') || '';
+          }
+          rowData.push(val !== undefined ? val : '');
+        }
+        transSheet.appendRow(rowData);
+      }
+    }
+
+    // 2. 刪除網路訂單工作表對應單號
+    var targetOrderId = String(data.order_id || '').trim();
+    if (orderSheet && orderSheet.getLastRow() > 1 && targetOrderId) {
+      var oHeaders = orderSheet.getRange(1, 1, 1, orderSheet.getLastColumn()).getValues()[0];
+      var oIdIdx = oHeaders.indexOf('order_id');
+      if (oIdIdx === -1) oIdIdx = oHeaders.indexOf('訂單編號');
+      if (oIdIdx !== -1) {
+        var oVals = orderSheet.getDataRange().getValues();
+        for (var orow = oVals.length - 1; orow >= 1; orow--) {
+          if (String(oVals[orow][oIdIdx]).trim() === targetOrderId) {
+            orderSheet.deleteRow(orow + 1);
+          }
+        }
+      }
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({success: true, message: 'Batch shipment completed'})).setMimeType(ContentService.MimeType.JSON);
+  }
   
   if(action === 'stockOut') {
     var stockSheet = ss.getSheetByName('stock');
     var transSheet = ss.getSheetByName('transactions');
-    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/M/d  HH:mm:ss");
     var stockId = String(data.stock_id || '').trim();
     var productId = String(data.product_id || '').trim();
     var deductNeeded = Number(data.quantity) || 0;
@@ -894,7 +1030,7 @@ function doPost(e) {
   if(action === 'adjustStock') {
     var stockSheet = ss.getSheetByName('stock');
     var transSheet = ss.getSheetByName('transactions');
-    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/M/d  HH:mm:ss");
     var stockId = data.stock_id || [data.product_id, data.location, data.floor, data.area, data.expiry_date || '', data.specification || ''].join('_').replace(/_+$/, '');
     
     if(stockSheet && stockSheet.getLastRow() > 1) {
@@ -1092,6 +1228,174 @@ function doPost(e) {
       }
     }
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'batchShipment') {
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(30000);
+    } catch (e) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: '系統忙碌中，請稍候重試' })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    try {
+      var stockSheet = ss.getSheetByName('stock');
+      var transSheet = ss.getSheetByName('transactions');
+      var orderSheet = ss.getSheetByName('網路訂單');
+      var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/M/d  HH:mm:ss");
+
+      var targetOrderId = data && data.order_id ? String(data.order_id).trim() : '';
+      var platform = data && data.platform ? String(data.platform).trim() : '';
+      var items = data && data.items && Array.isArray(data.items) ? data.items : [];
+
+      var prodNameMapBatch = getProdNameMap(ss);
+
+      // 1. 扣除庫存 (stock)
+      if (stockSheet && stockSheet.getLastRow() > 1 && items.length > 0) {
+        var stockHeaders = stockSheet.getRange(1, 1, 1, stockSheet.getLastColumn()).getValues()[0];
+        var sIdIdx = stockHeaders.indexOf('stock_id');
+        var sPidIdx = stockHeaders.indexOf('product_id');
+        if (sPidIdx === -1) sPidIdx = stockHeaders.indexOf('商品編號');
+        var sQtyIdx = stockHeaders.indexOf('quantity');
+        if (sQtyIdx === -1) sQtyIdx = stockHeaders.indexOf('數量');
+        var sUpdateIdx = stockHeaders.indexOf('last_update');
+
+        for (var bi = 0; bi < items.length; bi++) {
+          var itm = items[bi];
+          var deductNeeded = Number(itm.quantity) || 0;
+          if (deductNeeded <= 0) continue;
+
+          var itmStockId = String(itm.stock_id || '').trim();
+          var itmPid = String(itm.product_id || '').trim().toLowerCase();
+
+          // 優先比對 exact stock_id
+          if (itmStockId && sIdIdx !== -1 && stockSheet.getLastRow() > 1) {
+            var sValues = stockSheet.getDataRange().getValues();
+            for (var si = 1; si < sValues.length && deductNeeded > 0; si++) {
+              if (String(sValues[si][sIdIdx] || '').trim() === itmStockId) {
+                var currQ = Number(sValues[si][sQtyIdx]) || 0;
+                var deductAmount = Math.min(currQ, deductNeeded);
+                deductNeeded -= deductAmount;
+                var newQ = currQ - deductAmount;
+                if (newQ <= 0) {
+                  stockSheet.deleteRow(si + 1);
+                } else {
+                  stockSheet.getRange(si + 1, sQtyIdx + 1).setValue(newQ);
+                  if (sUpdateIdx !== -1) stockSheet.getRange(si + 1, sUpdateIdx + 1).setValue(now);
+                }
+                break;
+              }
+            }
+          }
+
+          // 次要比對 product_id (倒序扣減)
+          if (deductNeeded > 0 && itmPid && sPidIdx !== -1 && stockSheet.getLastRow() > 1) {
+            var sValues2 = stockSheet.getDataRange().getValues();
+            for (var sj = sValues2.length - 1; sj >= 1 && deductNeeded > 0; sj--) {
+              if (String(sValues2[sj][sPidIdx] || '').trim().toLowerCase() === itmPid) {
+                var currQ2 = Number(sValues2[sj][sQtyIdx]) || 0;
+                var deductAmount2 = Math.min(currQ2, deductNeeded);
+                deductNeeded -= deductAmount2;
+                var newQ2 = currQ2 - deductAmount2;
+                if (newQ2 <= 0) {
+                  stockSheet.deleteRow(sj + 1);
+                } else {
+                  stockSheet.getRange(sj + 1, sQtyIdx + 1).setValue(newQ2);
+                  if (sUpdateIdx !== -1) stockSheet.getRange(sj + 1, sUpdateIdx + 1).setValue(now);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // 2. 寫入交易流水紀錄 (transactions)
+      if (items.length > 0) {
+        if (!transSheet) transSheet = ss.insertSheet('transactions');
+        var transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+        var tOutNameIdx = transHeaders.indexOf('name');
+        if (tOutNameIdx === -1) {
+          for (var th = 0; th < transHeaders.length; th++) {
+            var thStr = String(transHeaders[th] || '').trim().toLowerCase();
+            if (thStr === 'product_name' || thStr === '商品名稱' || thStr === '品名') {
+              transSheet.getRange(1, th + 1).setValue('name');
+              transHeaders[th] = 'name';
+              tOutNameIdx = th;
+              break;
+            }
+          }
+          if (tOutNameIdx === -1) {
+            transHeaders.push('name');
+            transSheet.getRange(1, transHeaders.length).setValue('name');
+          }
+        }
+
+        var newRows = [];
+        for (var ti = 0; ti < items.length; ti++) {
+          var tItm = items[ti];
+          tItm.transaction_id = tItm.transaction_id || Utilities.getUuid();
+          tItm.online_order_id = tItm.online_order_id || targetOrderId;
+          tItm.platform = tItm.platform || platform;
+          tItm.type = tItm.type || ('stock_out ' + (platform || '網路訂單'));
+          tItm.date = tItm.date || now;
+          tItm.cost_price = Number(tItm.cost_price) || 0;
+          tItm.price = Number(tItm.price) || 0;
+          tItm.quantity = Number(tItm.quantity) || 0;
+
+          var cleanPid = String(tItm.product_id || '').trim().toLowerCase();
+          var tRow = [];
+          for (var tk = 0; tk < transHeaders.length; tk++) {
+            var colKey = transHeaders[tk];
+            var colVal = tItm[colKey];
+            if ((colVal === undefined || colVal === '') && (colKey === 'name' || colKey === 'product_name')) {
+              colVal = tItm.name || tItm.product_name || (cleanPid ? prodNameMapBatch[cleanPid] : '') || '';
+            }
+            tRow.push(colVal !== undefined ? colVal : '');
+          }
+          newRows.push(tRow);
+        }
+
+        if (newRows.length > 0) {
+          var startR = transSheet.getLastRow() + 1;
+          transSheet.getRange(startR, 1, newRows.length, transHeaders.length).setValues(newRows);
+        }
+      }
+
+      // 3. 刪除網路訂單 (網路訂單)
+      var deletedOrdersCount = 0;
+      if (orderSheet && orderSheet.getLastRow() > 1 && targetOrderId) {
+        var oHeaders = orderSheet.getRange(1, 1, 1, orderSheet.getLastColumn()).getValues()[0];
+        var oIdIdx = oHeaders.indexOf('order_id');
+        if (oIdIdx === -1) oIdIdx = oHeaders.indexOf('訂單編號');
+        if (oIdIdx === -1) oIdIdx = oHeaders.indexOf('單號');
+
+        if (oIdIdx !== -1) {
+          var oValues = orderSheet.getDataRange().getValues();
+          var cleanTargetId = targetOrderId.replace(/[^0-9a-zA-Z_-]/g, '').toLowerCase();
+          for (var oi = oValues.length - 1; oi >= 1; oi--) {
+            var rowOrderId = String(oValues[oi][oIdIdx] || '').trim().replace(/[^0-9a-zA-Z_-]/g, '').toLowerCase();
+            if (rowOrderId === cleanTargetId) {
+              orderSheet.deleteRow(oi + 1);
+              deletedOrdersCount++;
+            }
+          }
+        }
+      }
+
+      lock.releaseLock();
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        order_id: targetOrderId,
+        processedItems: items.length,
+        deletedOrdersCount: deletedOrdersCount
+      })).setMimeType(ContentService.MimeType.JSON);
+    } catch (err) {
+      lock.releaseLock();
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        error: String(err.message || err)
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
   }
 
   if (action === 'deduplicateOnlineOrders') {
@@ -1376,6 +1680,148 @@ function doPost(e) {
 function doGet(e) {
   var action = e.parameter.action;
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // 0. 極速綜合數據整合接口 (一次性撈取所有品項、庫存、網路訂單、採購單，杜絕多次 HTTP 請求被 Google 免費帳戶並發限制)
+  if (action === 'getAllData' || action === 'getCloudAssistantData') {
+    var pSheet = ss.getSheetByName('products');
+    var products = [];
+    if (pSheet && pSheet.getLastRow() > 1) {
+      var pData = pSheet.getDataRange().getDisplayValues();
+      if (pData.length >= 2) {
+        var pKeys = pData[0];
+        var pidIdx = pKeys.indexOf('product_id');
+        for (var i = 1; i < pData.length; i++) {
+          if (!pData[i].join('').trim()) continue;
+          if (pidIdx !== -1 && !pData[i][pidIdx]) continue;
+          var pObj = {};
+          for (var j = 0; j < pKeys.length; j++) {
+            var val = pData[i][j];
+            if (pKeys[j] === 'has_expiry') val = (String(val).toUpperCase() === 'TRUE');
+            if (pKeys[j] === 'is_discontinued') val = (String(val).toUpperCase() === 'TRUE');
+            if (pKeys[j] === 'cost_price' || pKeys[j] === 'min_stock') val = Number(val) || 0;
+            pObj[pKeys[j]] = val;
+          }
+          products.push(pObj);
+        }
+      }
+    }
+
+    var sSheet = ss.getSheetByName('stock');
+    var stock = [];
+    if (sSheet && sSheet.getLastRow() > 1) {
+      var sData = sSheet.getDataRange().getDisplayValues();
+      if (sData.length >= 2) {
+        var sKeys = sData[0];
+        var sidIdx = sKeys.indexOf('stock_id');
+        var spidIdx = sKeys.indexOf('product_id');
+        if (spidIdx === -1) spidIdx = sKeys.indexOf('商品編號');
+        for (var si = 1; si < sData.length; si++) {
+          if (!sData[si].join('').trim()) continue;
+          if (sidIdx !== -1 && !sData[si][sidIdx] && spidIdx !== -1 && !sData[si][spidIdx]) continue;
+          var sObj = {};
+          for (var sj = 0; sj < sKeys.length; sj++) {
+            var sval = sData[si][sj];
+            if (sKeys[sj] === 'quantity') sval = Number(sval) || 0;
+            sObj[sKeys[sj]] = sval;
+          }
+          if (!sObj.stock_id && sObj.product_id) {
+            sObj.stock_id = 'STOCK_' + sObj.product_id + '_' + si;
+          }
+          stock.push(sObj);
+        }
+      }
+    }
+
+    var oSheet = ss.getSheetByName('網路訂單');
+    var onlineOrders = [];
+    if (oSheet && oSheet.getLastRow() > 1) {
+      var oData = oSheet.getDataRange().getDisplayValues();
+      if (oData.length >= 2) {
+        var oKeys = oData[0];
+        for (var oi = 1; oi < oData.length; oi++) {
+          if (!oData[oi].join('').trim()) continue;
+          var oObj = {};
+          for (var oj = 0; oj < oKeys.length; oj++) {
+            var oval = oData[oi][oj];
+            if (oKeys[oj] === 'quantity') oval = Number(oval) || 0;
+            if (oKeys[oj] === 'price') oval = Number(oval) || 0;
+            oObj[oKeys[oj]] = oval;
+          }
+          onlineOrders.push(oObj);
+        }
+      }
+    }
+
+    var poSheet = ss.getSheetByName('purchase_orders');
+    var purchaseOrders = [];
+    if (poSheet && poSheet.getLastRow() > 1) {
+      var poData = poSheet.getDataRange().getDisplayValues();
+      if (poData.length >= 2) {
+        var poKeys = poData[0];
+        var prodNameMapGetPO = getProdNameMap(ss);
+        var poMap = {};
+        for (var poi = 1; poi < poData.length; poi++) {
+          if (!poData[poi].join('').trim()) continue;
+          var poObj = {};
+          for (var poj = 0; poj < poKeys.length; poj++) {
+            var poval = poData[poi][poj];
+            if (poKeys[poj] === 'ordered_quantity' || poKeys[poj] === 'received_quantity' || poKeys[poj] === 'cost_price') {
+              poval = Number(poval) || 0;
+            }
+            poObj[poKeys[poj]] = poval;
+          }
+          var poid = poObj.po_id || ('PO_ROW_' + poi);
+          var invNum = poObj.invoice_number || poObj['發票號碼'] || poObj['單據號'] || poObj['發票號'] || poObj['單號'] || '';
+          if (!invNum && poObj.note) {
+            var m = String(poObj.note).match(/\[(?:單據|發票|單據號|發票號)[:：]\s*([^\]]+)\]/);
+            if (m && m[1]) invNum = m[1].trim();
+          }
+
+          if (!poMap[poid]) {
+            poMap[poid] = {
+              po_id: poid,
+              vendor_id: poObj.vendor_id || '',
+              vendor_name: poObj.vendor_name || '',
+              status: poObj.status || 'pending',
+              order_date: poObj.order_date || '',
+              expected_date: poObj.expected_date || '',
+              note: poObj.note || '',
+              operator: poObj.operator || '',
+              invoice_number: invNum,
+              invoice_image_url: poObj.invoice_image_url || '',
+              items: []
+            };
+          } else if (!poMap[poid].invoice_number && invNum) {
+            poMap[poid].invoice_number = invNum;
+          }
+
+          var cleanPoPid = String(poObj.product_id || '').trim().toLowerCase();
+          var resolvedPoName = poObj.name || poObj.product_name || (cleanPoPid ? prodNameMapGetPO[cleanPoPid] : '') || '';
+
+          poMap[poid].items.push({
+            product_id: poObj.product_id || '',
+            name: resolvedPoName,
+            product_name: resolvedPoName,
+            specification: poObj.specification || '',
+            ordered_quantity: Number(poObj.ordered_quantity) || 0,
+            received_quantity: Number(poObj.received_quantity) || 0,
+            cost_price: Number(poObj.cost_price) || 0,
+            note: poObj.note || ''
+          });
+        }
+        for (var pk in poMap) {
+          purchaseOrders.push(poMap[pk]);
+        }
+      }
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({
+      products: products,
+      stock: stock,
+      onlineOrders: onlineOrders,
+      purchaseOrders: purchaseOrders
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
   
   if (action === 'getProducts') {
     var sheet = ss.getSheetByName('products');
@@ -1430,14 +1876,19 @@ function doGet(e) {
     var keys = data[0];
     var result = [];
     var sidIdx = keys.indexOf('stock_id');
+    var pidIdx = keys.indexOf('product_id');
+    if (pidIdx === -1) pidIdx = keys.indexOf('商品編號');
     for(var i=1; i<data.length; i++){
       if (!data[i].join('').trim()) continue; // Skip empty rows
-      if (sidIdx !== -1 && !data[i][sidIdx]) continue; // Skip if no stock_id
+      if (sidIdx !== -1 && !data[i][sidIdx] && pidIdx !== -1 && !data[i][pidIdx]) continue;
       var obj = {};
       for(var j=0; j<keys.length; j++){ 
         var val = data[i][j];
         if (keys[j] === 'quantity') val = Number(val) || 0;
         obj[keys[j]] = val; 
+      }
+      if (!obj.stock_id && obj.product_id) {
+        obj.stock_id = 'STOCK_' + obj.product_id + '_' + i;
       }
       result.push(obj);
     }
