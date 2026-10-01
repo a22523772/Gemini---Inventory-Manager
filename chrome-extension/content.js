@@ -670,6 +670,7 @@
         specStockMap,
         quantity: qty,
         costPrice,
+        orderPrice: Number(row.price) || 0,
         existingStock,
         inTransitPO
       };
@@ -945,6 +946,23 @@
       // 步驟 2: 一次性計算打包所有品項的扣庫存項目
       const batchItems = [];
 
+      // 依使用者指示：
+      // 1. 售價優先從「網路訂單」工作表的 price (訂單總金額) 提取；
+      // 2. 若無則從網頁當前解析之「實際入帳金額 (actualIncome)」備援提取；絕不從 products 表抓取預設售價。
+      let orderTotalPrice = 0;
+      for (const it of analysis.items) {
+        if (Number(it.orderPrice) > 0) {
+          orderTotalPrice = Number(it.orderPrice);
+          break;
+        }
+      }
+      if (orderTotalPrice === 0 && Number(analysis.actualIncome) > 0) {
+        orderTotalPrice = Number(analysis.actualIncome);
+      }
+
+      // 計算本次出貨總件數，供多批次/多品項精準分配總售價
+      const orderTotalQty = analysis.items.reduce((sum, it) => sum + (Number(it.quantity) || 1), 0);
+
       for (let itemIdx = 0; itemIdx < analysis.items.length; itemIdx++) {
         const item = analysis.items[itemIdx];
         let remainingNeeded = Number(item.quantity) || 1;
@@ -991,6 +1009,9 @@
               ? ` | 規格對應: [${itemSpec || '無'}]->[${targetSpecToDeduct}]`
               : '';
 
+            const batchCostPrice = itemCostPrice * deductQty; // 該筆紀錄商品的總進價
+            const batchSellingPrice = orderTotalQty > 0 ? Math.round(orderTotalPrice * (deductQty / orderTotalQty)) : 0; // 該筆紀錄商品的總售價
+
             batchItems.push({
               id: rowUniqueId,
               transaction_id: orderTxId,
@@ -1001,8 +1022,8 @@
               product_id: item.product_id || p?.product_id || entry.product_id || '',
               product_name: item.name || p?.name || entry.name || '',
               name: item.name || p?.name || entry.name || '',
-              cost_price: itemCostPrice,
-              price: 0,
+              cost_price: batchCostPrice,
+              price: batchSellingPrice,
               quantity: deductQty,
               location: entry.location || '',
               floor: entry.floor || '',
@@ -1021,6 +1042,9 @@
         // 若庫存不足或非系統商品，強行出貨剩餘件數 (註記缺貨)
         if (remainingNeeded > 0) {
           const rowUniqueId = `${orderTxId}_${itemIdx}_forced_${deductIdx}_${Math.random().toString(36).substring(2, 6)}`;
+          const batchCostPrice = itemCostPrice * remainingNeeded; // 該筆紀錄商品的總進價
+          const batchSellingPrice = orderTotalQty > 0 ? Math.round(orderTotalPrice * (remainingNeeded / orderTotalQty)) : 0; // 該筆紀錄商品的總售價
+
           batchItems.push({
             id: rowUniqueId,
             transaction_id: orderTxId,
@@ -1030,8 +1054,8 @@
             product_id: item.product_id || p?.product_id || '',
             product_name: item.name || p?.name || '',
             name: item.name || p?.name || '',
-            cost_price: itemCostPrice,
-            price: 0,
+            cost_price: batchCostPrice,
+            price: batchSellingPrice,
             quantity: remainingNeeded,
             location: '',
             floor: '',

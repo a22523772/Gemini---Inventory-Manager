@@ -272,7 +272,9 @@ export default function StockManage() {
 
     if (type === 'stock_in') {
       actionName = 'stockIn';
-      payload.cost_price = Number(costPrice);
+      const unitCost = Number(costPrice) || 0;
+      payload.price = unitCost; // 單件進價
+      payload.cost_price = unitCost * Number(quantity); // 總進價
       payload.vendor_id = actualVendorId;
       
       if (product && targetPid === product.product_id) {
@@ -291,6 +293,9 @@ export default function StockManage() {
       }
     } else if (type === 'stock_out') {
       actionName = 'stockOut';
+      const unitCost = product ? (Number(product.cost_price) || 0) : 0;
+      payload.price = unitCost; // 單件進價
+      payload.cost_price = unitCost * Number(quantity); // 總進價
     } else {
       actionName = 'adjustStock';
       const prevQty = selectedStock ? Number(selectedStock.quantity) || 0 : 0;

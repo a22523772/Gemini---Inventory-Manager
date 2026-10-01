@@ -360,11 +360,17 @@ export default function Transactions() {
       const qty = Number(t.quantity) || 0;
       if (isStockInType(t.type)) {
         totalInQty += qty;
-        totalInCost += (Number(t.cost_price) || getProductCostPrice(t.product_id) || 0) * qty;
+        const hasTotalCost = Number(t.cost_price) > 0 && Number(t.price) > 0 && Math.abs(Number(t.cost_price) - Number(t.price) * qty) < 0.01;
+        totalInCost += hasTotalCost ? Number(t.cost_price) : ((Number(t.cost_price) || getProductCostPrice(t.product_id) || 0) * qty);
       } else if (isStockOutType(t.type)) {
         totalOutQty += qty;
-        const val = Number(t.price) || Number(t.cost_price) || getProductCostPrice(t.product_id) || 0;
-        totalOutAmount += val * qty;
+        if (t.online_order_id || (t.type && t.type.startsWith('stock_out ') && t.type !== 'stock_out')) {
+          totalOutAmount += (Number(t.price) || (Number(t.cost_price) || (getProductCostPrice(t.product_id) * qty)));
+        } else {
+          const hasTotalCost = Number(t.cost_price) > 0 && Number(t.price) > 0 && Math.abs(Number(t.cost_price) - Number(t.price) * qty) < 0.01;
+          const val = Number(t.price) || Number(t.cost_price) || getProductCostPrice(t.product_id) || 0;
+          totalOutAmount += hasTotalCost ? Number(t.cost_price) : (val * qty);
+        }
       }
     });
 
@@ -899,11 +905,16 @@ export default function Transactions() {
                     </div>
                     <div>
                       <p className="text-[10px] text-[var(--color-text-dim)] uppercase font-bold">
-                        {t.online_order_id || isStockOutType(t.type) ? '售價 / 金額' : '進價成本'}
+                        {t.online_order_id || (t.type && t.type.startsWith('stock_out ') && t.type !== 'stock_out') ? '訂單總售價' : isStockOutType(t.type) ? '出貨金額' : '進價金額'}
                       </p>
                       <p className="font-mono font-black text-base text-[var(--color-accent-green)]">
-                        ${t.price || t.cost_price || getProductCostPrice(t.product_id) || 0}
+                        ${t.online_order_id ? (Number(t.price) || 0) : (Number(t.cost_price) || Number(t.price) || getProductCostPrice(t.product_id) || 0)}
                       </p>
+                      {t.online_order_id && Number(t.cost_price) > 0 && (
+                        <p className="text-[10px] text-zinc-400 font-mono mt-0.5">
+                          總進價: ${Number(t.cost_price).toLocaleString()}
+                        </p>
+                      )}
                     </div>
                     {isStockInType(t.type) && t.vendor_id && (
                       <div className="col-span-2">
@@ -975,8 +986,12 @@ export default function Transactions() {
 
             const totalQuantity = group.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
             const totalAmount = group.reduce((sum, item) => {
+              if (item.online_order_id || (item.type && item.type.startsWith('stock_out ') && item.type !== 'stock_out')) {
+                return sum + (Number(item.price) || 0);
+              }
+              const hasTotalCost = Number(item.cost_price) > 0 && Number(item.price) > 0 && Math.abs(Number(item.cost_price) - Number(item.price) * Number(item.quantity)) < 0.01;
               const price = Number(item.price) || Number(item.cost_price) || getProductCostPrice(item.product_id) || 0;
-              return sum + (price * (Number(item.quantity) || 0));
+              return sum + (hasTotalCost ? Number(item.cost_price) : (price * (Number(item.quantity) || 0)));
             }, 0);
 
             return (
@@ -1217,9 +1232,17 @@ export default function Transactions() {
                 </span>
               </div>
               <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
-                <span className="text-[var(--color-text-dim)]">金額 / 價格</span>
+                <span className="text-[var(--color-text-dim)]">
+                  {selectedTxForView.online_order_id ? '訂單總售價' : (isStockInType(selectedTxForView.type) || isStockOutType(selectedTxForView.type) ? '單件進價 (單價)' : '金額 / 價格')}
+                </span>
                 <span className="col-span-2 text-[var(--color-accent-green)] font-bold font-mono">
-                  ${selectedTxForView.price || selectedTxForView.cost_price || getProductCostPrice(selectedTxForView.product_id) || 0}
+                  ${selectedTxForView.price || 0}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 py-1 border-b border-white/5">
+                <span className="text-[var(--color-text-dim)]">總進價成本</span>
+                <span className="col-span-2 text-white font-mono">
+                  ${selectedTxForView.cost_price || 0}
                 </span>
               </div>
               {selectedTxForView.vendor_id && (
