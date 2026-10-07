@@ -450,54 +450,115 @@
     }).filter(Boolean);
   }
 
-  // 選項 A: 智能規格自動提取 (去除促銷字眼、括號、前綴序號，模糊比對)
-  function smartMatchSpec(orderSpec, availableSpecs) {
-    if (!availableSpecs || availableSpecs.length === 0) return '';
-    if (!orderSpec) {
-      if (availableSpecs.length === 1) return availableSpecs[0];
+  // 規格解析函式：分割逗號、頓號、斜線或換行
+  function parseSpecifications(specStr) {
+    if (!specStr || !String(specStr).trim()) return [];
+    const parts = String(specStr)
+      .split(/[,，、\/|;\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return parts.length > 0 ? parts : [String(specStr).trim()];
+  }
+
+  // 規格字串標準化：統一全半形括號與空白
+  function normalizeSpecString(raw) {
+    if (!raw) return '';
+    return String(raw)
+      .replace(/[（【［〔]/g, '(')
+      .replace(/[）】］〕]/g, ')')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  // 智慧過濾促銷字詞與前綴 (例如: 【現貨免運】、01. 、加贈收納袋等)
+  function stripPromoSpec(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/\(.*?(?:現貨|特惠|特價|熱銷|免運|秒發|促銷|升級款|加贈|附贈|贈品|建議).*?\)/gi, ' ')
+      .replace(/^[0-9]+[\.\-、_]\s*/, '')
+      .replace(/[\s\-_/]+/g, '')
+      .trim();
+  }
+
+  // 核心規格比對演算法 (一比一移植自 APP useStore.ts isSpecificationMatch)
+  function isSpecificationMatch(itemSpecRaw, targetSpecRaw, productName = '') {
+    const norm1 = normalizeSpecString(itemSpecRaw);
+    const norm2 = normalizeSpecString(targetSpecRaw);
+    if (!norm1 && !norm2) return true;
+    if (norm1 === norm2) return true;
+
+    // 品名包含規格之智慧比對 (例如: 庫存無規格留白，訂單為「18吋」，但品名為「LAPOLO 18吋循環涼風扇 FT-1801」)
+    if (productName && (!norm1 || !norm2)) {
+      const presentSpec = (norm1 || norm2).toLowerCase().trim();
+      const cleanProd = String(productName).toLowerCase();
+      if (presentSpec && cleanProd.includes(presentSpec)) {
+        return true;
+      }
+    }
+
+    if (!norm1 || !norm2) return false;
+
+    const clean1 = norm1.replace(/[\(\)]/g, ' ').replace(/\s+/g, ' ').trim();
+    const clean2 = norm2.replace(/[\(\)]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (clean1 === clean2) return true;
+
+    const promoClean1 = stripPromoSpec(norm1);
+    const promoClean2 = stripPromoSpec(norm2);
+    if (promoClean1 && promoClean2 && promoClean1 === promoClean2) return true;
+
+    // 智慧剝離品名重複內容 (若賣場規格夾帶了完整商品品名，先將品名字串剝離後再比對真正的規格核心)
+    if (productName) {
+      const cleanProdNoSpace = String(productName).toLowerCase().replace(/[\s\-_/]+/g, '');
+      const stripProd = (s) => (cleanProdNoSpace ? s.replace(cleanProdNoSpace, '').trim() : s);
+      const noProd1 = stripProd(promoClean1.replace(/[\s\-_/]+/g, ''));
+      const noProd2 = stripProd(promoClean2.replace(/[\s\-_/]+/g, ''));
+      if (noProd1 && noProd2 && noProd1 === noProd2) return true;
+      if (noProd1 && noProd2 && (noProd1.includes(noProd2) || noProd2.includes(noProd1))) return true;
+    }
+
+    const parts1 = parseSpecifications(norm1).map((s) => normalizeSpecString(s));
+    const parts2 = parseSpecifications(norm2).map((s) => normalizeSpecString(s));
+
+    if (parts1.some((p1) => parts2.includes(p1) || norm2.includes(p1) || clean2.includes(p1.replace(/[\(\)]/g, ' ').trim()))) return true;
+    if (parts2.some((p2) => parts1.includes(p2) || norm1.includes(p2) || clean1.includes(p2.replace(/[\(\)]/g, ' ').trim()))) return true;
+
+    if (norm1.includes(norm2) || norm2.includes(norm1)) return true;
+    if (clean1.includes(clean2) || clean2.includes(clean1)) return true;
+
+    if (promoClean1 && promoClean2) {
+      if (promoClean1.includes(promoClean2) || promoClean2.includes(promoClean1)) return true;
+    }
+
+    return false;
+  }
+
+  // 規格解析對齊函式 (移植自 APP useStore.ts resolveStandardProductSpecification，杜絕胡亂硬套)
+  function resolveStandardProductSpecification(rawSpec, availableSpecs, productName = '') {
+    const cleanRaw = String(rawSpec || '').trim();
+    if (!availableSpecs || availableSpecs.length === 0) {
       return '';
     }
 
-    const cleanOrder = String(orderSpec).trim();
+    const isBlankOrGeneric = !cleanRaw || 
+      ['預設規格', '預設', '無', '無規格', '-', '未指定', 'default', 'none'].includes(cleanRaw.toLowerCase());
+
+    if (isBlankOrGeneric) {
+      if (availableSpecs.length === 1) {
+        return availableSpecs[0];
+      }
+      return '';
+    }
 
     // 1. 完全相同 (不分大小寫)
-    const exact = availableSpecs.find(s => s.toLowerCase() === cleanOrder.toLowerCase());
-    if (exact) return exact;
+    const exactMatch = availableSpecs.find((s) => s.toLowerCase() === cleanRaw.toLowerCase());
+    if (exactMatch) return exactMatch;
 
-    // 2. 清洗函式：移除【】、[]、()、前綴 01.、促銷尾綴
-    const cleanStr = (str) => {
-      return String(str)
-        .replace(/【.*?】|\[.*?\]|\(.*?\)|（.*?）|「.*?」/g, ' ')
-        .replace(/^[0-9]+[\.\-、_]\s*/, '')
-        .replace(/(?:現貨|特價|熱銷|免運|秒發|促銷|升級款|加贈.*?|附贈.*?|贈品.*?)$/gi, '')
-        .replace(/[\s\-_/]+/g, '')
-        .toLowerCase()
-        .trim();
-    };
+    // 2. 智慧比對 (isSpecificationMatch)
+    const smartMatch = availableSpecs.find((s) => isSpecificationMatch(s, cleanRaw, productName));
+    if (smartMatch) return smartMatch;
 
-    const normOrder = cleanStr(cleanOrder);
-    if (normOrder) {
-      const normExact = availableSpecs.find(s => cleanStr(s) === normOrder);
-      if (normExact) return normExact;
-    }
-
-    // 3. 子字串包含判定：訂單規格包含系統規格，或系統規格包含訂單規格
-    const containing = availableSpecs.filter(s => {
-      const sClean = cleanStr(s);
-      if (!sClean) return false;
-      return cleanOrder.toLowerCase().includes(s.toLowerCase()) || 
-             (normOrder && normOrder.includes(sClean)) ||
-             s.toLowerCase().includes(cleanOrder.toLowerCase());
-    });
-    if (containing.length === 1) {
-      return containing[0];
-    }
-
-    // 4. 若該商品在現有庫存中「只有唯一規格」，直接對齊！
-    if (availableSpecs.length === 1) {
-      return availableSpecs[0];
-    }
-
+    // ⚠️ 安全保護：若訂單有指定具體規格 (如「淺紫灰」)，在庫存候選清單中皆比對不到時，絕不硬塞無關規格 (如「經典紅」)，如實回傳空字串 (缺貨)
     return '';
   }
 
@@ -557,38 +618,52 @@
       });
 
       const isFoundInStock = allProductStocks.length > 0;
-      const availableSpecs = [...new Set(allProductStocks.map((s) => String(s.specification || '').trim()).filter(Boolean))];
+
+      // 彙整可用規格清單：同時從 products 表標準規格與 stock 表庫存規格擷取 (對齊 APP getProductSpecifications 邏輯)
+      const specSet = new Set();
+      if (prod?.specification) {
+        parseSpecifications(prod.specification).forEach((s) => {
+          const clean = s.trim();
+          if (clean) specSet.add(clean);
+        });
+      }
+      allProductStocks.forEach((s) => {
+        if (s.specification) {
+          parseSpecifications(s.specification).forEach((sp) => {
+            const clean = sp.trim();
+            if (clean) specSet.add(clean);
+          });
+        }
+      });
+      const availableSpecs = Array.from(specSet);
 
       // 計算各規格庫存量
       const specStockMap = {};
       allProductStocks.forEach((s) => {
         const sSpec = String(s.specification || '').trim();
-        specStockMap[sSpec] = (specStockMap[sSpec] || 0) + (Number(s.quantity) || 0);
+        if (sSpec) {
+          specStockMap[sSpec] = (specStockMap[sSpec] || 0) + (Number(s.quantity) || 0);
+        }
       });
 
       const itemKey = `${orderId}_${idx}`;
       let resolvedSpec = state.selectedSpecs[itemKey];
       let isAutoMatched = false;
 
-      if (resolvedSpec === undefined) {
-        if (!isFoundInStock) {
+      // 檢查目前儲存的規格是否為有效規格（防止切換訂單時舊規格快取干擾）
+      const isValidChosen = resolvedSpec && (resolvedSpec === '__FORCED__' || availableSpecs.some((s) => s.toLowerCase() === resolvedSpec.toLowerCase()));
+
+      if (resolvedSpec === undefined || (!isValidChosen && resolvedSpec !== '')) {
+        if (!isFoundInStock && availableSpecs.length === 0) {
           resolvedSpec = '';
-        } else if (!spec) {
-          // 訂單未指定規格時：若庫存只有單一規格，自動鎖定
-          if (availableSpecs.length === 1) {
-            resolvedSpec = availableSpecs[0];
-            isAutoMatched = true;
-          } else {
-            resolvedSpec = '';
-          }
         } else {
-          // 訂單有指定規格：精確/智能比對該規格
-          const autoMatch = smartMatchSpec(spec, availableSpecs);
+          // 透過 resolveStandardProductSpecification 進行安全精確比對
+          const autoMatch = resolveStandardProductSpecification(spec, availableSpecs, resolvedName);
           if (autoMatch) {
             resolvedSpec = autoMatch;
             isAutoMatched = true;
           } else {
-            // 訂單規格在此商品的現有庫存中不存在 (缺貨) -> 絕不盲目套用其他規格！
+            // 訂單規格在候選清單中不存在 (缺貨) -> 絕不盲目套用其他無關規格！
             resolvedSpec = '';
             isAutoMatched = false;
           }
@@ -596,7 +671,7 @@
         state.selectedSpecs[itemKey] = resolvedSpec;
       } else if (resolvedSpec && resolvedSpec !== '__FORCED__') {
         if (spec) {
-          if (smartMatchSpec(spec, [resolvedSpec])) {
+          if (isSpecificationMatch(resolvedSpec, spec, resolvedName)) {
             isAutoMatched = true;
           }
         } else if (availableSpecs.length === 1 && resolvedSpec === availableSpecs[0]) {
@@ -608,10 +683,10 @@
       let matchedStock = allProductStocks.filter((s) => {
         if (resolvedSpec === '__FORCED__') return false; // 使用者刻意選擇不扣庫存
         if (resolvedSpec) {
-          return String(s.specification || '').trim().toLowerCase() === resolvedSpec.toLowerCase();
+          return isSpecificationMatch(s.specification, resolvedSpec, resolvedName);
         }
         if (spec) {
-          return String(s.specification || '').trim().toLowerCase() === spec.toLowerCase();
+          return isSpecificationMatch(s.specification, spec, resolvedName);
         }
         return true;
       });
@@ -658,7 +733,7 @@
           if (!targetSpec) {
             matchSpec = !pItemSpec || matchingPoItems.length === 1;
           } else {
-            if (pItemSpec && (pItemSpec.toLowerCase() === targetSpec.toLowerCase() || smartMatchSpec(pItemSpec, [targetSpec]))) {
+            if (pItemSpec && (pItemSpec.toLowerCase() === targetSpec.toLowerCase() || isSpecificationMatch(pItemSpec, targetSpec, resolvedName))) {
               matchSpec = true;
             } else if (!pItemSpec && matchingPoItems.length === 1) {
               matchSpec = true;
@@ -995,7 +1070,7 @@
 
         let productStock = (targetSpecToDeduct === '__FORCED__') ? [] : allProductStock.filter((s) => {
           if (targetSpecToDeduct && s.specification) {
-            return String(s.specification).trim().toLowerCase() === targetSpecToDeduct.toLowerCase();
+            return isSpecificationMatch(s.specification, targetSpecToDeduct, item.name);
           }
           return true;
         });
@@ -1407,26 +1482,18 @@
                             ? `<div style="font-size: 11px; color: #38bdf8; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 6px; padding: 6px 8px; margin-top: 6px; line-height: 1.4;">
                                  🚚 <strong>採購在途補貨中</strong>：已有採購單待入庫 <strong>+${item.inTransitPO} 件</strong>（現存 ${item.existingStock} 件，待到貨入庫後即可出貨）
                                </div>`
-                            : !item.isFoundInStock
+                            : !item.isFoundInStock && item.availableSpecs.length === 0
                             ? `<div style="font-size: 11px; color: #f87171; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 6px; padding: 6px 8px; margin-top: 6px; line-height: 1.4;">
                                  ⚠️ stock 庫存現存 0 件且無在途採購，請先建立採購單或至庫存表建檔
                                </div>`
-                            : (item.isAutoMatched && item.resolvedSpec)
-                            ? `<div class="spec-match-container" style="background: rgba(15, 23, 42, 0.4); border-color: rgba(56, 189, 248, 0.2); margin-top: 6px;">
-                                 <div class="spec-match-label-row">
-                                   <span class="spec-match-label">🎯 扣減庫存：</span>
-                                   <span class="spec-match-badge auto">⚡ 自動鎖定現貨</span>
-                                 </div>
-                                 <div style="font-size: 11px; color: #94a3b8; margin-top: 3px;">
-                                   規格：<span style="color: #38bdf8; font-weight: 600;">${escapeHtml(item.resolvedSpec)}</span> (現存: ${item.existingStock} 件)
-                                 </div>
-                               </div>`
-                            : `<!-- 規格選擇與缺貨下拉選單 -->
+                            : `<!-- 規格選擇與扣減下拉選單 (永遠開放自由切換，徹底告別鎖死) -->
                                <div class="spec-match-container">
                                  <div class="spec-match-label-row">
                                    <span class="spec-match-label">🎯 扣減庫存規格：</span>
                                    ${
-                                     item.resolvedSpec && item.resolvedSpec !== '__FORCED__'
+                                     item.isAutoMatched && item.resolvedSpec
+                                       ? `<span class="spec-match-badge auto">⚡ 自動對齊</span>`
+                                       : item.resolvedSpec && item.resolvedSpec !== '__FORCED__'
                                        ? `<span class="spec-match-badge manual">✍️ 手動指定</span>`
                                        : item.resolvedSpec === '__FORCED__'
                                        ? `<span class="spec-match-badge forced">⚠️ 缺貨強出</span>`
@@ -1450,6 +1517,14 @@
                                      .join('')}
                                    <option value="__FORCED__" ${item.resolvedSpec === '__FORCED__' ? 'selected' : ''}>⚠️ 強行出貨 (不扣規格庫存)</option>
                                  </select>
+                                 ${
+                                   item.resolvedSpec && item.resolvedSpec !== '__FORCED__'
+                                     ? `<div style="font-size: 11px; color: #94a3b8; display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
+                                          <span>指定扣減：<strong style="color: #38bdf8;">${escapeHtml(item.resolvedSpec)}</strong></span>
+                                          <span>有效現存：<strong style="color: ${item.existingStock > 0 ? '#34d399' : '#f87171'}; font-weight: 700;">${item.existingStock} 件</strong></span>
+                                        </div>`
+                                     : ''
+                                 }
                                </div>`
                         }
 
