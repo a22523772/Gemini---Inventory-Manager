@@ -833,11 +833,21 @@ export const normalizeSpecString = (raw?: string): string => {
     .toLowerCase();
 };
 
-export const isSpecificationMatch = (itemSpecRaw?: string, targetSpecRaw?: string): boolean => {
+export const isSpecificationMatch = (itemSpecRaw?: string, targetSpecRaw?: string, productName?: string): boolean => {
   const norm1 = normalizeSpecString(itemSpecRaw);
   const norm2 = normalizeSpecString(targetSpecRaw);
   if (!norm1 && !norm2) return true;
   if (norm1 === norm2) return true;
+
+  // 品名包含規格之智慧比對 (例如: 庫存無規格留白，訂單為「18吋」，但品名為「LAPOLO 18吋循環涼風扇 FT-1801」)
+  if (productName && (!norm1 || !norm2)) {
+    const presentSpec = (norm1 || norm2).toLowerCase().trim();
+    const cleanProd = productName.toLowerCase();
+    if (presentSpec && cleanProd.includes(presentSpec)) {
+      return true;
+    }
+  }
+
   if (!norm1 || !norm2) return false;
 
   const clean1 = norm1.replace(/[\(\)]/g, ' ').replace(/\s+/g, ' ').trim();

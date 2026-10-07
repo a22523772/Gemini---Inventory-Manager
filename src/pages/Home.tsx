@@ -264,16 +264,29 @@ export default function Home() {
       return exp < today;
     };
 
-    const productStock = stock.filter(s => {
+    const productStockAll = stock.filter(s => {
       const sPid = String(s.product_id || '').trim().toLowerCase();
       const sName = String((s as any).name || '').trim().toLowerCase();
       const pidMatch = (itemPid && sPid === itemPid) || (matchedPid && sPid === matchedPid.toLowerCase()) || (itemName && sName === itemName);
-      if (!pidMatch) return false;
+      return pidMatch;
+    });
+
+    const prodDisplayName = product?.name || itemName || '';
+    let productStock = productStockAll.filter(s => {
       if (itemSpec) {
-        return isSpecificationMatch(s.specification, itemSpec);
+        return isSpecificationMatch(s.specification, itemSpec, prodDisplayName);
       }
       return true;
     });
+
+    if (productStock.length === 0 && itemSpec && productStockAll.length > 0) {
+      const unspecifiedStocks = productStockAll.filter(s => !s.specification || ['-', '無', '預設', '單一規格', '標準'].includes(String(s.specification).trim()));
+      const nameHasSpec = prodDisplayName && prodDisplayName.toLowerCase().includes(itemSpec.toLowerCase());
+      const isSingleSpecProduct = unspecifiedStocks.length === productStockAll.length;
+      if (unspecifiedStocks.length > 0 && (nameHasSpec || isSingleSpecProduct)) {
+        productStock = unspecifiedStocks;
+      }
+    }
 
     const totalStock = productStock.reduce((acc, curr) => acc + curr.quantity, 0);
     const validStock = productStock.filter(s => !isExpired(s.expiry_date)).reduce((acc, curr) => acc + curr.quantity, 0);
@@ -673,14 +686,31 @@ export default function Home() {
         ? (vendorsMap.get(matchedProd.vendor_id) || '未指定廠商') 
         : (isSystemProduct ? '未指定廠商' : '非系統商品 / 尚未建檔');
 
-      const matchedStocks = stock.filter(s => {
-        const pidMatch = String(s.product_id || '').trim().toLowerCase() === resolvedPid.toLowerCase();
-        if (!pidMatch) return false;
+      const productStocks = stock.filter(s => {
+        const sPid = String(s.product_id || '').trim().toLowerCase();
+        const sName = String((s as any).name || '').trim().toLowerCase();
+        return (resolvedPid && sPid === resolvedPid.toLowerCase()) || (resolvedName && sName === resolvedName.toLowerCase());
+      });
+
+      let matchedStocks = productStocks.filter(s => {
         if (resolvedSpec) {
-          return isSpecificationMatch(s.specification, resolvedSpec);
+          return isSpecificationMatch(s.specification, resolvedSpec, resolvedName);
         }
         return true;
       });
+
+      // 智慧容錯回溯：若依特定規格未比對到庫存，檢查倉庫中是否有留白無規格的庫存
+      // 條件 1: 商品名稱中已包含該規格詞 (如 LAPOLO 18吋循環涼風扇 包含 18吋)
+      // 條件 2: 該商品在倉庫中全為無規格庫存 (單一規格商品，未建立其他分流規格)
+      if (matchedStocks.length === 0 && resolvedSpec && productStocks.length > 0) {
+        const unspecifiedStocks = productStocks.filter(s => !s.specification || ['-', '無', '預設', '單一規格', '標準'].includes(String(s.specification).trim()));
+        const nameHasSpec = resolvedName && resolvedName.toLowerCase().includes(resolvedSpec.toLowerCase());
+        const isSingleSpecProduct = unspecifiedStocks.length === productStocks.length;
+        if (unspecifiedStocks.length > 0 && (nameHasSpec || isSingleSpecProduct)) {
+          matchedStocks = unspecifiedStocks;
+        }
+      }
+
       const currentStock = matchedStocks.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
 
       // Distinct key ensuring non-system items with different names/specs never overwrite each other
@@ -861,14 +891,29 @@ export default function Home() {
         const targetPid = String(item.product_id || '').trim().toLowerCase();
         const itemSpec = item.specification ? String(item.specification).trim() : '';
         const isProductInSystem = currentProducts.some(p => String(p.product_id || '').trim().toLowerCase() === targetPid);
-        const productStock = isProductInSystem ? currentStock.filter(s => {
-          const pidMatch = String(s.product_id || '').trim().toLowerCase() === targetPid;
-          if (!pidMatch) return false;
+        const p = currentProducts.find(prod => String(prod.product_id || '').trim().toLowerCase() === targetPid);
+        const itemCostPrice = p ? (Number(p.cost_price) || 0) : 0;
+
+        const productStockAll = isProductInSystem ? currentStock.filter(s => {
+          return String(s.product_id || '').trim().toLowerCase() === targetPid;
+        }) : [];
+
+        let productStock = productStockAll.filter(s => {
           if (itemSpec) {
-            return isSpecificationMatch(s.specification, itemSpec);
+            return isSpecificationMatch(s.specification, itemSpec, p?.name || item.product_name);
           }
           return true;
-        }) : [];
+        });
+
+        if (productStock.length === 0 && itemSpec && productStockAll.length > 0) {
+          const prodName = p?.name || item.product_name || '';
+          const unspecifiedStocks = productStockAll.filter(s => !s.specification || ['-', '無', '預設', '單一規格', '標準'].includes(String(s.specification).trim()));
+          const nameHasSpec = prodName && prodName.toLowerCase().includes(itemSpec.toLowerCase());
+          const isSingleSpecProduct = unspecifiedStocks.length === productStockAll.length;
+          if (unspecifiedStocks.length > 0 && (nameHasSpec || isSingleSpecProduct)) {
+            productStock = unspecifiedStocks;
+          }
+        }
         
         const isExpired = (expiryStr?: string) => {
           if (!expiryStr) return false;
@@ -886,8 +931,6 @@ export default function Home() {
           return a.expiry_date.localeCompare(b.expiry_date);
         });
 
-        const p = currentProducts.find(prod => String(prod.product_id || '').trim().toLowerCase() === targetPid);
-        const itemCostPrice = p ? (Number(p.cost_price) || 0) : 0;
         let deductIdx = 0;
 
         if (isProductInSystem && sortedStock.length > 0) {

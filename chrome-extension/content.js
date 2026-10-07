@@ -605,7 +605,7 @@
       }
 
       // 依解析後 (或手動指定) 的規格篩選庫存
-      const matchedStock = allProductStocks.filter((s) => {
+      let matchedStock = allProductStocks.filter((s) => {
         if (resolvedSpec === '__FORCED__') return false; // 使用者刻意選擇不扣庫存
         if (resolvedSpec) {
           return String(s.specification || '').trim().toLowerCase() === resolvedSpec.toLowerCase();
@@ -615,6 +615,22 @@
         }
         return true;
       });
+
+      // 智慧容錯回溯：若依特定規格未比對到庫存，檢查倉庫中是否有留白無規格的庫存
+      // 條件 1: 商品名稱中已包含該規格詞 (如 LAPOLO 18吋循環涼風扇 包含 18吋)
+      // 條件 2: 該商品在倉庫中全為無規格庫存 (單一規格商品，未建立其他分流規格)
+      if (matchedStock.length === 0 && resolvedSpec !== '__FORCED__' && allProductStocks.length > 0) {
+        const targetS = resolvedSpec || spec;
+        if (targetS) {
+          const unspecifiedStocks = allProductStocks.filter((s) => !s.specification || ['-', '無', '預設', '單一規格'].includes(String(s.specification).trim()));
+          const nameHasSpec = resolvedName && resolvedName.toLowerCase().includes(targetS.toLowerCase());
+          const isSingleSpec = unspecifiedStocks.length === allProductStocks.length;
+          if (unspecifiedStocks.length > 0 && (nameHasSpec || isSingleSpec)) {
+            matchedStock = unspecifiedStocks;
+          }
+        }
+      }
+
       const existingStock = matchedStock.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
 
       // 比對 purchaseOrders 取得在途採購量 (支援巢狀 items 及扁平 PO 記錄，支援 ID 或 品名比對)
@@ -971,16 +987,28 @@
         const targetSpecToDeduct = item.resolvedSpec !== undefined ? item.resolvedSpec : itemSpec;
 
         // 篩選出該商品所有庫存批次，並依效期排序 (FIFO: 效期早者優先出貨)
-        const productStock = (targetSpecToDeduct === '__FORCED__') ? [] : currentStock.filter((s) => {
+        const allProductStock = currentStock.filter((s) => {
           const sPid = String(s.product_id || '').trim().toLowerCase();
           const sName = String(s.name || '').trim().toLowerCase();
-          const pidMatch = targetPid ? sPid === targetPid : (item.name && sName === item.name.toLowerCase());
-          if (!pidMatch) return false;
+          return targetPid ? sPid === targetPid : (item.name && sName === item.name.toLowerCase());
+        });
+
+        let productStock = (targetSpecToDeduct === '__FORCED__') ? [] : allProductStock.filter((s) => {
           if (targetSpecToDeduct && s.specification) {
             return String(s.specification).trim().toLowerCase() === targetSpecToDeduct.toLowerCase();
           }
           return true;
         });
+
+        if (productStock.length === 0 && targetSpecToDeduct !== '__FORCED__' && allProductStock.length > 0) {
+          const unspecifiedStocks = allProductStock.filter((s) => !s.specification || ['-', '無', '預設', '單一規格'].includes(String(s.specification).trim()));
+          const itemNameStr = String(item.name || item.product_name || '');
+          const nameHasSpec = itemNameStr && targetSpecToDeduct && itemNameStr.toLowerCase().includes(String(targetSpecToDeduct).toLowerCase());
+          const isSingleSpec = unspecifiedStocks.length === allProductStock.length;
+          if (unspecifiedStocks.length > 0 && (nameHasSpec || isSingleSpec)) {
+            productStock = unspecifiedStocks;
+          }
+        }
 
         const sortedStock = [...productStock].sort((a, b) => {
           if (!a.expiry_date) return 1;
