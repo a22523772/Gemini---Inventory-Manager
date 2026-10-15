@@ -1477,7 +1477,7 @@ interface AppState {
   fetchOnlineOrders: () => Promise<void>;
   fetchPurchaseOrders: () => Promise<void>;
   addPurchaseOrder: (po: Omit<PurchaseOrder, 'created_at' | 'updated_at'>) => Promise<void>;
-  updatePurchaseOrder: (poId: string, updated: Partial<PurchaseOrder>) => Promise<void>;
+  updatePurchaseOrder: (poId: string, updated: Partial<PurchaseOrder>, options?: { skipOverwriteTransactions?: boolean }) => Promise<void>;
   deletePurchaseOrder: (poId: string) => Promise<void>;
   uploadInvoiceImage: (base64Data: string, fileName?: string) => Promise<{ success: boolean; url?: string; viewUrl?: string; fileId?: string; error?: string }>;
   batchStockInFromInvoice: (params: {
@@ -1759,21 +1759,30 @@ export const useStore = create<AppState>((set, get) => ({
       }
 
       const prodNameMap = new Map(pList.map(p => [String(p.product_id || '').toLowerCase().trim(), p.name]));
-      const enrichedTList = tList.map(t => {
+      const seenInitialTx = new Set<string>();
+      const dedupedTList: Transaction[] = [];
+
+      for (const t of tList) {
         const cleanPid = String(t.product_id || '').toLowerCase().trim();
-        const resolvedName = (t.name || t.product_name || (cleanPid ? prodNameMap.get(cleanPid) : '') || t.product_id || '').trim();
-        return {
-          ...t,
-          name: resolvedName,
-          product_name: resolvedName
-        };
-      });
+        const txKey = t.id && String(t.id).trim()
+          ? String(t.id).trim()
+          : `${t.transaction_id || ''}___${cleanPid}___${t.specification || ''}___${t.quantity}___${t.location || ''}___${t.date}___${t.type}`;
+        if (!seenInitialTx.has(txKey)) {
+          seenInitialTx.add(txKey);
+          const resolvedName = (t.name || t.product_name || (cleanPid ? prodNameMap.get(cleanPid) : '') || t.product_id || '').trim();
+          dedupedTList.push({
+            ...t,
+            name: resolvedName,
+            product_name: resolvedName
+          });
+        }
+      }
 
       set({ 
         products: pList, 
         stock: sList, 
         vendors: vList, 
-        transactions: enrichedTList.sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date)),
+        transactions: dedupedTList.sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date)),
         onlineOrders: oList,
         purchaseOrders: poList
       });
@@ -1896,6 +1905,110 @@ export const useStore = create<AppState>((set, get) => ({
         updatedTx.sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date));
         await dbTransactions.setItem(newTx.id, newTx);
         
+        set({ stock: updatedStock, transactions: updatedTx });
+    } else if (action === 'batchStockIn') {
+        const { stock, transactions, products } = get();
+        let updatedStock = [...stock];
+        let updatedTx = [...transactions];
+        const rawItems = Array.isArray(updatedPayload.items) ? updatedPayload.items : [];
+        const batchPoId = updatedPayload.po_id || '';
+        const batchTxId = updatedPayload.batch_tx_id || batchPoId || `TX_IN_${Date.now()}`;
+        const dominantSep = getDominantDateSeparator(transactions);
+
+        for (let i = 0; i < rawItems.length; i++) {
+          const itm = rawItems[i];
+          const cleanPid = String(itm.product_id || '').trim().toLowerCase();
+          const p = products.find(prod => String(prod.product_id || '').trim().toLowerCase() === cleanPid);
+          const resolvedName = (itm.name || itm.product_name || p?.name || itm.product_id || '').trim();
+          const targetQty = Number(itm.quantity) || 1;
+          const targetLoc = itm.location || '倉庫';
+          const targetFloor = itm.floor || '1F';
+          const targetArea = itm.area || 'A區';
+          const targetSpec = itm.specification || p?.specification || '';
+          const targetExpiry = itm.expiry_date || '';
+
+          // Update stock
+          const existingStockIdx = updatedStock.findIndex(s =>
+            String(s.product_id || '').trim().toLowerCase() === cleanPid &&
+            s.location === targetLoc &&
+            s.floor === targetFloor &&
+            s.area === targetArea &&
+            (s.expiry_date || '') === targetExpiry &&
+            (s.specification || '') === targetSpec
+          );
+
+          let resolvedStockId = '';
+          if (existingStockIdx !== -1) {
+            updatedStock[existingStockIdx] = {
+              ...updatedStock[existingStockIdx],
+              quantity: updatedStock[existingStockIdx].quantity + targetQty,
+              last_update: new Date().toISOString()
+            };
+            resolvedStockId = updatedStock[existingStockIdx].stock_id;
+            await dbStock.setItem(resolvedStockId, updatedStock[existingStockIdx]);
+          } else {
+            const newStockId = `STK_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 7)}`;
+            resolvedStockId = newStockId;
+            const newStock: Stock = {
+              stock_id: newStockId,
+              product_id: itm.product_id,
+              name: resolvedName,
+              location: targetLoc,
+              floor: targetFloor,
+              area: targetArea,
+              quantity: targetQty,
+              expiry_date: targetExpiry,
+              specification: targetSpec,
+              last_update: new Date().toISOString()
+            };
+            updatedStock.push(newStock);
+            await dbStock.setItem(newStockId, newStock);
+          }
+
+          // Create transaction record
+          const uniqueTxItemId = itm.id || `TX_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 7)}`;
+          const txDate = formatConsistentTxDate(itm.date || updatedPayload.date, dominantSep);
+          const newTx: Transaction = {
+            id: uniqueTxItemId,
+            transaction_id: itm.transaction_id || batchTxId,
+            stock_id: resolvedStockId,
+            po_id: batchPoId || itm.po_id || '',
+            online_order_id: itm.online_order_id || '',
+            batch_id: batchTxId,
+            batch_tx_id: batchTxId,
+            platform: itm.platform || '',
+            product_id: itm.product_id || '',
+            product_name: resolvedName,
+            name: resolvedName,
+            type: itm.type || 'stock_in',
+            quantity: targetQty,
+            location: targetLoc,
+            floor: targetFloor,
+            area: targetArea,
+            specification: targetSpec,
+            cost_price: Number(itm.cost_price) || p?.cost_price || 0,
+            price: Number(itm.price) || 0,
+            vendor_id: itm.vendor_id || p?.vendor_id || '',
+            invoice_image_url: itm.invoice_image_url || updatedPayload.invoice_image_url || '',
+            date: txDate,
+            note: itm.note || (updatedPayload.invoice_number ? `單據號: ${updatedPayload.invoice_number}` : '採購到貨入庫'),
+            operator: get().operator
+          };
+
+          const existingTxIdx = updatedTx.findIndex(t =>
+            (t.id && newTx.id && t.id === newTx.id) ||
+            (t.transaction_id === newTx.transaction_id && t.product_id === newTx.product_id && (t.specification || '') === (newTx.specification || '') && t.quantity === newTx.quantity && t.type === newTx.type)
+          );
+
+          if (existingTxIdx >= 0) {
+            updatedTx[existingTxIdx] = newTx;
+          } else {
+            updatedTx = [newTx, ...updatedTx];
+          }
+          await dbTransactions.setItem(newTx.id, newTx);
+        }
+
+        updatedTx.sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date));
         set({ stock: updatedStock, transactions: updatedTx });
     } else if (action === 'stockOut') {
         const { stock, transactions } = get();
@@ -2140,8 +2253,27 @@ export const useStore = create<AppState>((set, get) => ({
         });
         
         if (res.ok) {
-          await dbSyncQueue.removeItem(item.id);
-          set((state) => ({ syncQueue: state.syncQueue.filter(q => q.id !== item.id) }));
+          const resText = await res.text();
+          let resJson: any = null;
+          try {
+            resJson = JSON.parse(resText);
+          } catch {}
+
+          if (item.action === 'batchStockIn' && (!resJson || resJson.success !== true)) {
+            // Older GAS script didn't handle batchStockIn: fallback to individual stockIn actions
+            const subItems = Array.isArray(item.payload?.items) ? item.payload.items : [];
+            await dbSyncQueue.removeItem(item.id);
+            set((state) => ({ syncQueue: state.syncQueue.filter(q => q.id !== item.id) }));
+            for (const sitm of subItems) {
+              await get().enqueueAction('stockIn', sitm);
+            }
+          } else if (resJson && resJson.success === false) {
+            set({ error: `同步失敗： ${item.action} (${resJson.error || ''})` });
+            hasError = true;
+          } else {
+            await dbSyncQueue.removeItem(item.id);
+            set((state) => ({ syncQueue: state.syncQueue.filter(q => q.id !== item.id) }));
+          }
         } else {
           set({ error: `同步失敗： ${item.action}` });
           hasError = true;
@@ -2432,10 +2564,10 @@ export const useStore = create<AppState>((set, get) => ({
             }
           }
 
-          // Exact row deduplication key: Only drop if it's the exact same line item index from remote
-          const dedupeKey = norm.id 
+          // Robust deduplication: Drop identical transaction ledger records
+          const dedupeKey = (norm.id && String(norm.id).trim() !== '') 
             ? String(norm.id).trim() 
-            : `${txId}___${pid}___${spec}___${norm.quantity || ''}___${norm.location || ''}___${norm.floor || ''}___${norm.area || ''}___${cleanDate}___${norm.type || ''}___${idx}`;
+            : `${txId}___${pid}___${spec}___${norm.quantity || ''}___${norm.location || ''}___${norm.floor || ''}___${norm.area || ''}___${cleanDate}___${norm.type || ''}`;
           
           if (seenTxKeys.has(dedupeKey)) {
             continue;
@@ -3281,7 +3413,7 @@ export const useStore = create<AppState>((set, get) => ({
     get().showToast(`✅ 採購訂單 ${po.po_id} 建立成功！`);
   },
 
-  updatePurchaseOrder: async (poId, updated) => {
+  updatePurchaseOrder: async (poId, updated, options) => {
     const currentPOs = get().purchaseOrders;
     const target = currentPOs.find(p => p.po_id === poId);
     if (!target) return;
@@ -3308,7 +3440,8 @@ export const useStore = create<AppState>((set, get) => ({
     await get().enqueueAction('editPurchaseOrder', merged);
 
     // If invoice_number was provided or modified, retroactively sync to linked transactions (Option A)
-    if (updated.invoice_number !== undefined && updated.invoice_number !== target.invoice_number) {
+    // Only perform overwrite when explicitly modified by user in PO view, not during automated stock-in
+    if (!options?.skipOverwriteTransactions && updated.invoice_number !== undefined && updated.invoice_number !== target.invoice_number) {
       const currentTx = get().transactions;
       let txUpdatedCount = 0;
 
@@ -3444,14 +3577,13 @@ export const useStore = create<AppState>((set, get) => ({
       ? po_id 
       : `TX_IN_${format(new Date(), 'yyyyMMdd_HHmmss')}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
-    // 1. Process each item into inventory
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
+    // 1. Process all items into inventory via batchStockIn in one single operation
+    const formattedBatchItems = items.map((item, i) => {
       const cleanPid = String(item.product_id || '').trim().toLowerCase();
       const p = products.find(prod => String(prod.product_id || '').trim().toLowerCase() === cleanPid);
       const resolvedName = (item.product_name || (item as any).name || p?.name || item.product_id || '').trim();
       const uniqueItemId = `TX_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 7)}`;
-      const stockInPayload = {
+      return {
         transaction_id: batchTxId, // PO ID or batch ID for spreadsheet
         id: uniqueItemId, // Unique record key for database & sync queue
         batch_id: batchTxId,
@@ -3470,11 +3602,18 @@ export const useStore = create<AppState>((set, get) => ({
         vendor_id: item.vendor_id || p?.vendor_id || '',
         invoice_image_url: invoice_image_url || '',
         date: nowStr,
-        note: invoice_number ? `單據號: ${invoice_number}${item.note ? ' / ' + item.note : ''}` : (item.note || '單據智慧進貨')
+        note: invoice_number ? `單據號: ${invoice_number}${item.note ? ' / ' + item.note : ''}` : (item.note || '採購到貨入庫')
       };
+    });
 
-      await enqueueAction('stockIn', stockInPayload);
-    }
+    await enqueueAction('batchStockIn', {
+      batch_tx_id: batchTxId,
+      po_id: po_id || '',
+      invoice_number: invoice_number || '',
+      invoice_image_url: invoice_image_url || '',
+      date: nowStr,
+      items: formattedBatchItems
+    });
 
     // 2. If matched with a PO, update received quantities and status
     if (po_id) {
@@ -3559,7 +3698,7 @@ export const useStore = create<AppState>((set, get) => ({
           items: updatedItems,
           invoice_image_url: invoice_image_url || po.invoice_image_url,
           ...(invoice_number ? { invoice_number } : {})
-        });
+        }, { skipOverwriteTransactions: true });
       }
     }
 
@@ -3609,7 +3748,7 @@ export const useStore = create<AppState>((set, get) => ({
 
     if (itemsToStockIn.length === 0) {
       // All items were already fully received! Directly complete PO without adding duplicate inventory.
-      await updatePurchaseOrder(po.po_id, { status: 'completed' });
+      await updatePurchaseOrder(po.po_id, { status: 'completed' }, { skipOverwriteTransactions: true });
       showToast(`✅ 採購單 ${po.po_id} 所有品項先前已全數到貨，已直接標記為結案！`);
       return;
     }

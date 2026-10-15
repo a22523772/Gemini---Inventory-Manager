@@ -799,32 +799,6 @@ export default function Purchases() {
         '未命名商品'
       ).trim();
 
-      const subSpecs = parseSpecifications(it.specification);
-      if (subSpecs.length > 1) {
-        return subSpecs.map((subSpec, sIdx) => {
-          const subReceived = (transactions || [])
-            .filter(t => (t.po_id === po.po_id || (t.note && t.note.includes(po.po_id))) &&
-                         t.product_id === it.product_id &&
-                         isSpecificationMatch(t.specification, subSpec))
-            .reduce((sum, t) => sum + Number(t.quantity || 0), 0);
-          
-          return {
-            temp_id: `PO_CHK_${Date.now()}_${idx}_${sIdx}`,
-            product_id: it.product_id,
-            product_name: resolvedName,
-            name: resolvedName,
-            matched_system_product: matchedP,
-            specification: subSpec,
-            quantity: Math.max(0, targetQty - subReceived),
-            cost_price: it.cost_price || matchedP?.cost_price || 0,
-            location: defLoc?.location || '倉庫',
-            floor: defLoc?.floor || '1F',
-            area: defLoc?.area || 'A區',
-            note: it.note || ''
-          };
-        });
-      }
-
       return [{
         temp_id: `PO_CHK_${Date.now()}_${idx}`,
         product_id: it.product_id,

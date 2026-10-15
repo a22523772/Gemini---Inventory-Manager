@@ -787,10 +787,240 @@ function doPost(e) {
       trRow.push(val !== undefined ? val : '');
     }
 
-    // Always append every stock-in event as an independent transaction ledger record
-    transSheet.appendRow(trRow);
+    // Idempotency check: don't append if exact same transaction_id, product_id, specification, quantity already exists
+    var isDuplicateTx = false;
+    if (transSheet.getLastRow() > 1 && data.transaction_id) {
+      var tCheckData = transSheet.getDataRange().getValues();
+      var cTxIdIdx = transHeaders.indexOf('transaction_id');
+      var cPidIdx = transHeaders.indexOf('product_id');
+      var cSpecIdx = transHeaders.indexOf('specification');
+      var cQtyIdx = transHeaders.indexOf('quantity');
+      var cTypeIdx = transHeaders.indexOf('type');
+      for (var ci = tCheckData.length - 1; ci >= 1; ci--) {
+        if (cTxIdIdx !== -1 && String(tCheckData[ci][cTxIdIdx] || '').trim() === String(data.transaction_id).trim()) {
+          var pMatch = cPidIdx === -1 || String(tCheckData[ci][cPidIdx] || '').trim().toLowerCase() === cleanDataPid;
+          var sMatch = cSpecIdx === -1 || String(tCheckData[ci][cSpecIdx] || '').trim() === String(data.specification || '').trim();
+          var qMatch = cQtyIdx === -1 || String(tCheckData[ci][cQtyIdx] || '').trim() === String(data.quantity || '').trim();
+          var tMatch = cTypeIdx === -1 || String(tCheckData[ci][cTypeIdx] || '').trim() === String(data.type || 'stock_in').trim();
+          if (pMatch && sMatch && qMatch && tMatch) {
+            isDuplicateTx = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!isDuplicateTx) {
+      transSheet.appendRow(trRow);
+    }
     
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'batchStockIn') {
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(30000);
+    } catch (e) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: '系統忙碌中，請稍候重試' })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    try {
+      var stockSheet = ss.getSheetByName('stock');
+      if (!stockSheet) stockSheet = ss.insertSheet('stock');
+      var transSheet = ss.getSheetByName('transactions');
+      if (!transSheet) transSheet = ss.insertSheet('transactions');
+      var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/M/d  HH:mm:ss");
+
+      var poId = data && data.po_id ? String(data.po_id).trim() : '';
+      var batchTxId = data && data.batch_tx_id ? String(data.batch_tx_id).trim() : (poId || Utilities.getUuid());
+      var items = data && data.items && Array.isArray(data.items) ? data.items : [];
+      if (items.length === 0) {
+        lock.releaseLock();
+        return ContentService.createTextOutput(JSON.stringify({ success: true, count: 0 })).setMimeType(ContentService.MimeType.JSON);
+      }
+
+      var prodNameMapStockIn = getProdNameMap(ss);
+
+      // 1. Stock sheet headers
+      var stockHeaders = [];
+      if (stockSheet.getLastRow() === 0) {
+        stockHeaders = ['stock_id', 'product_id', 'name', 'location', 'floor', 'area', 'quantity', 'expiry_date', 'specification', 'last_update'];
+        stockSheet.appendRow(stockHeaders);
+      } else {
+        stockHeaders = stockSheet.getRange(1, 1, 1, stockSheet.getLastColumn()).getValues()[0];
+        var requiredStockCols = ['name', 'specification', 'last_update'];
+        requiredStockCols.forEach(function(col) {
+          if (stockHeaders.indexOf(col) === -1) {
+            stockHeaders.push(col);
+            stockSheet.getRange(1, stockHeaders.length).setValue(col);
+          }
+        });
+      }
+
+      var sValues = stockSheet.getDataRange().getValues();
+      var sStockIdIdx = stockHeaders.indexOf('stock_id');
+      var sProdIdx = stockHeaders.indexOf('product_id');
+      var sLocIdx = stockHeaders.indexOf('location');
+      var sFloorIdx = stockHeaders.indexOf('floor');
+      var sAreaIdx = stockHeaders.indexOf('area');
+      var sExpiryIdx = stockHeaders.indexOf('expiry_date');
+      var sSpecIdx = stockHeaders.indexOf('specification');
+      var sQtyIdx = stockHeaders.indexOf('quantity');
+      var sUpdateIdx = stockHeaders.indexOf('last_update');
+      var sNameIdx = stockHeaders.indexOf('name');
+
+      // Update or add stock items
+      for (var si = 0; si < items.length; si++) {
+        var itm = items[si];
+        var itmQty = Number(itm.quantity) || 0;
+        if (itmQty <= 0) continue;
+
+        var stockId = itm.stock_id || [itm.product_id, itm.location || '倉庫', itm.floor || '1F', itm.area || 'A區', itm.expiry_date || '', itm.specification || ''].join('_').replace(/_+$/, '');
+        var cleanPid = String(itm.product_id || '').trim().toLowerCase();
+        var itmName = itm.name || itm.product_name || (cleanPid ? prodNameMapStockIn[cleanPid] : '') || '';
+
+        var foundIndex = -1;
+        if (sValues.length > 1) {
+          for (var r = 1; r < sValues.length; r++) {
+            var matchById = (sStockIdIdx !== -1 && sValues[r][sStockIdIdx] == stockId);
+            var matchByAttrs = (
+              sValues[r][sProdIdx] == itm.product_id &&
+              sValues[r][sLocIdx] == (itm.location || '倉庫') &&
+              sValues[r][sFloorIdx] == (itm.floor || '1F') &&
+              sValues[r][sAreaIdx] == (itm.area || 'A區') &&
+              String(sValues[r][sExpiryIdx] || '') == String(itm.expiry_date || '') &&
+              String(sValues[r][sSpecIdx] || '') == String(itm.specification || '')
+            );
+            if (matchById || matchByAttrs) {
+              foundIndex = r;
+              break;
+            }
+          }
+        }
+
+        if (foundIndex !== -1) {
+          var oldQty = Number(sValues[foundIndex][sQtyIdx]) || 0;
+          var newStockQty = oldQty + itmQty;
+          sValues[foundIndex][sQtyIdx] = newStockQty;
+          stockSheet.getRange(foundIndex + 1, sQtyIdx + 1).setValue(newStockQty);
+          if (sUpdateIdx !== -1) stockSheet.getRange(foundIndex + 1, sUpdateIdx + 1).setValue(now);
+          if (sNameIdx !== -1 && itmName && !sValues[foundIndex][sNameIdx]) {
+            stockSheet.getRange(foundIndex + 1, sNameIdx + 1).setValue(itmName);
+          }
+        } else {
+          var sRow = [];
+          for (var m = 0; m < stockHeaders.length; m++) {
+            var colKey = stockHeaders[m];
+            var colVal = itm[colKey];
+            if (colKey === 'stock_id') colVal = stockId;
+            if (colKey === 'name') colVal = itmName;
+            if (colKey === 'quantity') colVal = itmQty;
+            if (colKey === 'location') colVal = itm.location || '倉庫';
+            if (colKey === 'floor') colVal = itm.floor || '1F';
+            if (colKey === 'area') colVal = itm.area || 'A區';
+            if (colKey === 'last_update') colVal = now;
+            sRow.push(colVal !== undefined ? colVal : '');
+          }
+          stockSheet.appendRow(sRow);
+          sValues.push(sRow);
+        }
+      }
+
+      // 2. Transactions sheet headers and ID deduplication
+      var transHeaders = [];
+      if (transSheet.getLastRow() === 0) {
+        transHeaders = ['transaction_id', 'online_order_id', 'platform', 'product_id', 'name', 'type', 'quantity', 'price', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
+        transSheet.appendRow(transHeaders);
+      } else {
+        transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+        var tInNameIdx = transHeaders.indexOf('name');
+        if (tInNameIdx === -1) {
+          for (var th = 0; th < transHeaders.length; th++) {
+            var thStr = String(transHeaders[th] || '').trim().toLowerCase();
+            if (thStr === 'product_name' || thStr === '商品名稱' || thStr === '品名') {
+              transSheet.getRange(1, th + 1).setValue('name');
+              transHeaders[th] = 'name';
+              tInNameIdx = th;
+              break;
+            }
+          }
+          if (tInNameIdx === -1) {
+            transHeaders.push('name');
+            transSheet.getRange(1, transHeaders.length).setValue('name');
+          }
+        }
+      }
+
+      // Read existing transactions for idempotency check (prevent duplicate transaction rows!)
+      var existingTxs = transSheet.getLastRow() > 1 ? transSheet.getDataRange().getValues() : [];
+      var tTxIdIdx = transHeaders.indexOf('transaction_id');
+      var tProdIdx = transHeaders.indexOf('product_id');
+      var tSpecIdx = transHeaders.indexOf('specification');
+      var tQtyIdx = transHeaders.indexOf('quantity');
+      var tTypeIdx = transHeaders.indexOf('type');
+
+      var existingTxKeys = {};
+      for (var er = 1; er < existingTxs.length; er++) {
+        var rowTxId = tTxIdIdx !== -1 ? String(existingTxs[er][tTxIdIdx] || '').trim() : '';
+        var rowPid = tProdIdx !== -1 ? String(existingTxs[er][tProdIdx] || '').trim().toLowerCase() : '';
+        var rowSpec = tSpecIdx !== -1 ? String(existingTxs[er][tSpecIdx] || '').trim().toLowerCase() : '';
+        var rowQty = tQtyIdx !== -1 ? String(existingTxs[er][tQtyIdx] || '').trim() : '';
+        var rowType = tTypeIdx !== -1 ? String(existingTxs[er][tTypeIdx] || '').trim() : '';
+        var rowKey = [rowTxId, rowPid, rowSpec, rowQty, rowType].join('___');
+        existingTxKeys[rowKey] = true;
+      }
+
+      var newTransRows = [];
+      for (var ti = 0; ti < items.length; ti++) {
+        var tItm = items[ti];
+        var itemTxId = tItm.transaction_id || batchTxId;
+        var itemPid = String(tItm.product_id || '').trim().toLowerCase();
+        var itemSpec = String(tItm.specification || '').trim().toLowerCase();
+        var itemQty = String(Number(tItm.quantity) || 0);
+        var itemType = tItm.type || 'stock_in';
+
+        // Check if identical transaction already exists in transSheet
+        var txKey = [itemTxId, itemPid, itemSpec, itemQty, itemType].join('___');
+        if (existingTxKeys[txKey]) {
+          // Already recorded! Skip to prevent duplicate registration
+          continue;
+        }
+        existingTxKeys[txKey] = true;
+
+        tItm.transaction_id = itemTxId;
+        tItm.type = itemType;
+        tItm.date = tItm.date || now;
+        tItm.cost_price = Number(tItm.cost_price) || 0;
+        tItm.price = Number(tItm.price) || 0;
+        tItm.quantity = Number(tItm.quantity) || 0;
+        tItm.location = tItm.location || '倉庫';
+        tItm.floor = tItm.floor || '1F';
+        tItm.area = tItm.area || 'A區';
+
+        var tRow = [];
+        for (var tk = 0; tk < transHeaders.length; tk++) {
+          var colKey = transHeaders[tk];
+          var colVal = tItm[colKey];
+          if ((colVal === undefined || colVal === '') && (colKey === 'name' || colKey === 'product_name')) {
+            colVal = tItm.name || tItm.product_name || (itemPid ? prodNameMapStockIn[itemPid] : '') || '';
+          }
+          tRow.push(colVal !== undefined ? colVal : '');
+        }
+        newTransRows.push(tRow);
+      }
+
+      if (newTransRows.length > 0) {
+        var startR = transSheet.getLastRow() + 1;
+        transSheet.getRange(startR, 1, newTransRows.length, transHeaders.length).setValues(newTransRows);
+      }
+
+      lock.releaseLock();
+      return ContentService.createTextOutput(JSON.stringify({ success: true, count: newTransRows.length })).setMimeType(ContentService.MimeType.JSON);
+    } catch (err) {
+      lock.releaseLock();
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: String(err.message || err) })).setMimeType(ContentService.MimeType.JSON);
+    }
   }
 
   if(action === 'batchShipment') {
