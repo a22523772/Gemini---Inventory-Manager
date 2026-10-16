@@ -1473,6 +1473,8 @@ interface AppState {
   setOperator: (op: string) => Promise<void>;
   enqueueAction: (action: SyncItem['action'], payload: any) => Promise<void>;
   syncData: () => Promise<void>;
+  clearSyncQueue: () => Promise<void>;
+  removeFromSyncQueue: (id: string) => Promise<void>;
   fetchRemoteData: () => Promise<void>;
   fetchOnlineOrders: () => Promise<void>;
   fetchPurchaseOrders: () => Promise<void>;
@@ -1681,6 +1683,12 @@ export const useStore = create<AppState>((set, get) => ({
       const lowStockAlert = await dbSettings.getItem<boolean>('lowStockAlertEnabled');
       const threshold = await dbSettings.getItem<number>('expiryThreshold') || 30;
       
+      const legacyStuckCleanupDone = await dbSettings.getItem<boolean>('cleaned_legacy_stuck_sync_queue_v2');
+      if (!legacyStuckCleanupDone) {
+        await dbSyncQueue.clear();
+        await dbSettings.setItem('cleaned_legacy_stuck_sync_queue_v2', true);
+      }
+
       const qKeys = await dbSyncQueue.keys();
       const q: SyncItem[] = [];
       for (const k of qKeys) {
@@ -2233,6 +2241,18 @@ export const useStore = create<AppState>((set, get) => ({
     get().syncData();
   },
 
+  clearSyncQueue: async () => {
+    await dbSyncQueue.clear();
+    set({ syncQueue: [], error: null, isSyncing: false, isLoading: false });
+    get().showToast('🧹 已成功清空待同步佇列！');
+  },
+
+  removeFromSyncQueue: async (id: string) => {
+    await dbSyncQueue.removeItem(id);
+    set((state) => ({ syncQueue: state.syncQueue.filter(q => q.id !== id) }));
+    get().showToast('🗑️ 已自佇列中移除該筆操作');
+  },
+
   syncData: async () => {
     const { gasApiUrl, isSyncing } = get();
     if (!gasApiUrl || isSyncing) return;
@@ -2246,6 +2266,57 @@ export const useStore = create<AppState>((set, get) => ({
       const item = get().syncQueue[0]; // Process one by one
 
       try {
+        // Special Handling for batchStockIn: try batch first, auto-unroll into stockIn if GAS returns error or 500
+        if (item.action === 'batchStockIn') {
+          let batchSuccess = false;
+          try {
+            const res = await fetch(`${gasApiUrl}?action=batchStockIn`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify(item.payload)
+            });
+            if (res.ok) {
+              const resJson = await res.json().catch(() => null);
+              if (resJson && resJson.success === true) {
+                batchSuccess = true;
+              }
+            }
+          } catch (batchErr) {
+            console.warn("batchStockIn not supported on current GAS deployment, falling back to individual stockIn:", batchErr);
+          }
+
+          if (batchSuccess) {
+            await dbSyncQueue.removeItem(item.id);
+            set((state) => ({ syncQueue: state.syncQueue.filter(q => q.id !== item.id) }));
+            continue;
+          } else {
+            // Older GAS script does not support batchStockIn: decompose into standard stockIn actions
+            const subItems = Array.isArray(item.payload?.items) ? item.payload.items : [];
+            await dbSyncQueue.removeItem(item.id);
+            const newStockInItems: SyncItem[] = subItems.map((sitm: any, sIdx: number) => {
+              const sUid = sitm.id || `TX_SYNC_${Date.now()}_${sIdx}_${Math.random().toString(36).substring(2, 6)}`;
+              return {
+                id: sUid,
+                action: 'stockIn',
+                payload: { ...sitm, id: sUid },
+                timestamp: new Date().toISOString()
+              };
+            });
+
+            for (const sItem of newStockInItems) {
+              await dbSyncQueue.setItem(sItem.id, sItem);
+            }
+
+            set((state) => {
+              const remaining = state.syncQueue.filter(q => q.id !== item.id);
+              return { syncQueue: [...newStockInItems, ...remaining] };
+            });
+            // Immediately continue loop with the unrolled standard stockIn items!
+            continue;
+          }
+        }
+
+        // Standard actions (stockIn, editPurchaseOrder, etc.)
         const res = await fetch(`${gasApiUrl}?action=${item.action}`, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -2259,15 +2330,7 @@ export const useStore = create<AppState>((set, get) => ({
             resJson = JSON.parse(resText);
           } catch {}
 
-          if (item.action === 'batchStockIn' && (!resJson || resJson.success !== true)) {
-            // Older GAS script didn't handle batchStockIn: fallback to individual stockIn actions
-            const subItems = Array.isArray(item.payload?.items) ? item.payload.items : [];
-            await dbSyncQueue.removeItem(item.id);
-            set((state) => ({ syncQueue: state.syncQueue.filter(q => q.id !== item.id) }));
-            for (const sitm of subItems) {
-              await get().enqueueAction('stockIn', sitm);
-            }
-          } else if (resJson && resJson.success === false) {
+          if (resJson && resJson.success === false) {
             set({ error: `同步失敗： ${item.action} (${resJson.error || ''})` });
             hasError = true;
           } else {

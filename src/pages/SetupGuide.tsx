@@ -1,15 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { Save, Check, RefreshCw, FileCode2, AlertTriangle, X, Key, Eye, EyeOff } from 'lucide-react';
+import { Save, Check, RefreshCw, FileCode2, AlertTriangle, X, Key, Eye, EyeOff, Trash2, ListFilter, AlertCircle, Copy, CheckCheck } from 'lucide-react';
 import { getGeminiAPIKey, setGeminiAPIKey as saveGeminiKey, clearGeminiAPIKey } from '../lib/geminiClient';
 
 export default function SetupGuide() {
-  const { gasApiUrl, setGasApiUrl, syncData, syncQueue, operator, setOperator, isLoading, stock, transactions, purchaseOrders } = useStore();
+  const { gasApiUrl, setGasApiUrl, syncData, syncQueue, clearSyncQueue, removeFromSyncQueue, error, operator, setOperator, isLoading, stock, transactions, purchaseOrders } = useStore();
   const [url, setUrl] = useState(gasApiUrl);
   const [geminiKey, setGeminiKey] = useState(getGeminiAPIKey() || '');
   const [showGeminiKey, setShowGeminiKey] = useState(false);
   const [saved, setSaved] = useState(false);
   const [geminiSaved, setGeminiSaved] = useState(false);
+  const [showQueueDetails, setShowQueueDetails] = useState(false);
+  const [copiedScript, setCopiedScript] = useState(false);
   const [tab, setTab] = useState<'settings' | 'docs'>('settings');
 
   const [confirmAction, setConfirmAction] = useState<{
@@ -62,6 +64,16 @@ export default function SetupGuide() {
     }
   };
 
+  const handleCopyScript = () => {
+    const el = document.getElementById('gas-script-code');
+    if (el) {
+      navigator.clipboard.writeText(el.innerText);
+      setCopiedScript(true);
+      useStore.getState().showToast("📋 已複製最新版 Google Apps Script 伺服器代碼！");
+      setTimeout(() => setCopiedScript(false), 3000);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col pb-12">
       <div className="glass-panel border-x-0 border-t-0 px-4 pt-6 pb-2">
@@ -74,10 +86,13 @@ export default function SetupGuide() {
             系統設定
           </button>
           <button 
-            className={`pb-2 text-sm font-bold transition-colors ${tab === 'docs' ? 'text-[var(--color-accent-blue)] border-b-2 border-[var(--color-accent-blue)]' : 'text-[var(--color-text-dim)] hover:text-white'}`}
+            className={`pb-2 text-sm font-bold transition-colors flex items-center gap-2 ${tab === 'docs' ? 'text-[var(--color-accent-blue)] border-b-2 border-[var(--color-accent-blue)]' : 'text-[var(--color-text-dim)] hover:text-white'}`}
             onClick={() => setTab('docs')}
           >
-            後端代碼與文件
+            <span>後端代碼與文件</span>
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
+              v2.4 更新
+            </span>
           </button>
         </div>
       </div>
@@ -85,6 +100,30 @@ export default function SetupGuide() {
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
         {tab === 'settings' && (
           <>
+            {/* Apps Script Update Notice Banner */}
+            <div className="glass-panel p-4 rounded-2xl border-amber-500/40 bg-gradient-to-r from-amber-500/15 to-amber-600/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg shadow-amber-500/5">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 bg-amber-500/20 border border-amber-500/40 rounded-xl text-amber-300 shrink-0 mt-0.5">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm font-bold text-amber-200">Google Apps Script 腳本版本已更新 (v2.4)</h3>
+                    <span className="px-2 py-0.5 text-[10px] font-black bg-amber-400 text-slate-950 rounded-full">重要更新</span>
+                  </div>
+                  <p className="text-xs text-amber-200/80 mt-1 leading-relaxed">
+                    本次升級包含採購單<strong>極速核對入庫 (<code className="bg-black/30 px-1 py-0.5 rounded font-mono text-amber-200">batchStockIn</code>)</strong> 與<strong>交易紀錄冪等防重保護</strong>。系統已內建雙軌相容機制，建議您前往更新試算表以獲得最佳效能！
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setTab('docs')}
+                className="px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl text-xs font-black shrink-0 transition-all shadow-md shadow-amber-400/20 active:scale-95 cursor-pointer flex items-center gap-1.5"
+              >
+                <span>複製最新代碼</span>
+                <span>→</span>
+              </button>
+            </div>
             <div className="glass-panel p-4 rounded-2xl">
               <h2 className="text-base font-bold text-[var(--color-text-main)] mb-4">操作角色</h2>
               <div className="flex gap-2">
@@ -193,23 +232,144 @@ export default function SetupGuide() {
               </button>
             </div>
 
-            <div className="glass-panel p-4 rounded-2xl">
-              <div className="flex justify-between items-center mb-4">
-                 <h2 className="text-base font-bold text-[var(--color-text-main)]">同步狀態</h2>
-                 <span className="bg-[var(--color-accent-orange)]/20 text-orange-200 border border-[var(--color-accent-orange)]/50 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider">
-                    {syncQueue.length} 待同步
-                 </span>
+            <div className="glass-panel p-5 rounded-2xl border border-white/10 space-y-4">
+              <div className="flex justify-between items-center">
+                 <div>
+                   <h2 className="text-base font-bold text-[var(--color-text-main)] flex items-center gap-2">
+                     <span>雲端同步狀態</span>
+                     {syncQueue.length === 0 ? (
+                       <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[11px] font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                         <Check className="w-3 h-3 stroke-[3]" /> 已全數同步
+                       </span>
+                     ) : (
+                       <span className="bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[11px] font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1 animate-pulse">
+                         <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                         {syncQueue.length} 筆待同步
+                       </span>
+                     )}
+                   </h2>
+                   <p className="text-xs text-slate-400 mt-1">
+                     {syncQueue.length === 0
+                       ? '目前所有本機異動均已與 Google Sheet 試算表保持一致。'
+                       : '目前有操作暫存於本機隊列中，點選下方按鈕可進行重試或直接清空。'}
+                   </p>
+                 </div>
               </div>
-              <button
-                onClick={syncData}
-                disabled={isLoading || !gasApiUrl}
-                className={`w-full flex items-center justify-center py-3 px-4 rounded-xl text-sm font-bold active:scale-95 transition-all outline-none ${
-                  isLoading || !gasApiUrl ? 'bg-white/5 text-[var(--color-text-dim)] cursor-not-allowed' : 'glass-panel text-white hover:bg-white/10'
-                }`}
-              >
-                <RefreshCw className={`w-5 h-5 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-                {isLoading ? '同步中...' : '立即同步'}
-              </button>
+
+              {error && (
+                <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 p-3 rounded-xl flex items-start gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <span className="font-bold">同步中斷提示：</span> {error}
+                    <div className="text-[11px] text-rose-300/80 mt-1">
+                      可能原因：Google 試算表端尚未部署最新版 Apps Script 腳本，或網路暫時中斷。您可以點擊「清空待同步佇列」消除此錯誤，或至「使用教學」複製最新腳本更新試算表。
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  onClick={syncData}
+                  disabled={isLoading || !gasApiUrl}
+                  className={`flex-1 flex items-center justify-center py-2.5 px-4 rounded-xl text-xs font-bold active:scale-95 transition-all outline-none ${
+                    isLoading || !gasApiUrl ? 'bg-white/5 text-[var(--color-text-dim)] cursor-not-allowed' : 'bg-sky-500 hover:bg-sky-400 text-slate-950 shadow-md shadow-sky-500/20 font-black'
+                  }`}
+                >
+                  <RefreshCw className={`w-4 h-4 mr-1.5 ${isLoading ? 'animate-spin' : ''}`} />
+                  {isLoading ? '正在同步試算表...' : '立即重試同步'}
+                </button>
+
+                {syncQueue.length > 0 && (
+                  <>
+                    <button
+                      onClick={() => setShowQueueDetails(!showQueueDetails)}
+                      className="px-3.5 py-2.5 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <ListFilter className="w-4 h-4 text-amber-400" />
+                      <span>{showQueueDetails ? '收合明細' : `檢視明細 (${syncQueue.length})`}</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`確定要清空目前卡在佇列中的 ${syncQueue.length} 筆操作嗎？\n\n注意：清空後將不會再將這 ${syncQueue.length} 筆操作寫入試算表，本機資料將保留現狀，頂部黃色待同步計數將立即歸零。`)) {
+                          clearSyncQueue();
+                        }
+                      }}
+                      className="px-3.5 py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                      title="清空佇列中的所有操作，解決卡單問題"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>清空待同步佇列</span>
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* Queue Items Detail List */}
+              {showQueueDetails && syncQueue.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-white/10 space-y-2">
+                  <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
+                    <span>待同步隊列明細（按順序發送）：</span>
+                    <span className="text-[11px] text-slate-500 font-mono">共 {syncQueue.length} 筆</span>
+                  </div>
+                  <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1">
+                    {syncQueue.map((item, qIdx) => {
+                      const actionLabelMap: Record<string, string> = {
+                        batchStockIn: '批次到貨入庫',
+                        stockIn: '單筆入庫',
+                        stockOut: '商品出貨',
+                        adjustStock: '庫存校正',
+                        editPurchaseOrder: '採購單更新',
+                        addPurchaseOrder: '建立採購單',
+                        deletePurchaseOrder: '刪除採購單',
+                        addProduct: '新增商品',
+                        editProduct: '編輯商品',
+                        deleteProduct: '刪除商品',
+                        batchShipment: '批次訂單出貨'
+                      };
+                      const actionName = actionLabelMap[item.action] || item.action;
+                      const p = item.payload || {};
+                      let detailText = '';
+                      if (item.action === 'batchStockIn') {
+                        detailText = `單號: ${p.po_id || p.batch_tx_id || '-'} (${p.items?.length || 0} 項商品)`;
+                      } else if (item.action === 'stockIn') {
+                        detailText = `${p.name || p.product_name || p.product_id} x${p.quantity} (${p.specification || '無規格'})`;
+                      } else if (item.action === 'editPurchaseOrder') {
+                        detailText = `採購單: ${p.po_id} (狀態: ${p.status || '-'})`;
+                      } else if (item.action === 'stockOut') {
+                        detailText = `${p.name || p.product_id} x${p.quantity} (${p.platform || '出貨'})`;
+                      } else {
+                        detailText = p.product_id || p.po_id || p.order_id || JSON.stringify(p).substring(0, 30);
+                      }
+
+                      return (
+                        <div key={item.id || qIdx} className="flex items-center justify-between p-2.5 rounded-lg bg-black/40 border border-white/5 text-xs">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="w-5 text-slate-500 font-mono text-[11px] shrink-0">{qIdx + 1}.</span>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30 shrink-0">
+                              {actionName}
+                            </span>
+                            <span className="text-slate-300 truncate" title={detailText}>{detailText}</span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0 ml-2">
+                            <span className="text-[10px] text-slate-500 font-mono hidden sm:inline">
+                              {item.timestamp ? item.timestamp.split('T')[1]?.substring(0, 8) : ''}
+                            </span>
+                            <button
+                              onClick={() => removeFromSyncQueue(item.id)}
+                              className="p-1 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors cursor-pointer"
+                              title="自佇列中單獨移除此項"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="glass-panel p-4 rounded-2xl border-orange-500/20 bg-orange-500/5">
@@ -337,9 +497,59 @@ export default function SetupGuide() {
              </section>
 
              <section>
-                <h3 className="text-base font-bold text-[var(--color-text-main)] mt-6">2. Google Apps Script 伺服器代碼</h3>
-                <p className="text-[var(--color-text-dim)] mt-1">在您的 Google Sheet 中，點選選單的 「擴充功能 &gt; Apps Script」。將以下代碼完全貼上，並部署為「網頁應用程式 (任何人皆可存取)」：</p>
-                <pre className="bg-black/40 border border-white/10 text-[var(--color-text-dim)] p-4 rounded-xl mt-3 overflow-x-auto text-xs font-mono">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-8 mb-3">
+                  <div>
+                    <h3 className="text-base font-bold text-[var(--color-text-main)] flex items-center gap-2">
+                      <span>2. Google Apps Script 伺服器代碼</span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-slate-950">
+                        v2.4 最新版
+                      </span>
+                    </h3>
+                    <p className="text-[var(--color-text-dim)] mt-0.5 text-xs">在 Google 試算表中點選「擴充功能 &gt; Apps Script」，將以下代碼覆蓋貼上並部署為網頁應用程式：</p>
+                  </div>
+                  <button
+                    onClick={handleCopyScript}
+                    className="px-4 py-2 bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 shadow-md shadow-sky-500/20 active:scale-95 cursor-pointer shrink-0"
+                  >
+                    {copiedScript ? <CheckCheck className="w-4 h-4 stroke-[3]" /> : <Copy className="w-4 h-4" />}
+                    <span>{copiedScript ? '代碼已複製到剪貼簿！' : '一鍵複製全部代碼'}</span>
+                  </button>
+                </div>
+
+                {/* Prominent Apps Script Update Reminder Notice */}
+                <div className="p-4 bg-gradient-to-r from-amber-500/15 via-sky-500/10 to-indigo-500/10 border-2 border-amber-500/40 rounded-2xl mb-3 space-y-3 shadow-lg shadow-amber-500/5">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-1 rounded-full text-xs font-black bg-amber-400 text-slate-950 flex items-center gap-1.5 shadow-sm">
+                      <AlertTriangle className="w-3.5 h-3.5 fill-slate-950 stroke-none" />
+                      腳本更新提醒 (v2.4)
+                    </span>
+                    <span className="text-xs font-bold text-amber-300">2026-10-15 最新版</span>
+                  </div>
+
+                  <div className="text-xs text-slate-200 leading-relaxed bg-black/40 p-3 rounded-xl border border-white/5 space-y-1.5">
+                    <div className="font-bold text-amber-200 flex items-center gap-1.5">
+                      🚀 本次腳本重點升級（採購單入庫極速化與防重）：
+                    </div>
+                    <ul className="list-disc pl-5 space-y-1 text-slate-300">
+                      <li><strong>新增 <code className="text-sky-300 font-mono">batchStockIn</code> 批次進貨</strong>：採購單多項商品核對完成後，由舊版的多筆逐次發送改為單次批量寫入，等待時間縮減至 1 秒。</li>
+                      <li><strong>交易紀錄冪等防重機制</strong>：入庫時自動檢核商品與單號，防止網路延遲造成交易明細重複寫入。</li>
+                    </ul>
+                    <div className="text-[11px] text-amber-300/90 font-medium pt-1 border-t border-white/10 mt-2">
+                      📌 <strong>更新步驟</strong>：
+                      點擊右上角「一鍵複製全部代碼」👉 開啟 Google 試算表「擴充功能 &gt; Apps Script」全選貼上 👉 點擊「部署 &gt; 管理部署」點選鉛筆圖示，版本選「新版本」後儲存即可！
+                    </div>
+                  </div>
+                </div>
+
+                <div className="relative group">
+                  <button
+                    onClick={handleCopyScript}
+                    className="absolute top-3 right-3 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border border-white/10 shadow-sm cursor-pointer z-10"
+                  >
+                    {copiedScript ? <CheckCheck className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-300" />}
+                    <span>{copiedScript ? '已複製！' : '複製代碼'}</span>
+                  </button>
+                  <pre id="gas-script-code" className="bg-black/50 border border-white/10 text-[var(--color-text-dim)] p-4 pt-10 rounded-xl overflow-x-auto text-xs font-mono max-h-[500px]">
 {`function getProdNameMap(ss) {
   var pSheet = ss.getSheetByName('products');
   var map = {};
@@ -2243,6 +2453,7 @@ function doGet(e) {
   }
 }`}
                 </pre>
+                </div>
              </section>
 
              <section>

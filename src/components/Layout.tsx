@@ -154,10 +154,15 @@ export default function Layout() {
               {getPageTitle(location.pathname)}
             </h2>
             {syncQueue.length > 0 && (
-              <span className="px-2.5 py-0.5 text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-full flex items-center gap-1">
+              <NavLink
+                to="/setup"
+                className="px-2.5 py-0.5 text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 hover:border-amber-500/60 rounded-full flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                title="點擊前往系統設定管理待同步佇列"
+              >
                 <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-                待對列同步: {syncQueue.length} 筆
-              </span>
+                <span>待對列同步: {syncQueue.length} 筆</span>
+                <span className="text-[10px] text-amber-300/70 underline underline-offset-2 ml-1">點擊管理</span>
+              </NavLink>
             )}
           </div>
 
@@ -199,6 +204,15 @@ export default function Layout() {
           </div>
 
           <div className="flex items-center gap-2">
+            {syncQueue.length > 0 && (
+              <NavLink
+                to="/setup"
+                className="px-2 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-lg text-[10px] font-bold flex items-center gap-1 active:scale-95"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                <span>隊列 {syncQueue.length}</span>
+              </NavLink>
+            )}
             <button
               onClick={() => syncData()}
               disabled={isLoading}
