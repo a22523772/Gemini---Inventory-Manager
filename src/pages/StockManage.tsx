@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useStore, formatConsistentTxDate, getDominantDateSeparator, getProductSpecifications, isSpecificationMatch, getProductStatusInfo } from '../store/useStore';
-import { ArrowLeft, Save, Search, X, Filter, Plus, ScanBarcode, FileText, ShoppingBag, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Save, Search, X, Filter, Plus, ScanBarcode, FileText, ShoppingBag, AlertTriangle, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import OutboundCart from '../components/OutboundCart';
 import QuantityInput from '../components/QuantityInput';
+import ProductSpecStockBadges from '../components/ProductSpecStockBadges';
 
 export default function StockManage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { enqueueAction, addProduct, products, showToast, operator, stock, vendors } = useStore();
+  const { enqueueAction, addProduct, products, showToast, operator, stock, vendors, refreshStock, gasApiUrl } = useStore();
+  const [isRefreshing, setIsRefreshing] = useState(false);
   
   const initialType = (searchParams.get('type') as 'stock_in' | 'stock_out' | 'adjust') || 'stock_in';
   
@@ -329,11 +331,29 @@ export default function StockManage() {
 
   return (
     <div className="h-full flex flex-col">
-      <header className="flex items-center p-4 glass-panel border-x-0 border-t-0">
-        <button onClick={() => navigate(-1)} className="p-2 -ml-2 text-[var(--color-text-dim)] rounded-full hover:bg-white/10">
-          <ArrowLeft className="w-6 h-6" />
-        </button>
-        <h1 className="ml-2 text-xl font-bold text-[var(--color-text-main)]">庫存管理</h1>
+      <header className="flex items-center justify-between p-4 glass-panel border-x-0 border-t-0">
+        <div className="flex items-center">
+          <button onClick={() => navigate(-1)} className="p-2 -ml-2 text-[var(--color-text-dim)] rounded-full hover:bg-white/10">
+            <ArrowLeft className="w-6 h-6" />
+          </button>
+          <h1 className="ml-2 text-xl font-bold text-[var(--color-text-main)]">庫存管理</h1>
+        </div>
+        {gasApiUrl && (
+          <button
+            type="button"
+            onClick={async () => {
+              setIsRefreshing(true);
+              await refreshStock();
+              setIsRefreshing(false);
+            }}
+            disabled={isRefreshing}
+            className="px-3 py-1.5 bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer disabled:opacity-50 shadow-sm"
+            title="僅從雲端試算表重新整理庫存資料（極速刷新）"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">{isRefreshing ? '整理中...' : '重新整理庫存'}</span>
+          </button>
+        )}
       </header>
 
       <div className="px-4 py-3 glass-panel border-x-0 border-t-0 flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth">
@@ -422,6 +442,9 @@ export default function StockManage() {
           {product && (
             <div className="mt-2 text-xs flex flex-col gap-1.5">
                <p className="text-[var(--color-accent-green)] font-medium">已找到: {product.name} {product.brand ? `(${product.brand})` : ''}</p>
+               <div className="pt-0.5">
+                 <ProductSpecStockBadges product={product} size="xs" showTotalSummary />
+               </div>
                {(() => {
                  const statusInfo = getProductStatusInfo(product);
                  if (!statusInfo.isPaused) return null;
@@ -791,6 +814,9 @@ export default function StockManage() {
                                  )}
                                </div>
                                <div className="text-xs text-white/40 tracking-wider truncate mt-1">{p.product_id}</div>
+                               <div className="mt-1">
+                                 <ProductSpecStockBadges product={p} size="xs" />
+                               </div>
                              </div>
                              {statusInfo.isPaused ? (
                                <span className="text-[11px] font-bold text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded shrink-0">

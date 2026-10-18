@@ -23,6 +23,7 @@ import {
   Calendar
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import ProductSpecStockBadges from './ProductSpecStockBadges';
 
 interface ProductCompactViewProps {
   onOpenAdjustModal: (group: any, stockEntry?: any) => void;
@@ -647,11 +648,9 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                         </div>
                       </td>
 
-                      {/* Specification */}
+                      {/* Specification & Individual Quantities */}
                       <td className="p-3">
-                        <span className="inline-block bg-indigo-500/10 text-indigo-300 text-xs px-2 py-0.5 rounded-lg border border-indigo-500/20 font-medium">
-                          {item.specification}
-                        </span>
+                        <ProductSpecStockBadges product={item.product} size="xs" />
                       </td>
 
                       {/* Vendor */}

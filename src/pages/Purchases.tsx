@@ -20,6 +20,7 @@ import EditPurchaseOrderModal from '../components/EditPurchaseOrderModal';
 import ImportExcelOrderModal from '../components/ImportExcelOrderModal';
 import ProductCatalogPickerModal from '../components/ProductCatalogPickerModal';
 import PurchaseOrderPhotoModal from '../components/PurchaseOrderPhotoModal';
+import ProductSpecStockBadges from '../components/ProductSpecStockBadges';
 
 interface ScannedInvoiceItem {
   temp_id: string;
@@ -53,10 +54,27 @@ export default function Purchases() {
     completeAndStockInAllRemainingPO,
     uploadInvoiceImage,
     fetchPurchaseOrders,
+    refreshPurchaseOrders,
     addVendor,
     operator,
     showToast 
   } = useStore();
+
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [batchLocation, setBatchLocation] = useState('倉庫');
+  const [batchFloor, setBatchFloor] = useState('1F');
+  const [batchArea, setBatchArea] = useState('A區');
+
+  const handleApplyBatchLocation = () => {
+    if (confirmItems.length === 0) return;
+    setConfirmItems(prev => prev.map(item => ({
+      ...item,
+      location: batchLocation || '倉庫',
+      floor: batchFloor || '1F',
+      area: batchArea || 'A區'
+    })));
+    showToast(`⚡ 已成功將全部 ${confirmItems.length} 項品項儲位批改為：${batchLocation} / ${batchFloor} / ${batchArea}`);
+  };
 
   const [activeTab, setActiveTab] = useState<'list' | 'scan' | 'create'>('list');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'pending' | 'partial' | 'completed' | 'cancelled'>('ALL');
@@ -1108,13 +1126,17 @@ export default function Purchases() {
         <div className="flex flex-wrap items-center gap-2">
           {gasApiUrl && (
             <button
-              onClick={() => fetchPurchaseOrders()}
-              disabled={isLoading}
-              className="flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 text-slate-200 border border-white/10 rounded-xl text-xs font-bold transition-all disabled:opacity-50"
-              title="重新載入雲端採購單"
+              onClick={async () => {
+                setIsRefreshing(true);
+                await refreshPurchaseOrders();
+                setIsRefreshing(false);
+              }}
+              disabled={isLoading || isRefreshing}
+              className="flex items-center gap-1.5 px-3 py-2 bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-xl text-xs font-bold transition-all disabled:opacity-50 cursor-pointer shadow-sm active:scale-95"
+              title="僅從雲端試算表重新整理採購訂單資料（極速刷新）"
             >
-              <RefreshCw className={cn("w-3.5 h-3.5 text-sky-400", isLoading && "animate-spin")} />
-              <span>重新同步</span>
+              <RefreshCw className={cn("w-3.5 h-3.5 text-sky-400", (isLoading || isRefreshing) && "animate-spin")} />
+              <span>{isRefreshing ? '正在整理...' : '重新整理採購單'}</span>
             </button>
           )}
 
@@ -1681,6 +1703,11 @@ export default function Purchases() {
                                 <td className="py-2.5 px-3">
                                   <div className="font-bold text-white">{it.name}</div>
                                   <div className="text-[10px] font-mono text-slate-500">{it.product_id}</div>
+                                  {it.product_id && (
+                                    <div className="mt-1">
+                                      <ProductSpecStockBadges productId={it.product_id} size="xs" />
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="py-2.5 px-2 text-slate-300">{it.specification || '-'}</td>
                                 <td className="py-2.5 px-2 text-center font-medium text-slate-300">{it.ordered_quantity}</td>
@@ -2524,19 +2551,23 @@ export default function Purchases() {
                                   <span className="text-[10px] text-slate-400 font-medium">可選規格:</span>
                                   {subSpecs.map(spec => {
                                     const specAdded = newPOItems.find(it => it.product_id === p.product_id && (it.specification || '').trim().toLowerCase() === spec.trim().toLowerCase());
+                                    const specStock = (stock || []).filter(s => String(s.product_id || '').toLowerCase() === String(p.product_id).toLowerCase() && isSpecificationMatch(s.specification, spec, p.name)).reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
                                     return (
                                       <button
                                         key={spec}
                                         type="button"
                                         onClick={() => handleAddProductToNewPO(p, 1, spec)}
-                                        className={`px-2 py-0.5 rounded text-[11px] font-bold border transition-colors flex items-center gap-1 cursor-pointer ${
+                                        className={`px-2 py-0.5 rounded text-[11px] font-bold border transition-colors flex items-center gap-1.5 cursor-pointer ${
                                           specAdded
                                             ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
                                             : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10 hover:text-white'
                                         }`}
                                       >
                                         <span>+ {spec}</span>
-                                        {specAdded && <span className="font-mono text-[10px]">({specAdded.ordered_quantity})</span>}
+                                        <span className={`text-[10px] font-mono px-1 rounded tabular-nums ${specStock > 0 ? 'text-sky-300 bg-sky-500/20 border border-sky-500/30' : 'text-slate-500 bg-white/5 border border-white/5'}`} title={`目前庫存: ${specStock}`}>
+                                          {specStock}
+                                        </span>
+                                        {specAdded && <span className="font-mono text-[10px] text-emerald-300">({specAdded.ordered_quantity})</span>}
                                       </button>
                                     );
                                   })}
@@ -3142,6 +3173,41 @@ export default function Purchases() {
                   </button>
                 </div>
 
+                {/* Batch Location Apply Toolbar */}
+                <div className="p-3 bg-gradient-to-r from-sky-950/40 via-indigo-950/30 to-purple-950/20 border border-sky-500/30 rounded-xl flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-2 text-xs font-bold text-sky-200">
+                    <Layers className="w-4 h-4 text-sky-400" />
+                    <span>入庫儲位一鍵批改：</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap flex-1 sm:justify-end">
+                    <div className="w-full sm:w-72">
+                      <StorageLocationSelector
+                        location={batchLocation}
+                        floor={batchFloor}
+                        area={batchArea}
+                        availableLocations={uniqueLocations}
+                        availableFloors={uniqueFloors}
+                        availableAreas={uniqueAreas}
+                        onChange={(fields) => {
+                          if (fields.location !== undefined) setBatchLocation(fields.location);
+                          if (fields.floor !== undefined) setBatchFloor(fields.floor);
+                          if (fields.area !== undefined) setBatchArea(fields.area);
+                        }}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleApplyBatchLocation}
+                      disabled={confirmItems.length === 0}
+                      className="px-3.5 py-1.5 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 font-black rounded-lg text-xs transition-all shadow-md shadow-sky-500/20 active:scale-95 flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                      title="將左側儲位一鍵套用至下方清單所有待入庫品項"
+                    >
+                      <Zap className="w-3.5 h-3.5 fill-current" />
+                      <span>一鍵套用至全部品項 ({confirmItems.length})</span>
+                    </button>
+                  </div>
+                </div>
+
                 <div className="overflow-x-auto border border-white/10 rounded-xl bg-black/20">
                   <table className="w-full text-left text-xs border-collapse">
                     <thead>
@@ -3206,6 +3272,12 @@ export default function Purchases() {
                                 }}
                                 placeholder="🔍 輸入文字搜尋系統商品綁定..."
                               />
+
+                              {item.product_id && (
+                                <div className="pt-0.5">
+                                  <ProductSpecStockBadges productId={item.product_id} size="xs" />
+                                </div>
+                              )}
                             </div>
                           </td>
 

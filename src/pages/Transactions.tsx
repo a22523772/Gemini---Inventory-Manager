@@ -19,9 +19,11 @@ export default function Transactions() {
   const { 
     transactions, products, vendors, transactionsPageState, 
     setTransactionsPageState, deleteTransaction, deleteTransactionGroup, 
-    editTransaction, fetchRemoteData, gasApiUrl, isLoading: storeIsLoading 
+    editTransaction, fetchRemoteData, gasApiUrl, isLoading: storeIsLoading,
+    refreshTransactions
   } = useStore();
   
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchParams] = useSearchParams();
   const [filterType, setFilterType] = useState(transactionsPageState.filterType || '');
   const [filterPlatform, setFilterPlatform] = useState(transactionsPageState.filterPlatform || '');
@@ -514,6 +516,22 @@ export default function Transactions() {
                 <span>依訂單分組</span>
               </button>
             </div>
+
+            {gasApiUrl && (
+              <button
+                onClick={async () => {
+                  setIsRefreshing(true);
+                  await refreshTransactions();
+                  setIsRefreshing(false);
+                }}
+                disabled={storeIsLoading || isRefreshing}
+                className="px-3 py-2 bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer shadow-sm disabled:opacity-50"
+                title="僅從雲端試算表重新整理交易紀錄（極速刷新）"
+              >
+                <RefreshCcw className={`w-3.5 h-3.5 text-sky-400 ${(storeIsLoading || isRefreshing) ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">{isRefreshing ? '整理中...' : '重新整理交易'}</span>
+              </button>
+            )}
 
             <button
               onClick={handleExportCSV}

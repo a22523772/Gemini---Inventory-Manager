@@ -1,16 +1,18 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useStore, getProductStatusInfo, ProductStatusInfo } from '../store/useStore';
-import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter, AlertCircle, Clock, ArrowUpDown, SlidersHorizontal, X, PauseCircle, PlayCircle, Layers, TableProperties, TrendingUp, ClipboardList, Ban, Calendar } from 'lucide-react';
+import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter, AlertCircle, Clock, ArrowUpDown, SlidersHorizontal, X, PauseCircle, PlayCircle, Layers, TableProperties, TrendingUp, ClipboardList, Ban, Calendar, RefreshCw } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { differenceInDays } from 'date-fns';
 import QuantityInput from '../components/QuantityInput';
 import ReplenishmentOverview from '../components/ReplenishmentOverview';
 import ProductCompactView from '../components/ProductCompactView';
+import ProductSpecStockBadges from '../components/ProductSpecStockBadges';
 
 type SortType = 'name_asc' | 'name_desc' | 'newest' | 'stock_low' | 'stock_high';
 
 export default function Products() {
-  const { products, stock, deleteProduct, showToast, vendors, lowStockAlertEnabled, expiryThreshold, productsPageState, setProductsPageState, toggleDiscontinued, toggleOutOfStock, setProductAvailability } = useStore();
+  const { products, stock, deleteProduct, showToast, vendors, lowStockAlertEnabled, expiryThreshold, productsPageState, setProductsPageState, toggleDiscontinued, toggleOutOfStock, setProductAvailability, refreshProducts } = useStore();
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<'list' | 'compact' | 'replenishment'>(
     (productsPageState.activeTab as any) || 
@@ -382,6 +384,20 @@ export default function Products() {
                   </select>
                   <ArrowUpDown className="w-3 h-3 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                 </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsRefreshing(true);
+                    await refreshProducts();
+                    setIsRefreshing(false);
+                  }}
+                  disabled={isRefreshing}
+                  className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-slate-200 border border-white/10 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 active:scale-95 shadow-sm"
+                  title="僅從雲端試算表重新整理商品資料"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${isRefreshing ? 'animate-spin' : ''}`} />
+                  <span className="hidden sm:inline">{isRefreshing ? '整理中...' : '重新整理'}</span>
+                </button>
                 <button 
                   onClick={() => setShowFilters(!showFilters)} 
                   className={`p-2 rounded-full transition-colors ${showFilters ? 'bg-white/20 text-white' : 'glass-panel text-slate-400 hover:text-white'}`}
@@ -506,6 +522,9 @@ export default function Products() {
                     <p className="text-xs text-[var(--color-text-dim)] font-mono mt-1.5">
                       {p.barcode ? `條碼: ${p.barcode}` : p.product_id}
                     </p>
+                    <div className="mt-2 pt-1 border-t border-white/5">
+                      <ProductSpecStockBadges product={p} size="xs" />
+                    </div>
                   </div>
                   <div className="flex flex-col items-end gap-2">
                     <div className={`${isExpired ? 'bg-red-500/20 text-red-400 border-red-500/30' : isExpiringSoon ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' : isLowStock ? 'bg-amber-500/20 text-amber-500 border-amber-500/30' : 'bg-[var(--color-glass-bg)] text-[var(--color-accent-blue)] border-[var(--color-glass-border)]'} px-2.5 py-1 rounded-lg text-sm font-bold border flex items-center`}>

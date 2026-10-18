@@ -10,6 +10,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 
 import { normalizePlatformName } from '../lib/platformUtils';
+import ProductSpecStockBadges from '../components/ProductSpecStockBadges';
 
 const SHORTCUT_OPTIONS = [
   { id: 'stock_in', label: '快速進貨', icon: ArrowDownToLine, to: '/manage?type=stock_in', colorClass: 'from-sky-500/10 to-sky-600/5 hover:from-sky-500/20 hover:to-sky-600/10 border-sky-500/20', iconBgClass: 'bg-sky-500/20 text-sky-400', smallTextClass: 'text-sky-400' },
@@ -75,8 +76,11 @@ export default function Home() {
     updateOnlineOrderStatus,
     deleteOnlineOrder,
     deduplicateOnlineOrders,
-    updateOnlineOrderItemSpecification
+    updateOnlineOrderItemSpecification,
+    refreshStock
   } = useStore();
+
+  const [isRefreshingStock, setIsRefreshingStock] = useState(false);
 
   const [activeShortcutIds, setActiveShortcutIds] = useState<string[]>(() => {
     try {
@@ -1041,12 +1045,17 @@ export default function Home() {
 
         <div className="flex items-center gap-2 shrink-0">
           <button 
-            onClick={fetchRemoteData} 
-            disabled={isLoading}
-            className="flex items-center gap-2 px-3.5 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs font-bold text-white transition-all active:scale-95 disabled:opacity-50"
+            onClick={async () => {
+              setIsRefreshingStock(true);
+              await refreshStock();
+              setIsRefreshingStock(false);
+            }} 
+            disabled={isLoading || isRefreshingStock}
+            className="flex items-center gap-2 px-3.5 py-2 bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-xl text-xs font-bold transition-all active:scale-95 disabled:opacity-50 cursor-pointer shadow-sm"
+            title="僅從雲端試算表更新庫存資料（極速刷新）"
           >
-            <RefreshCcw className={`w-4 h-4 text-sky-400 ${isLoading ? 'animate-spin' : ''}`} />
-            <span>重新整理資料</span>
+            <RefreshCcw className={`w-4 h-4 text-sky-400 ${(isLoading || isRefreshingStock) ? 'animate-spin' : ''}`} />
+            <span>{isRefreshingStock ? '正在整理庫存...' : '重新整理庫存'}</span>
           </button>
         </div>
       </div>
@@ -1308,10 +1317,13 @@ export default function Home() {
                 {lowStockProducts.slice(0, 6).map(p => {
                   const currentQty = productTotalStockMap.get(p.product_id) || 0;
                   return (
-                    <div key={p.product_id} className="p-2.5 bg-black/30 border border-amber-500/20 rounded-xl flex items-center justify-between text-xs">
-                      <div className="min-w-0 pr-2">
+                    <div key={p.product_id} className="p-2.5 bg-black/30 border border-amber-500/20 rounded-xl flex items-center justify-between text-xs gap-2">
+                      <div className="min-w-0 pr-2 flex-1">
                         <p className="font-bold text-white truncate">{p.name}</p>
                         <p className="text-[10px] text-slate-400 font-mono">ID: {p.product_id}</p>
+                        <div className="mt-1">
+                          <ProductSpecStockBadges product={p} size="xs" />
+                        </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <span className="font-black text-amber-400 font-mono px-2 py-0.5 bg-amber-500/10 rounded border border-amber-500/30">
@@ -1977,6 +1989,11 @@ export default function Home() {
                                             </>
                                           )}
                                         </div>
+                                        {sysProd && (
+                                          <div className="pt-1">
+                                            <ProductSpecStockBadges product={sysProd} size="xs" />
+                                          </div>
+                                        )}
                                       </div>
                                       <div className="text-right shrink-0 font-mono">
                                         <p className="text-slate-400 text-xs">數量: <strong className="text-white font-black">{item.quantity}</strong></p>
@@ -2195,6 +2212,11 @@ export default function Home() {
                                       {item.specification}
                                     </span>
                                   </div>
+                                  {item.product_id && (
+                                    <div className="mt-1">
+                                      <ProductSpecStockBadges productId={item.product_id} size="xs" />
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="p-3">
                                   <span className={`font-medium ${item.is_non_system ? 'text-amber-300/80 italic text-[11px]' : 'text-slate-300'}`}>

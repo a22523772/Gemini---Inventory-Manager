@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore, getProductSpecifications, isSpecificationMatch, getProductStatusInfo } from '../store/useStore';
 import { Save, Plus, Trash2, Search, X, ScanBarcode, Minus, ShoppingCart, Filter, AlertTriangle } from 'lucide-react';
 import QuantityInput from './QuantityInput';
+import ProductSpecStockBadges from './ProductSpecStockBadges';
 
 interface CartItem {
   id: string; // unique item id for the cart
@@ -521,6 +522,9 @@ export default function OutboundCart() {
                                    )}
                                  </div>
                                  <div className="text-xs text-white/40 tracking-wider truncate mt-1">{p.product_id}</div>
+                                 <div className="mt-1">
+                                   <ProductSpecStockBadges product={p} size="xs" />
+                                 </div>
                                </div>
                                {isBlocked ? (
                                  <span className="text-[10px] text-rose-400 font-bold px-2 py-1 rounded bg-rose-500/10 border border-rose-500/20 shrink-0">
@@ -543,6 +547,9 @@ export default function OutboundCart() {
                          <div className="text-xs text-[var(--color-accent-blue)] font-bold uppercase mb-1">已選商品</div>
                          <div className="text-white font-bold text-sm">{selectedProduct.name}</div>
                          <div className="text-xs text-white/40">{selectedProduct.product_id}</div>
+                         <div className="mt-1.5">
+                           <ProductSpecStockBadges product={selectedProduct} size="xs" showTotalSummary />
+                         </div>
                        </div>
                        <button onClick={() => setSelectedProduct(null)} className="text-xs text-white/40 underline py-1 px-2 border border-white/10 rounded hover:bg-white/5">
                          重新選擇

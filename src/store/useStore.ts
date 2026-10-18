@@ -1478,6 +1478,12 @@ interface AppState {
   fetchRemoteData: () => Promise<void>;
   fetchOnlineOrders: () => Promise<void>;
   fetchPurchaseOrders: () => Promise<void>;
+  refreshStock: () => Promise<boolean>;
+  refreshProducts: () => Promise<boolean>;
+  refreshPurchaseOrders: () => Promise<boolean>;
+  refreshOnlineOrders: () => Promise<boolean>;
+  refreshTransactions: () => Promise<boolean>;
+  refreshVendors: () => Promise<boolean>;
   addPurchaseOrder: (po: Omit<PurchaseOrder, 'created_at' | 'updated_at'>) => Promise<void>;
   updatePurchaseOrder: (poId: string, updated: Partial<PurchaseOrder>, options?: { skipOverwriteTransactions?: boolean }) => Promise<void>;
   deletePurchaseOrder: (poId: string) => Promise<void>;
@@ -2805,6 +2811,413 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e: any) {
       console.error("fetchOnlineOrders error:", e);
       showToast(`❌ 讀取網路訂單失敗: ${e.message}`);
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  refreshProducts: async () => {
+    const { gasApiUrl, showToast } = get();
+    if (!gasApiUrl || !gasApiUrl.trim().startsWith('http')) {
+      showToast("ℹ️ 尚未設定 Google Apps Script 網址");
+      return false;
+    }
+    set({ isLoading: true });
+    try {
+      const cleanUrl = gasApiUrl.trim();
+      const rP = await fetch(`${cleanUrl}?action=getProducts`);
+      if (!rP.ok) throw new Error(`HTTP ${rP.status}`);
+      const dP = await rP.json();
+      const normalizedList = (dP || []).map((item: any) => normalizeKeys(item));
+      
+      const currentProducts = get().products;
+      const currentDiscontinuedMap = new Map<string, boolean>();
+      const currentOutOfStockMap = new Map<string, boolean>();
+      currentProducts.forEach(p => {
+        if (p.product_id) {
+          if (p.is_discontinued) currentDiscontinuedMap.set(p.product_id, true);
+          if (p.is_out_of_stock) currentOutOfStockMap.set(p.product_id, true);
+        }
+      });
+
+      const pendingQueue = get().syncQueue || [];
+      const pendingDiscontinuedMap = new Map<string, boolean>();
+      const pendingOutOfStockMap = new Map<string, boolean>();
+      pendingQueue.forEach(q => {
+        if (q.action === 'editProduct' && q.payload && q.payload.product_id) {
+          const pid = String(q.payload.product_id);
+          if (q.payload.is_discontinued !== undefined) {
+            pendingDiscontinuedMap.set(pid, Boolean(q.payload.is_discontinued));
+          }
+          if (q.payload.is_out_of_stock !== undefined) {
+            pendingOutOfStockMap.set(pid, Boolean(q.payload.is_out_of_stock));
+          }
+        }
+      });
+
+      const productMap: Record<string, any> = {};
+      normalizedList.filter((p: any) => p && p.product_id).forEach((p: any) => {
+        const id = String(p.product_id).trim();
+
+        let isDiscontinued = false;
+        if (pendingDiscontinuedMap.has(id)) {
+          isDiscontinued = pendingDiscontinuedMap.get(id)!;
+        } else {
+          const rawDisc = p.is_discontinued !== undefined ? p.is_discontinued : (p['停產'] !== undefined ? p['停產'] : p['暫時停產']);
+          if (rawDisc !== undefined && rawDisc !== null && String(rawDisc).trim() !== '') {
+            const strVal = String(rawDisc).trim().toUpperCase();
+            isDiscontinued = (strVal === 'TRUE' || strVal === '1' || strVal === 'YES' || rawDisc === true);
+          } else if (currentDiscontinuedMap.has(id)) {
+            isDiscontinued = true;
+          }
+        }
+
+        let isOutOfStock = false;
+        if (pendingOutOfStockMap.has(id)) {
+          isOutOfStock = pendingOutOfStockMap.get(id)!;
+        } else {
+          const rawOos = p.is_out_of_stock !== undefined ? p.is_out_of_stock : (p['缺貨'] !== undefined ? p['缺貨'] : p['暫時缺貨']);
+          if (rawOos !== undefined && rawOos !== null && String(rawOos).trim() !== '') {
+            const strVal = String(rawOos).trim().toUpperCase();
+            isOutOfStock = (strVal === 'TRUE' || strVal === '1' || strVal === 'YES' || rawOos === true);
+          } else if (currentOutOfStockMap.has(id)) {
+            isOutOfStock = true;
+          }
+        }
+
+        const rawStatusStr = String(p.status || p['狀態'] || '').trim();
+        if (rawStatusStr.includes('停產') || rawStatusStr.includes('缺貨')) isOutOfStock = true;
+
+        const isReallyOutOfStock = isOutOfStock || isDiscontinued;
+        const expectedDateVal = p.expected_restock_date ?? p['預計進貨日'] ?? p['預計到貨日'] ?? '';
+
+        const cleanP = {
+          ...p,
+          product_id: id,
+          barcode: p.barcode ? String(p.barcode).trim() : '',
+          name: p.name ? String(p.name).trim() : '',
+          brand: p.brand ? String(p.brand).trim() : '',
+          category: p.category ? String(p.category).trim() : '',
+          unit: p.unit ? String(p.unit).trim() : '',
+          specification: p.specification ? String(p.specification).trim() : '',
+          has_expiry: String(p.has_expiry).toUpperCase() === 'TRUE',
+          is_discontinued: false,
+          is_out_of_stock: isReallyOutOfStock,
+          expected_restock_date: expectedDateVal ? String(expectedDateVal).trim() : undefined,
+          status: isReallyOutOfStock ? (expectedDateVal ? '暫時缺貨' : '停產') : '正常',
+          cost_price: Number(p.cost_price) || 0,
+          min_stock: (() => {
+            const raw = p.min_stock ?? p['安全庫存'] ?? p['安全庫存量'] ?? p['最低庫存'] ?? p['最低庫存量'] ?? p['警示庫存'] ?? p.minstock;
+            return (raw !== undefined && raw !== null && raw !== '' && !isNaN(Number(raw))) ? Number(raw) : undefined;
+          })()
+        };
+        if (!productMap[id]) {
+          productMap[id] = cleanP;
+        } else {
+          const s1 = productMap[id].specification || '';
+          const s2 = cleanP.specification || '';
+          const combinedSpecs = Array.from(new Set(
+            [s1, s2]
+              .flatMap(spec => spec ? spec.split(/[,\/，\s、]+/).map((s: any) => s.trim()).filter(Boolean) : [])
+          )).join('、');
+          productMap[id].specification = combinedSpecs;
+          if (cleanP.is_discontinued !== undefined) productMap[id].is_discontinued = cleanP.is_discontinued;
+          if (cleanP.is_out_of_stock !== undefined) productMap[id].is_out_of_stock = cleanP.is_out_of_stock;
+          if (cleanP.expected_restock_date !== undefined) productMap[id].expected_restock_date = cleanP.expected_restock_date;
+          if (cleanP.status) productMap[id].status = cleanP.status;
+        }
+      });
+
+      const normalizedProducts = Object.values(productMap);
+      await dbProducts.clear();
+      for (const p of normalizedProducts) {
+        await dbProducts.setItem(p.product_id, p);
+      }
+      set({ products: normalizedProducts });
+      showToast(`✅ 商品資料庫已重新整理！(共 ${normalizedProducts.length} 筆商品)`);
+      return true;
+    } catch (e: any) {
+      console.error("refreshProducts error:", e);
+      showToast(`❌ 重新整理商品失敗: ${e.message}`);
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  refreshStock: async () => {
+    const { gasApiUrl, showToast } = get();
+    if (!gasApiUrl || !gasApiUrl.trim().startsWith('http')) {
+      showToast("ℹ️ 尚未設定 Google Apps Script 網址");
+      return false;
+    }
+    set({ isLoading: true });
+    try {
+      const cleanUrl = gasApiUrl.trim();
+      const rS = await fetch(`${cleanUrl}?action=getStock`);
+      if (!rS.ok) throw new Error(`HTTP ${rS.status}`);
+      const dS = await rS.json();
+      let validS: Stock[] = (dS || []).map((item: any) => normalizeKeys(item))
+        .filter((s: any) => s && (s.stock_id || s.product_id))
+        .map((s: any) => {
+          const generatedId = String(s.stock_id || `${s.product_id}_${s.location || '倉庫'}_${s.floor || '1F'}_${s.area || 'A區'}_${s.expiry_date || ''}_${s.specification || ''}`).replace(/_+$/, '').trim();
+          return {
+            ...s,
+            stock_id: generatedId,
+            product_id: s.product_id ? String(s.product_id).trim() : '',
+            quantity: Number(s.quantity) || 0
+          };
+        });
+
+      const currentQueue = get().syncQueue || [];
+      const pendingStockOuts = currentQueue.filter(q => q.action === 'stockOut' && q.payload);
+      for (const item of pendingStockOuts) {
+        const p = item.payload;
+        const qtyToDeduct = Number(p.quantity) || 0;
+        const sId = p.stock_id ? String(p.stock_id).trim() : '';
+        const pId = p.product_id ? String(p.product_id).trim().toLowerCase() : '';
+
+        let rem = qtyToDeduct;
+        if (sId) {
+          const idx = validS.findIndex(s => s.stock_id === sId);
+          if (idx !== -1) {
+            const d = Math.min(validS[idx].quantity, rem);
+            validS[idx].quantity -= d;
+            rem -= d;
+            if (validS[idx].quantity <= 0) {
+              validS.splice(idx, 1);
+            }
+          }
+        }
+        const spec = p.specification ? String(p.specification).trim() : '';
+        if (rem > 0 && pId) {
+          for (let i = 0; i < validS.length && rem > 0; i++) {
+            if (String(validS[i].product_id).trim().toLowerCase() === pId) {
+              if (spec && !isSpecificationMatch(validS[i].specification, spec)) {
+                continue;
+              }
+              const d = Math.min(validS[i].quantity, rem);
+              validS[i].quantity -= d;
+              rem -= d;
+              if (validS[i].quantity <= 0) {
+                validS.splice(i, 1);
+                i--;
+              }
+            }
+          }
+        }
+      }
+
+      await dbStock.clear();
+      for (const s of validS) {
+        await dbStock.setItem(s.stock_id, s);
+      }
+      set({ stock: validS });
+      showToast(`✅ 庫存資料已重新整理！(共 ${validS.length} 筆庫存紀錄)`);
+      return true;
+    } catch (e: any) {
+      console.error("refreshStock error:", e);
+      showToast(`❌ 重新整理庫存失敗: ${e.message}`);
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  refreshPurchaseOrders: async () => {
+    const { gasApiUrl, showToast, purchaseOrders, transactions } = get();
+    if (!gasApiUrl || !gasApiUrl.trim().startsWith('http')) {
+      showToast("ℹ️ 尚未設定 Google Apps Script 網址");
+      return false;
+    }
+    set({ isLoading: true });
+    try {
+      const cleanUrl = gasApiUrl.trim();
+      const res = await fetch(`${cleanUrl}?action=getPurchaseOrders`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        const mergedPOs = mergeAndProtectPurchaseOrders(data, purchaseOrders);
+        const reconciledPOs = reconcilePurchaseOrdersWithTransactions(mergedPOs, transactions || []);
+        await dbPurchaseOrders.clear();
+        for (const po of reconciledPOs) {
+          if (po && po.po_id) {
+            await dbPurchaseOrders.setItem(po.po_id, po);
+          }
+        }
+        set({ purchaseOrders: reconciledPOs });
+        showToast(`✅ 採購訂單已重新整理！(共 ${reconciledPOs.length} 筆採購單)`);
+        return true;
+      }
+      return false;
+    } catch (e: any) {
+      console.error("refreshPurchaseOrders error:", e);
+      showToast(`❌ 重新整理採購單失敗: ${e.message}`);
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  refreshOnlineOrders: async () => {
+    const { fetchOnlineOrders } = get();
+    await fetchOnlineOrders();
+    return true;
+  },
+
+  refreshTransactions: async () => {
+    const { gasApiUrl, showToast, products } = get();
+    if (!gasApiUrl || !gasApiUrl.trim().startsWith('http')) {
+      showToast("ℹ️ 尚未設定 Google Apps Script 網址");
+      return false;
+    }
+    set({ isLoading: true });
+    try {
+      const cleanUrl = gasApiUrl.trim();
+      const rT = await fetch(`${cleanUrl}?action=getTransactions`);
+      if (!rT.ok) throw new Error(`HTTP ${rT.status}`);
+      const dT = await rT.json();
+      const prodCostMap = new Map<string, number>();
+      const prodNameMap = new Map<string, string>();
+      products.forEach(p => {
+        if (p.product_id) {
+          prodCostMap.set(p.product_id, Number(p.cost_price) || 0);
+          prodNameMap.set(String(p.product_id).toLowerCase().trim(), p.name);
+        }
+      });
+
+      const seenTxKeys = new Set<string>();
+      const validT: any[] = [];
+
+      for (let idx = 0; idx < (dT || []).length; idx++) {
+        const item = dT[idx];
+        const norm = normalizeKeys(item);
+        const txId = norm.transaction_id ? String(norm.transaction_id).trim() : `TX_${Date.now()}_${idx}`;
+        const id = (norm.id && String(norm.id).trim() !== '') ? `${String(norm.id).trim()}` : `${txId}_${norm.product_id || ''}_${idx}`;
+        const pid = norm.product_id ? String(norm.product_id).trim() : '';
+        const spec = norm.specification ? String(norm.specification).trim() : '';
+        const rawDate = norm.date || norm['日期'] || norm['異動時間'] || norm['時間'] || norm['date'] || '';
+        let cleanDate = String(rawDate || '').trim();
+        if (cleanDate) {
+          const parsed = parseToDate(cleanDate);
+          if (parsed) {
+            cleanDate = format(parsed, 'yyyy/M/d  HH:mm:ss');
+          }
+        }
+
+        const dedupeKey = (norm.id && String(norm.id).trim() !== '') 
+          ? String(norm.id).trim() 
+          : `${txId}___${pid}___${spec}___${norm.quantity || ''}___${norm.location || ''}___${norm.floor || ''}___${norm.area || ''}___${cleanDate}___${norm.type || ''}`;
+        
+        if (seenTxKeys.has(dedupeKey)) continue;
+        seenTxKeys.add(dedupeKey);
+
+        const online_order_id = norm.online_order_id || norm['網路訂單編號'] || norm.order_id || '';
+        let poId = norm.po_id || norm['採購單號'] || norm['採購單'] || norm['PO_ID'] || '';
+        if (!poId && txId.startsWith('PO_')) {
+          const parts = txId.split('_');
+          poId = parts.length >= 3 ? `${parts[0]}_${parts[1]}_${parts[2]}` : txId;
+        }
+        const platformVal = norm.platform || norm['平台'] || norm['銷售平台'] || (norm.type && !['stock_in', 'stock_out', 'adjust'].includes(norm.type) ? norm.type.replace(/^stock_out\s*/, '') : '') || '';
+        const cleanPid = pid.toLowerCase().trim();
+        const product_name = (
+          norm.product_name ||
+          norm.name ||
+          norm['商品名稱'] ||
+          norm['名稱'] ||
+          (cleanPid ? prodNameMap.get(cleanPid) : '') ||
+          pid ||
+          ''
+        ).trim();
+
+        const priceVal = Number(norm.price || norm['金額'] || norm['售價']) || 0;
+        let costPriceVal = 0;
+        const rawCost = norm.cost_price || norm['進價'] || norm['成本'] || norm['進貨成本'] || norm['成本價'];
+        if (rawCost !== undefined && rawCost !== null && rawCost !== '' && !String(rawCost).includes('1899')) {
+          const parsed = Number(rawCost);
+          if (!isNaN(parsed)) costPriceVal = parsed;
+        }
+        if (costPriceVal === 0 && pid && prodCostMap.has(pid)) {
+          costPriceVal = prodCostMap.get(pid) || 0;
+        }
+
+        validT.push({
+          ...norm,
+          id,
+          transaction_id: txId,
+          po_id: String(poId).trim(),
+          online_order_id: String(online_order_id).trim(),
+          platform: String(platformVal).trim(),
+          product_id: pid,
+          product_name: product_name,
+          name: product_name,
+          type: norm.type ? String(norm.type).trim() : 'stock_out',
+          quantity: Number(norm.quantity) || 0,
+          cost_price: costPriceVal,
+          price: priceVal,
+          date: cleanDate
+        });
+      }
+
+      await dbTransactions.clear();
+      const batchT = 150;
+      for (let i = 0; i < validT.length; i += batchT) {
+        const chunk = validT.slice(i, i + batchT);
+        await Promise.all(chunk.map(t => dbTransactions.setItem(t.id, t)));
+      }
+      set({ transactions: validT.sort((a: any, b: any) => getTxTimestamp(b.date) - getTxTimestamp(a.date)) });
+      showToast(`✅ 交易紀錄已重新整理！(共 ${validT.length} 筆明細)`);
+      return true;
+    } catch (e: any) {
+      console.error("refreshTransactions error:", e);
+      showToast(`❌ 重新整理交易紀錄失敗: ${e.message}`);
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  refreshVendors: async () => {
+    const { gasApiUrl, showToast } = get();
+    if (!gasApiUrl || !gasApiUrl.trim().startsWith('http')) {
+      showToast("ℹ️ 尚未設定 Google Apps Script 網址");
+      return false;
+    }
+    set({ isLoading: true });
+    try {
+      const cleanUrl = gasApiUrl.trim();
+      const rV = await fetch(`${cleanUrl}?action=getVendors`);
+      if (!rV.ok) throw new Error(`HTTP ${rV.status}`);
+      const dV = await rV.json();
+      const validV = (dV || []).map((item: any) => normalizeKeys(item))
+        .filter((v: any) => v && (v.vendor_id || v.vendor_name || v.name))
+        .map((v: any) => {
+          const vId = String(v.vendor_id || v.vendor_name || v.name || '').trim();
+          const vName = String(v.vendor_name || v.name || v.vendor_id || '').trim();
+          return {
+            ...v,
+            vendor_id: vId,
+            vendor_name: vName,
+            name: vName,
+            contact: String(v.contact || '').trim(),
+            phone: String(v.phone || '').trim(),
+            address: String(v.address || '').trim(),
+            note: String(v.note || '').trim(),
+            tax_id: String(v.tax_id || '').trim(),
+          };
+        })
+        .filter((v: any) => v.vendor_id && v.vendor_name);
+      await dbVendors.clear();
+      for (const v of validV) {
+        await dbVendors.setItem(v.vendor_id, v);
+      }
+      set({ vendors: validV });
+      showToast(`✅ 廠商資料已重新整理！(共 ${validV.length} 家廠商)`);
+      return true;
+    } catch (e: any) {
+      console.error("refreshVendors error:", e);
+      showToast(`❌ 重新整理廠商失敗: ${e.message}`);
+      return false;
     } finally {
       set({ isLoading: false });
     }

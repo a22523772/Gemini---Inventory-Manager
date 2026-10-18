@@ -1,10 +1,11 @@
 import React, { useState, useMemo } from 'react';
 import { Product, Vendor } from '../lib/db';
-import { useStore, getOnOrderStockQty, parseSpecifications, getProductStatusInfo } from '../store/useStore';
+import { useStore, getOnOrderStockQty, parseSpecifications, getProductStatusInfo, isSpecificationMatch } from '../store/useStore';
 import { 
   Search, X, Plus, Minus, Check, Package, 
   Layers, Building2, DollarSign, Filter, Sparkles, AlertCircle, Truck, Tag, AlertTriangle 
 } from 'lucide-react';
+import ProductSpecStockBadges from './ProductSpecStockBadges';
 
 interface ProductCatalogPickerModalProps {
   isOpen: boolean;
@@ -310,6 +311,9 @@ export default function ProductCatalogPickerModal({
                           </span>
                         )}
                       </div>
+                      <div className="pt-1">
+                        <ProductSpecStockBadges product={p} size="xs" />
+                      </div>
                     </div>
 
                     {/* Stock, On-Order & Cost info */}
@@ -403,11 +407,21 @@ export default function ProductCatalogPickerModal({
                               .filter(it => it.product_id === p.product_id && (it.specification || '').trim().toLowerCase() === spec.trim().toLowerCase())
                               .reduce((sum, it) => sum + (Number(it.ordered_quantity) || 0), 0);
 
+                            const currentSpecStock = (useStore.getState().stock || []).filter(s => 
+                              String(s.product_id || '').toLowerCase() === String(p.product_id).toLowerCase() && 
+                              isSpecificationMatch(s.specification, spec, p.name)
+                            ).reduce((acc, s) => acc + (Number(s.quantity) || 0), 0);
+
                             return (
                               <div key={spec} className="flex items-center justify-between bg-white/[0.04] border border-white/5 rounded-lg px-2 py-1 gap-1">
-                                <span className="text-xs text-slate-200 font-medium truncate max-w-[90px]" title={spec}>
-                                  {spec}
-                                </span>
+                                <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-1">
+                                  <span className="text-xs text-slate-200 font-medium truncate max-w-[85px]" title={spec}>
+                                    {spec}
+                                  </span>
+                                  <span className={`text-[10px] font-mono px-1 rounded tabular-nums ${currentSpecStock > 0 ? 'text-sky-300 bg-sky-500/10 border border-sky-500/20' : 'text-slate-500 bg-white/5 border border-white/5'}`} title={`現有庫存: ${currentSpecStock}`}>
+                                    {currentSpecStock}
+                                  </span>
+                                </div>
                                 {isBlocked ? (
                                   <span className="text-[10px] text-rose-400 font-bold">不可採購</span>
                                 ) : specQty > 0 ? (

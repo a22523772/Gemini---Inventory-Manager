@@ -16,6 +16,7 @@ import {
   AlertCircle,
   ExternalLink
 } from 'lucide-react';
+import ProductSpecStockBadges from '../components/ProductSpecStockBadges';
 
 export default function ScannerPage() {
   const navigate = useNavigate();
@@ -658,6 +659,9 @@ export default function ScannerPage() {
                       <p className="text-[11px] text-white/50 font-mono mt-0.5 truncate">
                         ID: {p.product_id} {p.barcode ? `| 條碼: ${p.barcode}` : ''}
                       </p>
+                      <div className="mt-1">
+                        <ProductSpecStockBadges product={p} size="xs" />
+                      </div>
                     </div>
                     <span className="text-[11px] px-2 py-0.5 bg-emerald-500/10 text-emerald-400 rounded-md font-semibold shrink-0">
                       選擇
