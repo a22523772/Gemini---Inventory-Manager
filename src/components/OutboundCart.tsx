@@ -513,7 +513,7 @@ export default function OutboundCart() {
                               }`}
                             >
                                <div className="overflow-hidden pr-2">
-                                 <div className="font-bold text-white text-sm truncate flex items-center gap-2">
+                                 <div className="font-bold text-white text-sm break-words leading-snug flex items-center gap-2 flex-wrap">
                                    <span>{p.name}</span>
                                    {isBlocked && (
                                      <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">

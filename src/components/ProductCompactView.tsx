@@ -436,7 +436,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
               <select
                 value={selectedVendor}
                 onChange={(e) => setSelectedVendor(e.target.value)}
-                className="bg-transparent text-xs font-bold text-sky-300 outline-none cursor-pointer max-w-[160px] truncate"
+                className="bg-transparent text-xs font-bold text-sky-300 outline-none cursor-pointer max-w-[220px] truncate"
               >
                 <option value="ALL" className="bg-slate-900 text-white">全部供應商 ({products.length})</option>
                 {vendorOptions.map(v => (
@@ -455,7 +455,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                 <select
                   value={selectedCategory}
                   onChange={(e) => setSelectedCategory(e.target.value)}
-                  className="bg-transparent text-xs font-bold text-indigo-300 outline-none cursor-pointer max-w-[130px] truncate"
+                  className="bg-transparent text-xs font-bold text-indigo-300 outline-none cursor-pointer max-w-[180px] truncate"
                 >
                   <option value="ALL" className="bg-slate-900 text-white">全部分類</option>
                   {categoryOptions.map(c => (
@@ -657,7 +657,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                       <td className="p-3">
                         <span className="text-slate-300 font-medium flex items-center gap-1">
                           <Building2 className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                          <span className="truncate max-w-[120px]" title={item.vendor_name}>
+                          <span className="truncate max-w-[180px]" title={item.vendor_name}>
                             {item.vendor_name}
                           </span>
                         </span>

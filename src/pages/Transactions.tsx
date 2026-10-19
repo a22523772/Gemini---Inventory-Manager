@@ -1074,7 +1074,7 @@ export default function Transactions() {
                         <div key={t.id || t.transaction_id || i} className="flex flex-col border-b border-white/5 pb-2.5 mb-2 last:border-0 last:mb-0 last:pb-0">
                           <div className="flex justify-between items-start gap-2">
                             <div className="min-w-0 flex-1">
-                              <span className="block truncate text-white font-bold text-sm">{getTxProductName(t)}</span>
+                              <span className="block break-words leading-snug text-white font-bold text-sm">{getTxProductName(t)}</span>
                               <div className="flex flex-wrap items-center gap-1 mt-1 text-[10px] text-[var(--color-text-dim)]">
                                 {isForcedTx(t) && (
                                   <span className="bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded font-bold border border-red-500/30">

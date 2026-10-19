@@ -83,7 +83,26 @@ export default function EditPurchaseOrderModal({
     setStatus(totalReceived > 0 ? 'partial' : 'pending');
   };
 
-  const handleAddItem = (prod: Product) => {
+  const handleAddItem = (prod: Product, specification?: string) => {
+    // If a specific specification is selected from the combobox
+    if (specification) {
+      setItems(prev => [
+        ...prev,
+        {
+          item_id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          product_id: prod.product_id,
+          product_name: prod.name,
+          name: prod.name,
+          specification: specification,
+          ordered_quantity: 1,
+          received_quantity: 0,
+          cost_price: prod.cost_price || 0,
+          note: ''
+        }
+      ]);
+      return;
+    }
+
     const subSpecs = parseSpecifications(prod.specification);
     if (subSpecs.length > 1) {
       const newItems: PurchaseOrderItem[] = subSpecs.map((spec, sIdx) => ({
@@ -169,7 +188,7 @@ export default function EditPurchaseOrderModal({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
-      <div className="bg-[#0f172a] border border-white/15 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-[#0f172a] border border-white/15 rounded-2xl w-full max-w-6xl 2xl:max-w-7xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-white/10 bg-white/[0.02] flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -351,8 +370,8 @@ export default function EditPurchaseOrderModal({
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-white/5 text-slate-400 font-bold border-b border-white/10">
-                    <th className="py-2.5 px-3">商品名稱</th>
-                    <th className="py-2.5 px-2">規格</th>
+                    <th className="py-2.5 px-3 min-w-[280px]">商品名稱</th>
+                    <th className="py-2.5 px-2 min-w-[150px]">規格</th>
                     <th className="py-2.5 px-2 w-24 text-center">訂購量</th>
                     <th className="py-2.5 px-2 w-24 text-center">已到貨量</th>
                     <th className="py-2.5 px-2 w-24 text-center">單價</th>
@@ -363,15 +382,15 @@ export default function EditPurchaseOrderModal({
                 <tbody className="divide-y divide-white/5">
                   {items.map((item, idx) => (
                     <tr key={item.item_id || item.product_id || idx} className="hover:bg-white/[0.02]">
-                      <td className="py-2 px-3">
-                        <span className="font-bold text-white block truncate max-w-[180px]">
+                      <td className="py-2 px-3 min-w-[280px]">
+                        <span className="font-bold text-white block break-words leading-snug" title={item.name || item.product_name}>
                           {item.name || item.product_name}
                         </span>
-                        <span className="font-mono text-[10px] text-slate-500">
+                        <span className="font-mono text-[10px] text-slate-500 block mt-0.5">
                           {item.product_id}
                         </span>
                       </td>
-                      <td className="py-2 px-2">
+                      <td className="py-2 px-2 min-w-[150px]">
                         {(() => {
                           const catalogProd = products.find(p => p.product_id === item.product_id || (p.name && p.name.trim() === (item.name || item.product_name || '').trim()));
                           const isSpecRequired = Boolean(catalogProd?.specification && catalogProd.specification.trim());

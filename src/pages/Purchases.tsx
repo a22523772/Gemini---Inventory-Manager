@@ -1685,8 +1685,8 @@ export default function Purchases() {
                       <table className="w-full text-left text-xs border-collapse">
                         <thead>
                           <tr className="border-b border-white/10 text-slate-400 font-bold bg-white/[0.02]">
-                            <th className="py-2.5 px-3">商品品名 / 代號</th>
-                            <th className="py-2.5 px-2">規格</th>
+                            <th className="py-2.5 px-3 min-w-[260px]">商品品名 / 代號</th>
+                            <th className="py-2.5 px-2 min-w-[120px]">規格</th>
                             <th className="py-2.5 px-2 text-center">訂購數量</th>
                             <th className="py-2.5 px-2 text-center">已到貨</th>
                             <th className="py-2.5 px-2 text-center text-sky-400 font-bold">在途中</th>
@@ -1700,9 +1700,9 @@ export default function Purchases() {
                             const itemRemaining = it.remaining_quantity;
                             return (
                               <tr key={idx} className="hover:bg-white/[0.02]">
-                                <td className="py-2.5 px-3">
-                                  <div className="font-bold text-white">{it.name}</div>
-                                  <div className="text-[10px] font-mono text-slate-500">{it.product_id}</div>
+                                <td className="py-2.5 px-3 min-w-[260px]">
+                                  <div className="font-bold text-white break-words leading-snug" title={it.name}>{it.name}</div>
+                                  <div className="text-[10px] font-mono text-slate-500 mt-0.5">{it.product_id}</div>
                                   {it.product_id && (
                                     <div className="mt-1">
                                       <ProductSpecStockBadges productId={it.product_id} size="xs" />
@@ -2898,7 +2898,7 @@ export default function Purchases() {
       {/* ========================================================================= */}
       {showConfirmPanel && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-3 sm:p-6 overflow-y-auto animate-in fade-in duration-200">
-          <div className="w-full max-w-5xl bg-[#0f172a] border border-white/15 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+          <div className="w-full max-w-6xl 2xl:max-w-7xl bg-[#0f172a] border border-white/15 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
             {/* Panel Header */}
             <div className="p-4 sm:p-5 bg-gradient-to-r from-sky-950/60 to-indigo-950/40 border-b border-white/10 flex items-center justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-3">
@@ -3488,7 +3488,7 @@ export default function Purchases() {
       {/* Image Preview Large Modal */}
       {previewImage && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[110] flex items-center justify-center p-4">
-          <div className="relative max-w-4xl max-h-[90vh] bg-[#0f172a] rounded-2xl overflow-hidden border border-white/20 shadow-2xl flex flex-col">
+          <div className="relative max-w-5xl 2xl:max-w-6xl max-h-[90vh] bg-[#0f172a] rounded-2xl overflow-hidden border border-white/20 shadow-2xl flex flex-col">
             <div className="flex items-center justify-between p-3 bg-black/50 border-b border-white/10">
               <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
                 <Camera className="w-4 h-4 text-sky-400" />

@@ -120,7 +120,7 @@ export default function ProductCatalogPickerModal({
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[110] flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-150">
-      <div className="w-full max-w-4xl bg-slate-900 border border-white/15 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="w-full max-w-6xl 2xl:max-w-7xl bg-slate-900 border border-white/15 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border-b border-white/10 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -415,7 +415,7 @@ export default function ProductCatalogPickerModal({
                             return (
                               <div key={spec} className="flex items-center justify-between bg-white/[0.04] border border-white/5 rounded-lg px-2 py-1 gap-1">
                                 <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-1">
-                                  <span className="text-xs text-slate-200 font-medium truncate max-w-[85px]" title={spec}>
+                                  <span className="text-xs text-slate-200 font-medium break-words max-w-[140px]" title={spec}>
                                     {spec}
                                   </span>
                                   <span className={`text-[10px] font-mono px-1 rounded tabular-nums ${currentSpecStock > 0 ? 'text-sky-300 bg-sky-500/10 border border-sky-500/20' : 'text-slate-500 bg-white/5 border border-white/5'}`} title={`現有庫存: ${currentSpecStock}`}>

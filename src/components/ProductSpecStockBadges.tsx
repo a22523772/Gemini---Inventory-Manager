@@ -140,9 +140,24 @@ export default function ProductSpecStockBadges({
   const breakdown = computeProductSpecBreakdown(targetProduct, stock);
   if (breakdown.length === 0) return null;
 
+  // Requirement 3: 只有單一規格的商品，不用展開顯示規格。
+  // 規則：僅有設定為「單一規格」、空白或「預設」時隱藏；其他自訂單規格仍顯示。
+  const trimmedSpec = (breakdown[0].spec || '').trim().toLowerCase();
+  const isDefaultSingleSpec =
+    breakdown.length === 1 &&
+    ['單一規格', '單一', '預設', '', 'default', 'single'].includes(trimmedSpec);
+
+  if (isDefaultSingleSpec && !showTotalSummary) {
+    return null;
+  }
+
   const totalStock = breakdown.reduce((sum, item) => sum + item.quantity, 0);
-  const visibleItems = expanded ? breakdown : breakdown.slice(0, maxDisplay);
-  const hasMore = breakdown.length > maxDisplay;
+  const visibleItems = isDefaultSingleSpec
+    ? []
+    : expanded
+    ? breakdown
+    : breakdown.slice(0, maxDisplay);
+  const hasMore = !isDefaultSingleSpec && breakdown.length > maxDisplay;
 
   const isXs = size === 'xs';
 

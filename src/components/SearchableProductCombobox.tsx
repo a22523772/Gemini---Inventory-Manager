@@ -2,11 +2,12 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Product } from '../lib/db';
 import { Search, X, Check, ChevronDown, Sparkles, Package } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { parseSpecifications } from '../store/useStore';
 
 interface SearchableProductComboboxProps {
   value: string;
   products: Product[];
-  onSelect: (product: Product) => void;
+  onSelect: (product: Product, specification?: string) => void;
   onClear: () => void;
   placeholder?: string;
   className?: string;
@@ -153,47 +154,90 @@ export default function SearchableProductCombobox({
               <p className="text-[10px] text-slate-500">可直接保留原本單據品名入庫，或嘗試其他關鍵字</p>
             </div>
           ) : (
-            filteredProducts.map(p => (
-              <div
-                key={p.product_id}
-                onClick={() => {
-                  onSelect(p);
-                  setIsOpen(false);
-                  setSearchQuery('');
-                }}
-                className={cn(
-                  "p-2 hover:bg-sky-500/10 cursor-pointer transition-colors flex items-center justify-between gap-2 text-left",
-                  p.product_id === value && "bg-emerald-500/15"
-                )}
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="font-mono text-[10px] font-bold text-sky-400 bg-sky-500/10 px-1 py-0.2 rounded border border-sky-500/20">
-                      {p.product_id}
-                    </span>
-                    <span className="font-bold text-xs text-white truncate">
-                      {p.name}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400">
-                    {p.specification && <span>規格: {p.specification}</span>}
-                    {p.category && <span>類別: {p.category}</span>}
-                    {p.barcode && <span className="font-mono">條碼: {p.barcode}</span>}
-                  </div>
-                </div>
+            filteredProducts.map(p => {
+              const subSpecs = parseSpecifications(p.specification);
+              const hasMultipleSpecs = subSpecs.length > 1;
 
-                <div className="text-right shrink-0">
-                  <div className="font-mono font-bold text-xs text-amber-300">
-                    ${p.cost_price || 0}
+              return (
+                <div
+                  key={p.product_id}
+                  onClick={() => {
+                    onSelect(p);
+                    setIsOpen(false);
+                    setSearchQuery('');
+                  }}
+                  className={cn(
+                    "p-2.5 hover:bg-sky-500/10 cursor-pointer transition-colors flex flex-col gap-1.5 text-left border-b border-white/5 last:border-b-0",
+                    p.product_id === value && "bg-emerald-500/15"
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-mono text-[10px] font-bold text-sky-400 bg-sky-500/10 px-1 py-0.2 rounded border border-sky-500/20">
+                          {p.product_id}
+                        </span>
+                        <span className="font-bold text-xs text-white">
+                          {p.name}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400 flex-wrap">
+                        {p.specification && <span>規格: {p.specification}</span>}
+                        {p.category && <span>類別: {p.category}</span>}
+                        {p.barcode && <span className="font-mono">條碼: {p.barcode}</span>}
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <div className="font-mono font-bold text-xs text-amber-300">
+                        ${p.cost_price || 0}
+                      </div>
+                      {p.product_id === value && (
+                        <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-0.5 justify-end mt-0.5">
+                          <Check className="w-3 h-3" /> 已選
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  {p.product_id === value && (
-                    <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-0.5 justify-end mt-0.5">
-                      <Check className="w-3 h-3" /> 已選
-                    </span>
+
+                  {/* Specification pill buttons for products with multiple specs */}
+                  {hasMultipleSpecs && (
+                    <div className="mt-1 pt-1.5 border-t border-white/5 flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                      <span className="text-[10px] text-slate-400 font-semibold">單獨加入指定規格:</span>
+                      {subSpecs.map(spec => (
+                        <button
+                          key={spec}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSelect(p, spec);
+                            setIsOpen(false);
+                            setSearchQuery('');
+                          }}
+                          className="px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 border border-indigo-500/40 transition-colors cursor-pointer active:scale-95 shadow-sm"
+                          title={`單獨加入規格：${spec}`}
+                        >
+                          + {spec}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelect(p);
+                          setIsOpen(false);
+                          setSearchQuery('');
+                        }}
+                        className="px-2 py-0.5 rounded text-[10px] font-bold bg-white/10 hover:bg-white/20 text-slate-300 border border-white/10 transition-colors cursor-pointer active:scale-95"
+                        title="一次加入全部規格"
+                      >
+                        + 全選全部規格
+                      </button>
+                    </div>
                   )}
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}

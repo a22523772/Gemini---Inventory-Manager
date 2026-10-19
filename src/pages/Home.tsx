@@ -1349,7 +1349,7 @@ export default function Home() {
       {/* Order Management Dashboard Fullscreen View Modal */}
       {isOrderDashboardOpen && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-2 sm:p-6 animate-in fade-in duration-200">
-          <div className="w-full max-w-5xl bg-[#0a1128] border border-indigo-500/30 rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[92vh]">
+          <div className="w-full max-w-6xl 2xl:max-w-7xl bg-[#0a1128] border border-indigo-500/30 rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[92vh]">
             
             {/* Modal Header */}
             <div className="p-4 sm:p-5 border-b border-white/10 bg-slate-900/80 flex items-center justify-between gap-3 shrink-0">
@@ -1923,7 +1923,7 @@ export default function Home() {
                                     <div key={idx} className="bg-white/5 rounded-lg p-2.5 flex items-start justify-between text-xs hover:bg-white/10 transition-colors">
                                       <div className="flex-1 min-w-0 mr-2 space-y-1">
                                         <div className="flex items-center gap-1.5 flex-wrap">
-                                          <p className="font-semibold text-white truncate">{item.product_name}</p>
+                                          <p className="font-semibold text-white break-words leading-snug">{item.product_name}</p>
                                           {isDuplicateRowInOrder && (
                                             <span className="text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/35 px-1.5 py-0.2 rounded shrink-0" title="此訂單內存在相同品名、編號與數量的重複品項行">
                                               ⚠️ 重複品項行

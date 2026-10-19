@@ -799,7 +799,7 @@ export default function StockManage() {
                             }`}
                           >
                              <div className="overflow-hidden pr-2">
-                               <div className="font-bold text-white text-sm truncate flex items-center gap-1.5">
+                               <div className="font-bold text-white text-sm break-words leading-snug flex items-center gap-1.5 flex-wrap">
                                  <span>{p.name}</span>
                                  {statusInfo.isPaused && (
                                    statusInfo.isDiscontinued ? (
