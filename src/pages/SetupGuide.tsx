@@ -1670,6 +1670,105 @@ function doPost(e) {
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
 
+  if (action === 'saveOnlineOrder' || action === 'saveOnlineOrders') {
+    var orderSheet = ss.getSheetByName('網路訂單');
+    if (!orderSheet) {
+      orderSheet = ss.insertSheet('網路訂單');
+      orderSheet.appendRow(['order_id', 'platform', 'product_id', 'product_name', 'quantity', 'price', 'customer_name', '最晚出貨期限', 'order_status', 'created_at', 'specification', 'shipping_method']);
+    }
+    var headers = orderSheet.getRange(1, 1, 1, orderSheet.getLastColumn()).getValues()[0];
+    var orderIdIdx = headers.indexOf('order_id');
+    if (orderIdIdx === -1) orderIdIdx = headers.indexOf('訂單編號');
+
+    var incomingOrders = Array.isArray(data) ? data : (Array.isArray(data.orders) ? data.orders : [data]);
+    var overwrite = data.overwrite !== false;
+
+    for (var oIdx = 0; oIdx < incomingOrders.length; oIdx++) {
+      var incOrder = incomingOrders[oIdx];
+      var oId = String(incOrder.order_id || '').trim();
+      if (!oId) continue;
+
+      if (overwrite && orderSheet.getLastRow() > 1 && orderIdIdx !== -1) {
+        var vals = orderSheet.getDataRange().getValues();
+        for (var r = vals.length - 1; r >= 1; r--) {
+          if (String(vals[r][orderIdIdx]).trim() === oId) {
+            orderSheet.deleteRow(r + 1);
+          }
+        }
+      }
+
+      var items = Array.isArray(incOrder.items) && incOrder.items.length > 0 ? incOrder.items : [incOrder];
+      for (var itIdx = 0; itIdx < items.length; itIdx++) {
+        var it = items[itIdx];
+        var row = [];
+        for (var c = 0; c < headers.length; c++) {
+          var h = String(headers[c] || '').trim().toLowerCase();
+          if (h === 'order_id' || h === '訂單編號') row.push(oId);
+          else if (h === 'platform' || h === '來源平台' || h === '平台') row.push(incOrder.platform || '蝦皮購物');
+          else if (h === 'product_id' || h === '商品編號' || h === '商品id') row.push(it.product_id || '');
+          else if (h === 'product_name' || h === '商品名稱' || h === '品名') row.push(it.product_name || it.name || '');
+          else if (h === 'quantity' || h === '數量') row.push(Number(it.quantity) || 1);
+          else if (h === 'price' || h === '金額' || h === '售價') row.push(Number(it.price) || Number(incOrder.price) || 0);
+          else if (h === 'customer_name' || h === '買家' || h === '顧客') row.push(incOrder.customer_name || '');
+          else if (h === '最晚出貨期限' || h === 'shipping_deadline') row.push(incOrder.shipping_deadline || '');
+          else if (h === 'order_status' || h === '訂單狀態' || h === 'status') row.push(incOrder.order_status || '待出貨');
+          else if (h === 'created_at' || h === '下單時間') row.push(incOrder.created_at || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss"));
+          else if (h === 'specification' || h === '規格') row.push(it.specification || '');
+          else if (h === 'shipping_method' || h === '物流方式') row.push(incOrder.shipping_method || '');
+          else row.push('');
+        }
+        orderSheet.appendRow(row);
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({success:true, count: incomingOrders.length})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'updateOnlineOrderProductId') {
+    var orderSheet = ss.getSheetByName('網路訂單');
+    if (orderSheet && orderSheet.getLastRow() > 1) {
+      var headers = orderSheet.getRange(1, 1, 1, orderSheet.getLastColumn()).getValues()[0];
+      var orderIdIdx = headers.indexOf('order_id');
+      if (orderIdIdx === -1) orderIdIdx = headers.indexOf('訂單編號');
+      var productIdIdx = headers.indexOf('product_id');
+      if (productIdIdx === -1) productIdIdx = headers.indexOf('商品編號');
+      var productNameIdx = headers.indexOf('product_name');
+      if (productNameIdx === -1) productNameIdx = headers.indexOf('商品名稱');
+      var specIdx = headers.indexOf('specification');
+      if (specIdx === -1) specIdx = headers.indexOf('規格');
+
+      var updates = Array.isArray(data) ? data : (data.updates ? data.updates : [data]);
+      var values = orderSheet.getDataRange().getValues();
+      for (var u = 0; u < updates.length; u++) {
+        var up = updates[u];
+        var targetOid = String(up.order_id || '').trim();
+        var targetOldPid = String(up.old_product_id || '').trim();
+        var targetNewPid = String(up.new_product_id || '').trim();
+        var targetPName = String(up.product_name || '').trim();
+        var targetSpec = String(up.specification || '').trim();
+
+        for (var i = 1; i < values.length; i++) {
+          var rowOid = String(values[i][orderIdIdx] || '').trim();
+          var rowPid = productIdIdx !== -1 ? String(values[i][productIdIdx] || '').trim() : '';
+          var rowPName = productNameIdx !== -1 ? String(values[i][productNameIdx] || '').trim() : '';
+          var rowSpec = specIdx !== -1 ? String(values[i][specIdx] || '').trim() : '';
+
+          if (rowOid === targetOid) {
+            var isTargetRow = false;
+            if (targetOldPid && rowPid === targetOldPid) isTargetRow = true;
+            else if (targetPName && rowPName === targetPName) {
+              if (!targetSpec || !rowSpec || targetSpec === rowSpec) isTargetRow = true;
+            } else if (!targetOldPid && !rowPid) isTargetRow = true;
+
+            if (isTargetRow && productIdIdx !== -1) {
+              orderSheet.getRange(i + 1, productIdIdx + 1).setValue(targetNewPid);
+            }
+          }
+        }
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
+  }
+
   if (action === 'batchShipment') {
     var lock = LockService.getScriptLock();
     try {

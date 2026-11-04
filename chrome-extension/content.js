@@ -28,10 +28,59 @@
       isPercent: true,
       side: 'right'
     },
+    settingsSubTab: 'scraper', // 'scraper' (訂單總覽抓取設定) | 'profit' (單筆利潤與出貨設定)
     platformSelectors: {
-      shopee: { incomeSelector: '', feeSelector: '', orderIdSelector: '' },
-      momo: { incomeSelector: '', feeSelector: '', orderIdSelector: '' },
-      coupang: { incomeSelector: '', feeSelector: '', orderIdSelector: '' }
+      shopee: {
+        incomeSelector: '',
+        feeSelector: '',
+        orderIdSelector: '',
+        orderScraper: {
+          cardSelector: '',
+          orderIdSelector: '',
+          customerNameSelector: '',
+          totalAmountSelector: '',
+          shippingMethodSelector: '',
+          shippingDeadlineSelector: '',
+          productRowSelector: '',
+          productNameSelector: '',
+          specificationSelector: '',
+          quantitySelector: ''
+        }
+      },
+      momo: {
+        incomeSelector: '',
+        feeSelector: '',
+        orderIdSelector: '',
+        orderScraper: {
+          cardSelector: '',
+          orderIdSelector: '',
+          customerNameSelector: '',
+          totalAmountSelector: '',
+          shippingMethodSelector: '',
+          shippingDeadlineSelector: '',
+          productRowSelector: '',
+          productNameSelector: '',
+          specificationSelector: '',
+          quantitySelector: ''
+        }
+      },
+      coupang: {
+        incomeSelector: '',
+        feeSelector: '',
+        orderIdSelector: '',
+        orderScraper: {
+          cardSelector: '',
+          orderIdSelector: '',
+          customerNameSelector: '',
+          totalAmountSelector: '',
+          shippingMethodSelector: '',
+          shippingDeadlineSelector: '',
+          productRowSelector: '',
+          productNameSelector: '',
+          specificationSelector: '',
+          quantitySelector: ''
+        }
+      }
     },
     cloudData: {
       products: [],
@@ -42,10 +91,16 @@
     shippedOrders: {}, // { [order_id]: timestamp }
     checkedItems: {}, // { [order_id + '_' + item_idx]: boolean }
     selectedSpecs: {}, // { [order_id + '_' + item_idx]: resolvedSpec } 選項 A: 規格對齊與下拉選單選擇
-    currentTab: 'main', // 'main' | 'settings'
+    currentTab: 'main', // 'main' | 'settings' | 'scrape_orders'
     isSyncing: false,
     isShipping: false,
-    shippingSuccess: false
+    shippingSuccess: false,
+    detectedOrders: [], // 偵測到的網頁訂單清單
+    selectedOrderIdsToScrape: {}, // { [order_id]: boolean } 使用者勾選要抓取的訂單
+    scrapedOrderProductIds: {}, // { [order_id + '_' + item_idx]: productId }
+    overwriteExistingOrders: true,
+    isSavingOrders: false,
+    saveOrdersMessage: ''
   };
 
   // 2. 建立 Shadow DOM 容器
@@ -70,7 +125,20 @@
     (res) => {
       if (res.gasUrl) state.gasUrl = res.gasUrl;
       if (res.opacity !== undefined) state.opacity = Number(res.opacity);
-      if (res.platformSelectors) state.platformSelectors = { ...state.platformSelectors, ...res.platformSelectors };
+      if (res.platformSelectors) {
+        ['shopee', 'momo', 'coupang'].forEach((p) => {
+          if (res.platformSelectors[p]) {
+            state.platformSelectors[p] = {
+              ...state.platformSelectors[p],
+              ...res.platformSelectors[p],
+              orderScraper: {
+                ...state.platformSelectors[p].orderScraper,
+                ...(res.platformSelectors[p].orderScraper || {})
+              }
+            };
+          }
+        });
+      }
       if (res.cachedCloudData) {
         state.cloudData = {
           products: Array.isArray(res.cachedCloudData.products) ? res.cachedCloudData.products : [],
@@ -203,18 +271,30 @@
   }
 
   // 預覽 Selector 抓取結果（供設定面板顯示）
-  function previewScrapeResult(selectorType, selectorStr) {
+  function previewScrapeResult(selectorType, selectorStr, isCollection = false) {
     if (!selectorStr) return { found: false, text: '尚未設定選取器' };
     try {
+      if (isCollection) {
+        const els = document.querySelectorAll(selectorStr);
+        if (!els || els.length === 0) return { found: false, text: '目前網頁未找到符合之元素' };
+        return { found: true, text: `✅ 找到 ${els.length} 個卡片/行項目元素 (符合多筆清單)` };
+      }
+
       const el = document.querySelector(selectorStr);
       if (!el) return { found: false, text: '目前網頁未找到符合之元素' };
-      const raw = el.innerText || el.textContent || '';
+      const raw = (el.innerText || el.textContent || '').trim();
+
       if (selectorType === 'orderIdSelector') {
         const clean = extractCleanOrderId(raw);
-        return { found: true, text: clean ? `【${clean}】` : '無法解析出純單號' };
-      } else {
+        return { found: true, text: clean ? `【${clean}】` : `無法解析出純單號 (原始: "${raw.slice(0, 20)}")` };
+      } else if (selectorType === 'incomeSelector' || selectorType === 'feeSelector' || selectorType === 'totalAmountSelector') {
         const val = parseMoney(raw);
-        return { found: true, text: `$${val.toLocaleString()} (原始文字: "${raw.trim().slice(0, 25)}")` };
+        return { found: true, text: `$${val.toLocaleString()} (原始文字: "${raw.slice(0, 25)}")` };
+      } else if (selectorType === 'quantitySelector') {
+        const qty = parseMoney(raw) || 1;
+        return { found: true, text: `${qty} 件 (原始文字: "${raw.slice(0, 20)}")` };
+      } else {
+        return { found: true, text: `「${raw.slice(0, 30)}${raw.length > 30 ? '...' : ''}」` };
       }
     } catch (e) {
       return { found: false, text: `語法錯誤: ${e.message}` };
@@ -448,6 +528,398 @@
         area
       };
     }).filter(Boolean);
+  }
+
+  // 自動比對系統商品庫中與品名最相符之商品編號 (product_id)
+  function autoMatchProductId(productName, spec = '') {
+    const cleanName = String(productName || '').trim().toLowerCase();
+    if (!cleanName) return null;
+    const prods = normalizeProducts(state.cloudData.products || []);
+    if (prods.length === 0) return null;
+
+    // 1. 完全相同品名
+    const exact = prods.find((p) => String(p.name || '').trim().toLowerCase() === cleanName);
+    if (exact && exact.product_id) {
+      return { product_id: exact.product_id, name: exact.name, confidence: 'high' };
+    }
+
+    // 2. 去除符號與空白後精確相符
+    const simplify = (s) => String(s || '').toLowerCase().replace(/[\s\-_/\[\]\(\)【】「」、，:：]+/g, '');
+    const simpleName = simplify(cleanName);
+    const simpleExact = prods.find((p) => simplify(p.name) === simpleName);
+    if (simpleExact && simpleExact.product_id) {
+      return { product_id: simpleExact.product_id, name: simpleExact.name, confidence: 'high' };
+    }
+
+    // 3. 雙向包含 (如果品名包含系統商品名，或系統商品名包含品名)
+    const contained = prods.filter((p) => {
+      const sp = simplify(p.name);
+      return sp && (simpleName.includes(sp) || sp.includes(simpleName));
+    });
+    if (contained.length === 1 && contained[0].product_id) {
+      return { product_id: contained[0].product_id, name: contained[0].name, confidence: 'medium' };
+    } else if (contained.length > 1) {
+      // 挑選名稱最長者以減少誤判
+      contained.sort((a, b) => (b.name?.length || 0) - (a.name?.length || 0));
+      return { product_id: contained[0].product_id, name: contained[0].name, confidence: 'medium' };
+    }
+
+    // 4. 比對規格輔助
+    if (spec) {
+      const simpleSpec = simplify(spec);
+      const specMatch = prods.find((p) => {
+        if (!p.specification) return false;
+        return simplify(p.specification).includes(simpleSpec) && simplify(cleanName).includes(simplify(p.name?.slice(0, 4) || ''));
+      });
+      if (specMatch && specMatch.product_id) {
+        return { product_id: specMatch.product_id, name: specMatch.name, confidence: 'low' };
+      }
+    }
+
+    return null;
+  }
+
+  // 抓取網頁單筆或多筆訂單 (支援蝦皮、MOMO、酷澎自訂訂單總覽選取器與通用網頁)
+  function detectAndScrapeOrdersFromPage() {
+    const detected = [];
+    const now = new Date();
+
+    let normPlatformName = '蝦皮購物';
+    if (currentPlatform === 'momo') normPlatformName = 'MOMO購物網';
+    else if (currentPlatform === 'coupang') normPlatformName = '酷澎';
+
+    const parseNum = (str) => {
+      if (!str) return 0;
+      const cleaned = String(str).replace(/[$,NT\s]/gi, '').replace(/,/g, '');
+      const m = cleaned.match(/[-+]?[0-9]+(?:\.[0-9]+)?/);
+      return m ? parseFloat(m[0]) : 0;
+    };
+
+    const scraperCfg = state.platformSelectors[currentPlatform]?.orderScraper || {};
+
+    // 模式 0: 使用者專屬自訂「訂單總覽選取器」 (最高優先級，由使用者自行在設定中點選)
+    if (scraperCfg.cardSelector) {
+      try {
+        const cards = document.querySelectorAll(scraperCfg.cardSelector);
+        if (cards && cards.length > 0) {
+          cards.forEach((card, cIdx) => {
+            // 1. 訂單編號
+            let oid = '';
+            if (scraperCfg.orderIdSelector) {
+              const el = card.querySelector(scraperCfg.orderIdSelector);
+              if (el) oid = extractCleanOrderId(el.innerText || el.textContent || '');
+            }
+            if (!oid) {
+              oid = extractCleanOrderId(card.innerText || '');
+            }
+            if (!oid) {
+              oid = `ORD_${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${cIdx + 1}`;
+            }
+
+            // 2. 買家名稱
+            let buyer = '';
+            if (scraperCfg.customerNameSelector) {
+              const el = card.querySelector(scraperCfg.customerNameSelector);
+              if (el) buyer = (el.innerText || el.textContent || '').trim();
+            }
+
+            // 3. 訂單金額
+            let totalAmount = 0;
+            if (scraperCfg.totalAmountSelector) {
+              const el = card.querySelector(scraperCfg.totalAmountSelector);
+              if (el) totalAmount = parseNum(el.innerText || el.textContent || '');
+            }
+
+            // 4. 物流方式
+            let shippingMethod = '';
+            if (scraperCfg.shippingMethodSelector) {
+              const el = card.querySelector(scraperCfg.shippingMethodSelector);
+              if (el) shippingMethod = (el.innerText || el.textContent || '').trim();
+            }
+
+            // 5. 出貨期限
+            let shippingDeadline = '';
+            if (scraperCfg.shippingDeadlineSelector) {
+              const el = card.querySelector(scraperCfg.shippingDeadlineSelector);
+              if (el) shippingDeadline = (el.innerText || el.textContent || '').trim();
+            }
+
+            // 6. 商品明細
+            const items = [];
+            let itemElements = [];
+            if (scraperCfg.productRowSelector) {
+              try {
+                const foundItems = card.querySelectorAll(scraperCfg.productRowSelector);
+                if (foundItems && foundItems.length > 0) {
+                  itemElements = Array.from(foundItems);
+                }
+              } catch (e) {}
+            }
+
+            if (itemElements.length > 0) {
+              itemElements.forEach((itEl) => {
+                let pName = '';
+                if (scraperCfg.productNameSelector) {
+                  const el = itEl.querySelector(scraperCfg.productNameSelector);
+                  if (el) pName = (el.innerText || el.textContent || '').trim();
+                }
+                if (!pName) pName = (itEl.innerText || '').split('\n')[0].trim() || '網頁商品';
+
+                let pSpec = '';
+                if (scraperCfg.specificationSelector) {
+                  const el = itEl.querySelector(scraperCfg.specificationSelector);
+                  if (el) pSpec = (el.innerText || el.textContent || '').trim();
+                }
+
+                let pQty = 1;
+                if (scraperCfg.quantitySelector) {
+                  const el = itEl.querySelector(scraperCfg.quantitySelector);
+                  if (el) pQty = parseNum(el.innerText || el.textContent || '') || 1;
+                }
+
+                items.push({
+                  product_name: pName,
+                  specification: pSpec,
+                  quantity: pQty,
+                  price: totalAmount && items.length === 0 ? totalAmount : 0
+                });
+              });
+            } else {
+              // 卡片內直接尋找品名、規格、數量
+              let pName = '';
+              if (scraperCfg.productNameSelector) {
+                const el = card.querySelector(scraperCfg.productNameSelector);
+                if (el) pName = (el.innerText || el.textContent || '').trim();
+              }
+              let pSpec = '';
+              if (scraperCfg.specificationSelector) {
+                const el = card.querySelector(scraperCfg.specificationSelector);
+                if (el) pSpec = (el.innerText || el.textContent || '').trim();
+              }
+              let pQty = 1;
+              if (scraperCfg.quantitySelector) {
+                const el = card.querySelector(scraperCfg.quantitySelector);
+                if (el) pQty = parseNum(el.innerText || el.textContent || '') || 1;
+              }
+
+              items.push({
+                product_name: pName || `訂單商品 (#${oid})`,
+                specification: pSpec,
+                quantity: pQty,
+                price: totalAmount
+              });
+            }
+
+            detected.push({
+              order_id: oid,
+              platform: normPlatformName,
+              customer_name: buyer || '網頁顧客',
+              total_amount: totalAmount,
+              shipping_method: shippingMethod || '標準物流',
+              shipping_deadline: shippingDeadline || '',
+              order_status: '正常',
+              items: items
+            });
+          });
+        }
+      } catch (e) {
+        console.warn('[E-Commerce Assistant] Error scraping with custom orderScraper:', e);
+      }
+    }
+
+    // 模式 1: 通用常見電商類名啟發式偵測 (當使用者尚未自訂或自訂規則未命中時之備用方案)
+    if (detected.length === 0) {
+      const listRowSelectors = [
+        '.order-item-row', '.order-card', '.order-list-item', 'tr.order-row',
+        '.shopee-order-card', '.order-panel', '.order-card-container',
+        '[data-qa="order-card"]', '.order-item', '.order-list-row'
+      ];
+
+      let foundRows = [];
+      for (const sel of listRowSelectors) {
+        try {
+          const rows = document.querySelectorAll(sel);
+          if (rows && rows.length > 1) {
+            foundRows = Array.from(rows);
+            break;
+          }
+        } catch (e) {}
+      }
+
+      if (foundRows.length > 0) {
+        foundRows.forEach((row, rIdx) => {
+          let oid = '';
+          const oidEl = row.querySelector('.order-sn, .order-id, [data-qa="order-id"], .order-number, a[href*="order"]');
+          if (oidEl) {
+            oid = extractCleanOrderId(oidEl.innerText || oidEl.textContent || '');
+          }
+          if (!oid) {
+            oid = extractCleanOrderId(row.innerText || '');
+          }
+          if (!oid) oid = `ORD_${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${rIdx + 1}`;
+
+          let buyer = '';
+          const buyerEl = row.querySelector('.buyer-name, .customer-name, [data-qa="buyer-name"], .user-name');
+          if (buyerEl) buyer = buyerEl.innerText.trim();
+
+          let totalAmount = 0;
+          const amountEl = row.querySelector('.order-total, .order-price, .total-price, .income-amount, [data-qa="order-total"]');
+          if (amountEl) totalAmount = parseNum(amountEl.innerText);
+
+          let shippingMethod = '';
+          const shipEl = row.querySelector('.carrier-name, .shipping-carrier, .logistics-channel, .shipping-method');
+          if (shipEl) shippingMethod = shipEl.innerText.trim();
+
+          let shippingDeadline = '';
+          const deadlineEl = row.querySelector('.deadline-time, .ship-by-date, .due-date, .shipping-deadline');
+          if (deadlineEl) shippingDeadline = deadlineEl.innerText.trim();
+
+          const itemEls = row.querySelectorAll('.product-item, .order-item__product, .goods-item, .item-details');
+          const items = [];
+          if (itemEls && itemEls.length > 0) {
+            itemEls.forEach((itEl) => {
+              const nameEl = itEl.querySelector('.product-name, .item-name, .goods-name, .title');
+              const specEl = itEl.querySelector('.variation-name, .item-spec, .variation, .model');
+              const qtyEl = itEl.querySelector('.quantity, .item-qty, .count');
+              const priceEl = itEl.querySelector('.price, .item-price');
+
+              const pName = nameEl ? nameEl.innerText.trim() : (itEl.innerText.split('\n')[0] || '網頁商品');
+              const pSpec = specEl ? specEl.innerText.trim() : '';
+              const pQty = qtyEl ? (parseNum(qtyEl.innerText) || 1) : 1;
+              const pPrice = priceEl ? parseNum(priceEl.innerText) : (totalAmount || 0);
+
+              items.push({
+                product_name: pName,
+                specification: pSpec,
+                quantity: pQty,
+                price: pPrice
+              });
+            });
+          }
+
+          if (items.length === 0) {
+            items.push({
+              product_name: `訂單商品 (#${oid})`,
+              specification: '',
+              quantity: 1,
+              price: totalAmount
+            });
+          }
+
+          detected.push({
+            order_id: oid,
+            platform: normPlatformName,
+            customer_name: buyer || '網頁顧客',
+            total_amount: totalAmount,
+            shipping_method: shippingMethod || '標準物流',
+            shipping_deadline: shippingDeadline || '',
+            order_status: '正常',
+            items: items
+          });
+        });
+      }
+    }
+
+    // 模式 2: 單筆訂單詳細頁面 (當前開啟單筆訂單頁，且非訂單列表)
+    if (detected.length === 0) {
+      let singleOrderId = state.currentOrderId || '';
+      if (!singleOrderId) {
+        detectOrderId(true);
+        singleOrderId = state.currentOrderId;
+      }
+
+      if (singleOrderId) {
+        let buyer = '';
+        const buyerEl = document.querySelector('.buyer-name, .customer-name, [data-qa="buyer-name"], .user-name, .order-buyer');
+        if (buyerEl) buyer = buyerEl.innerText.trim();
+
+        const financials = scrapeFinancials();
+        let totalAmount = financials.actualIncome || 0;
+        if (!totalAmount) {
+          const totalEl = document.querySelector('.order-total, .total-amount, .order-price, #order-total');
+          if (totalEl) totalAmount = parseNum(totalEl.innerText);
+        }
+
+        let shippingMethod = '';
+        const shipEl = document.querySelector('.carrier-name, .shipping-carrier, .logistics-channel, .shipping-method, .shipping-info');
+        if (shipEl) shippingMethod = shipEl.innerText.trim();
+
+        let shippingDeadline = '';
+        const deadlineEl = document.querySelector('.deadline-time, .ship-by-date, .due-date, .shipping-deadline, .deliver-deadline');
+        if (deadlineEl) shippingDeadline = deadlineEl.innerText.trim();
+
+        const itemContainers = document.querySelectorAll(
+          '.order-item, .order-product-item, .order-detail-product-item, [data-qa="order-item"], .goods-card, tr.product-row'
+        );
+        const items = [];
+        if (itemContainers && itemContainers.length > 0) {
+          itemContainers.forEach((itEl) => {
+            const nameEl = itEl.querySelector('.product-name, .order-item__name, .item-name, .goods-title, .name');
+            const specEl = itEl.querySelector('.order-item__variation, .variation-name, .item-spec, .spec, .variation');
+            const qtyEl = itEl.querySelector('.order-item__quantity, .quantity, .item-qty, .qty');
+            const priceEl = itEl.querySelector('.order-item__price, .price, .item-price');
+
+            const pName = nameEl ? nameEl.innerText.trim() : '';
+            if (pName) {
+              const pSpec = specEl ? specEl.innerText.trim() : '';
+              const pQty = qtyEl ? (parseNum(qtyEl.innerText) || 1) : 1;
+              const pPrice = priceEl ? parseNum(priceEl.innerText) : 0;
+              items.push({
+                product_name: pName,
+                specification: pSpec,
+                quantity: pQty,
+                price: pPrice
+              });
+            }
+          });
+        }
+
+        if (items.length === 0) {
+          const h1 = document.querySelector('h1, h2, .order-product-title');
+          const fallbackName = h1 ? h1.innerText.trim().slice(0, 50) : `網頁訂單商品 (#${singleOrderId})`;
+          items.push({
+            product_name: fallbackName,
+            specification: '',
+            quantity: 1,
+            price: totalAmount
+          });
+        }
+
+        detected.push({
+          order_id: singleOrderId,
+          platform: normPlatformName,
+          customer_name: buyer || '網頁顧客',
+          total_amount: totalAmount,
+          shipping_method: shippingMethod || '標準物流',
+          shipping_deadline: shippingDeadline || '',
+          order_status: '正常',
+          items: items
+        });
+      }
+    }
+
+    // 依系統商品庫自動比對各品項之 product_id
+    state.detectedOrders = detected;
+    state.selectedOrderIdsToScrape = {};
+
+    detected.forEach((ord) => {
+      state.selectedOrderIdsToScrape[ord.order_id] = true; // 預設全部選取
+      ord.items.forEach((item, itIdx) => {
+        const key = `${ord.order_id}_${itIdx}`;
+        const match = autoMatchProductId(item.product_name, item.specification);
+        if (match) {
+          state.scrapedOrderProductIds[key] = match.product_id;
+          item.matched_product_id = match.product_id;
+          item.matched_product_name = match.name;
+        } else {
+          state.scrapedOrderProductIds[key] = '';
+        }
+      });
+    });
+
+    state.isOpen = true;
+    state.currentTab = 'scrape_orders';
+    render();
   }
 
   // 規格解析函式：分割逗號、頓號、斜線或換行
@@ -798,8 +1270,8 @@
   let activePickerTarget = null;
   let pickerOverlay = null;
 
-  function startElementPicker(targetField) {
-    activePickerTarget = targetField;
+  function startElementPicker(targetField, scope = 'profit', fieldLabel = '', isCollection = false) {
+    activePickerTarget = { targetField, scope, fieldLabel, isCollection };
     state.isOpen = false;
     render();
 
@@ -825,7 +1297,7 @@
     tooltip.style.fontSize = '12px';
     tooltip.style.fontWeight = 'bold';
     tooltip.style.whiteSpace = 'nowrap';
-    tooltip.innerText = `🎯 點選【${targetField === 'incomeSelector' ? '實際入帳金額' : targetField === 'feeSelector' ? '平台手續費' : '訂單編號'}】(按 ESC 取消)`;
+    tooltip.innerText = `🎯 點選【${fieldLabel || targetField}】${isCollection ? ' (將自動匹配清單中所有卡片/行)' : ''} (按 ESC 取消)`;
     pickerOverlay.appendChild(tooltip);
     document.body.appendChild(pickerOverlay);
 
@@ -844,35 +1316,73 @@
       e.stopPropagation();
 
       const el = document.elementFromPoint(e.clientX, e.clientY);
-      const target = activePickerTarget; // 關鍵修復：在 cleanup 前先暫存目標欄位！
+      const targetConfig = activePickerTarget; // 在 cleanup 前先暫存目標
       cleanup();
 
-      if (el && !host.contains(el) && target) {
-        const selector = generateOptimalSelector(el);
+      if (el && !host.contains(el) && targetConfig) {
+        const selector = generateOptimalSelector(el, targetConfig.isCollection);
         if (selector) {
           if (!state.platformSelectors[currentPlatform]) {
-            state.platformSelectors[currentPlatform] = {};
+            state.platformSelectors[currentPlatform] = {
+              incomeSelector: '',
+              feeSelector: '',
+              orderIdSelector: '',
+              orderScraper: {
+                cardSelector: '',
+                orderIdSelector: '',
+                customerNameSelector: '',
+                totalAmountSelector: '',
+                shippingMethodSelector: '',
+                shippingDeadlineSelector: '',
+                productRowSelector: '',
+                productNameSelector: '',
+                specificationSelector: '',
+                quantitySelector: ''
+              }
+            };
           }
-          state.platformSelectors[currentPlatform][target] = selector;
-          chrome.storage.local.set({ platformSelectors: state.platformSelectors });
 
-          // 若選取的是訂單編號，立刻執行一次辨識
-          if (target === 'orderIdSelector') {
-            detectOrderId(true);
+          if (targetConfig.scope === 'scraper') {
+            if (!state.platformSelectors[currentPlatform].orderScraper) {
+              state.platformSelectors[currentPlatform].orderScraper = {
+                cardSelector: '',
+                orderIdSelector: '',
+                customerNameSelector: '',
+                totalAmountSelector: '',
+                shippingMethodSelector: '',
+                shippingDeadlineSelector: '',
+                productRowSelector: '',
+                productNameSelector: '',
+                specificationSelector: '',
+                quantitySelector: ''
+              };
+            }
+            state.platformSelectors[currentPlatform].orderScraper[targetConfig.targetField] = selector;
+          } else {
+            state.platformSelectors[currentPlatform][targetConfig.targetField] = selector;
+            // 若選取的是訂單編號，立刻執行一次辨識
+            if (targetConfig.targetField === 'orderIdSelector') {
+              detectOrderId(true);
+            }
           }
+
+          chrome.storage.local.set({ platformSelectors: state.platformSelectors });
         }
       }
 
       state.isOpen = true;
-      state.currentTab = 'settings'; // 保持在設定分頁，讓使用者親眼看見填入與預覽結果！
+      state.currentTab = 'settings';
+      state.settingsSubTab = targetConfig ? targetConfig.scope : 'scraper';
       render();
     };
 
     const onKeyDown = (e) => {
       if (e.key === 'Escape') {
+        const prevScope = activePickerTarget ? activePickerTarget.scope : 'scraper';
         cleanup();
         state.isOpen = true;
         state.currentTab = 'settings';
+        state.settingsSubTab = prevScope;
         render();
       }
     };
@@ -894,11 +1404,11 @@
   }
 
   // 產生穩定、不易受賣場動態雜湊影響的 CSS Selector
-  function generateOptimalSelector(el) {
+  function generateOptimalSelector(el, isCollection = false) {
     if (!el || el === document.body) return '';
 
-    // 1. 若有穩定 ID (不含長數字或隨機碼)
-    if (el.id && !el.id.match(/\d{5,}/) && !el.id.match(/^[a-z0-9_-]{15,}$/i)) {
+    // 1. 若有穩定 ID (若為 collection，ID 通常是單一的，排除 ID 以免無法匹配同類所有卡片)
+    if (!isCollection && el.id && !el.id.match(/\d{5,}/) && !el.id.match(/^[a-z0-9_-]{15,}$/i)) {
       return `#${CSS.escape(el.id)}`;
     }
 
@@ -906,7 +1416,10 @@
     const testAttrs = ['data-qa', 'data-testid', 'data-cy', 'aria-label', 'name'];
     for (const attr of testAttrs) {
       if (el.hasAttribute(attr)) {
-        return `[${attr}="${CSS.escape(el.getAttribute(attr))}"]`;
+        const val = el.getAttribute(attr);
+        if (!isCollection || !val.match(/\d{5,}/)) {
+          return `[${attr}="${CSS.escape(val)}"]`;
+        }
       }
     }
 
@@ -935,21 +1448,23 @@
         }
       }
 
-      // 如果有兄弟節點且沒有 class，加上 nth-of-type
-      if (current.parentElement) {
-        const siblings = Array.from(current.parentElement.children).filter(
-          (s) => s.nodeName === current.nodeName
-        );
-        if (siblings.length > 1) {
-          const index = siblings.indexOf(current) + 1;
-          selector += `:nth-of-type(${index})`;
+      // 如果是 collection (例如卡片或商品行)，不要在當前元素加上 :nth-of-type，這樣才能命中所有同級元素！
+      if (!isCollection || current !== el) {
+        if (current.parentElement) {
+          const siblings = Array.from(current.parentElement.children).filter(
+            (s) => s.nodeName === current.nodeName
+          );
+          if (siblings.length > 1) {
+            const index = siblings.indexOf(current) + 1;
+            selector += `:nth-of-type(${index})`;
+          }
         }
       }
 
       path.unshift(selector);
 
-      // 若當前節點已具備唯一 ID，可提前停止
-      if (current.id && !current.id.match(/\d{5,}/)) {
+      // 若當前節點已具備唯一 ID，且不是 collection 的目標節點，可提前停止
+      if (!isCollection && current.id && !current.id.match(/\d{5,}/)) {
         path[0] = `#${CSS.escape(current.id)}`;
         break;
       }
@@ -1267,87 +1782,405 @@
     let contentHtml = '';
 
     if (state.currentTab === 'settings') {
+      const scraperSelectors = selectors.orderScraper || {};
+
+      // 訂單總覽抓取預覽 (10 項)
+      const cardPreview = previewScrapeResult('cardSelector', scraperSelectors.cardSelector, true);
+      const orderIdScraperPreview = previewScrapeResult('orderIdSelector', scraperSelectors.orderIdSelector);
+      const customerPreview = previewScrapeResult('customerNameSelector', scraperSelectors.customerNameSelector);
+      const amountPreview = previewScrapeResult('totalAmountSelector', scraperSelectors.totalAmountSelector);
+      const shippingPreview = previewScrapeResult('shippingMethodSelector', scraperSelectors.shippingMethodSelector);
+      const deadlinePreview = previewScrapeResult('shippingDeadlineSelector', scraperSelectors.shippingDeadlineSelector);
+      const itemRowPreview = previewScrapeResult('productRowSelector', scraperSelectors.productRowSelector, true);
+      const pNamePreview = previewScrapeResult('productNameSelector', scraperSelectors.productNameSelector);
+      const pSpecPreview = previewScrapeResult('specificationSelector', scraperSelectors.specificationSelector);
+      const pQtyPreview = previewScrapeResult('quantitySelector', scraperSelectors.quantitySelector);
+
+      // 單筆利潤與出貨預覽 (3 項)
       const incomePreview = previewScrapeResult('incomeSelector', selectors.incomeSelector);
       const feePreview = previewScrapeResult('feeSelector', selectors.feeSelector);
-      const orderIdPreview = previewScrapeResult('orderIdSelector', selectors.orderIdSelector);
+      const orderIdProfitPreview = previewScrapeResult('orderIdSelector', selectors.orderIdSelector);
 
       contentHtml = `
         <div class="settings-view">
-          <div class="settings-card">
-            <div class="settings-title">🔗 後端 Google Apps Script 連線設定</div>
-            <div class="form-group">
-              <label class="form-label">Web App URL (即 APP 後端部屬網址)</label>
-              <input type="text" id="cfg-gas-url" class="form-input" value="${escapeHtml(state.gasUrl)}" placeholder="https://script.google.com/macros/s/.../exec" />
-            </div>
-            <div style="display: flex; gap: 8px;">
-              <button id="btn-test-gas" class="btn-secondary" style="flex: 1;">🧪 測試連線</button>
-              <button id="btn-save-gas" class="btn-primary" style="flex: 1;">💾 儲存網址</button>
-            </div>
-            <div id="gas-test-result" style="font-size: 11px; margin-top: 4px;"></div>
+          <!-- 次分頁切換導覽列 -->
+          <div class="settings-subtabs-nav">
+            <button class="settings-subtab-btn ${state.settingsSubTab === 'scraper' ? 'active' : ''}" id="btn-subtab-scraper">
+              📥 訂單總覽抓取設定 (10項)
+            </button>
+            <button class="settings-subtab-btn ${state.settingsSubTab === 'profit' ? 'active' : ''}" id="btn-subtab-profit">
+              💰 利潤與出貨設定
+            </button>
           </div>
 
-          <div class="settings-card">
-            <div class="settings-title">🎯 ${platformLabel} - 網頁元素選取器設定</div>
-            <div style="font-size: 11px; color: #94a3b8;">
-              點擊「🎯 選取」後，滑鼠移動到賣場網頁上對應的文字點一下，即可自動鎖定並即時預覽！
-            </div>
+          ${
+            state.settingsSubTab === 'scraper'
+              ? `
+                <!-- 分頁 A: 訂單總覽抓取元素選取器設定 -->
+                <div class="settings-card">
+                  <div class="settings-title">🎯 ${platformLabel} - 訂單總覽選取器設定</div>
+                  <div style="font-size: 11px; color: #94a3b8; line-height: 1.5; margin-bottom: 10px;">
+                    專用於<b>「訂單總覽 / 待出貨清單」</b>頁面。點選各欄位右側「🎯 選取」後，在網頁上對應位置點一下，即可鎖定並即時預覽！
+                  </div>
 
-            <!-- 訂單編號選取器 -->
-            <div class="form-group">
-              <label class="form-label">🏷️ 訂單編號 CSS Selector</label>
-              <div class="selector-input-row">
-                <input type="text" id="cfg-orderid-sel" class="form-input" value="${escapeHtml(selectors.orderIdSelector || '')}" placeholder="例如: .order-sn, #order_id" />
-                <button class="btn-pick" data-pick="orderIdSelector">🎯 選取</button>
-              </div>
-              <div class="selector-preview-badge ${orderIdPreview.found ? 'success' : 'muted'}">
-                👁️ 網頁抓取預覽：${escapeHtml(orderIdPreview.text)}
-              </div>
-            </div>
+                  <div class="settings-section-divider">
+                    <span>📦 訂單主體卡片與基礎資訊</span>
+                  </div>
 
-            <!-- 實際入帳金額選取器 -->
-            <div class="form-group">
-              <label class="form-label">💵 實際入帳金額 CSS Selector</label>
-              <div class="selector-input-row">
-                <input type="text" id="cfg-income-sel" class="form-input" value="${escapeHtml(selectors.incomeSelector || '')}" placeholder="例如: .income-amount, #net-payout" />
-                <button class="btn-pick" data-pick="incomeSelector">🎯 選取</button>
-              </div>
-              <div class="selector-preview-badge ${incomePreview.found ? 'success' : 'muted'}">
-                👁️ 網頁抓取預覽：${escapeHtml(incomePreview.text)}
-              </div>
-            </div>
+                  <!-- 1. 訂單卡片容器 (Collection) -->
+                  <div class="form-group">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                      <label class="form-label" style="margin-bottom: 0;">📦 訂單卡片容器 <span class="required-tag">必要</span></label>
+                      <span class="sub-hint">包覆整筆訂單的外框</span>
+                    </div>
+                    <div class="selector-input-row">
+                      <input type="text" id="cfg-scraper-card-sel" class="form-input" value="${escapeHtml(scraperSelectors.cardSelector || '')}" placeholder="例如: .order-card, .shopee-order-card" />
+                      <button class="btn-pick" data-pick="cardSelector" data-scope="scraper" data-label="訂單卡片容器" data-collection="true">🎯 選取</button>
+                    </div>
+                    <div class="selector-preview-badge ${cardPreview.found ? 'success' : 'muted'}">
+                      👁️ 抓取預覽：${escapeHtml(cardPreview.text)}
+                    </div>
+                  </div>
 
-            <!-- 平台手續費選取器 -->
-            <div class="form-group">
-              <label class="form-label">📉 平台手續費 CSS Selector</label>
-              <div class="selector-input-row">
-                <input type="text" id="cfg-fee-sel" class="form-input" value="${escapeHtml(selectors.feeSelector || '')}" placeholder="例如: .fee-total, #service-fee" />
-                <button class="btn-pick" data-pick="feeSelector">🎯 選取</button>
-              </div>
-              <div class="selector-preview-badge ${feePreview.found ? 'success' : 'muted'}">
-                👁️ 網頁抓取預覽：${escapeHtml(feePreview.text)}
-              </div>
-            </div>
+                  <!-- 2. 訂單編號 -->
+                  <div class="form-group">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                      <label class="form-label" style="margin-bottom: 0;">🏷️ 訂單編號 <span class="required-tag">必要</span></label>
+                      <span class="sub-hint">卡片內的訂單號碼</span>
+                    </div>
+                    <div class="selector-input-row">
+                      <input type="text" id="cfg-scraper-orderid-sel" class="form-input" value="${escapeHtml(scraperSelectors.orderIdSelector || '')}" placeholder="例如: .order-sn, .order-id" />
+                      <button class="btn-pick" data-pick="orderIdSelector" data-scope="scraper" data-label="訂單編號">🎯 選取</button>
+                    </div>
+                    <div class="selector-preview-badge ${orderIdScraperPreview.found ? 'success' : 'muted'}">
+                      👁️ 抓取預覽：${escapeHtml(orderIdScraperPreview.text)}
+                    </div>
+                  </div>
 
-            <button id="btn-save-selectors" class="btn-primary" style="width: 100%; margin-top: 6px;">💾 儲存此平台選取器</button>
-          </div>
+                  <!-- 3. 買家名稱 -->
+                  <div class="form-group">
+                    <label class="form-label">👤 買家名稱</label>
+                    <div class="selector-input-row">
+                      <input type="text" id="cfg-scraper-customer-sel" class="form-input" value="${escapeHtml(scraperSelectors.customerNameSelector || '')}" placeholder="例如: .buyer-name, .customer-name" />
+                      <button class="btn-pick" data-pick="customerNameSelector" data-scope="scraper" data-label="買家名稱">🎯 選取</button>
+                    </div>
+                    <div class="selector-preview-badge ${customerPreview.found ? 'success' : 'muted'}">
+                      👁️ 抓取預覽：${escapeHtml(customerPreview.text)}
+                    </div>
+                  </div>
 
-          <!-- 浮動按鈕位置設定 -->
-          <div class="settings-card">
-            <div class="settings-title">📍 浮動展開按鈕位置 (防止遮擋網頁重要按鈕)</div>
-            <div style="font-size: 11px; color: #94a3b8; margin-bottom: 8px;">
-              提示：您也可以在網頁上直接<b>「按住浮動按鈕 ⠿ 上下拖曳」</b>至任意高度（或拖到左側邊緣）。
-            </div>
-            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-              <button class="btn-pos-preset" data-pos="top-right">靠右上 (20%)</button>
-              <button class="btn-pos-preset" data-pos="mid-right">靠右中 (38%)</button>
-              <button class="btn-pos-preset" data-pos="bottom-right">靠右下 (70%)</button>
-              <button class="btn-pos-preset" data-pos="mid-left">靠左中 (38%)</button>
-              <button class="btn-pos-preset" data-pos="reset">🔄 恢復預設</button>
-            </div>
-          </div>
+                  <!-- 4. 訂單金額 -->
+                  <div class="form-group">
+                    <label class="form-label">💰 訂單金額</label>
+                    <div class="selector-input-row">
+                      <input type="text" id="cfg-scraper-amount-sel" class="form-input" value="${escapeHtml(scraperSelectors.totalAmountSelector || '')}" placeholder="例如: .total-price, .order-amount" />
+                      <button class="btn-pick" data-pick="totalAmountSelector" data-scope="scraper" data-label="訂單金額">🎯 選取</button>
+                    </div>
+                    <div class="selector-preview-badge ${amountPreview.found ? 'success' : 'muted'}">
+                      👁️ 抓取預覽：${escapeHtml(amountPreview.text)}
+                    </div>
+                  </div>
+
+                  <!-- 5. 物流方式 -->
+                  <div class="form-group">
+                    <label class="form-label">🚚 物流方式</label>
+                    <div class="selector-input-row">
+                      <input type="text" id="cfg-scraper-shipping-sel" class="form-input" value="${escapeHtml(scraperSelectors.shippingMethodSelector || '')}" placeholder="例如: .logistics-name, .shipping-carrier" />
+                      <button class="btn-pick" data-pick="shippingMethodSelector" data-scope="scraper" data-label="物流方式">🎯 選取</button>
+                    </div>
+                    <div class="selector-preview-badge ${shippingPreview.found ? 'success' : 'muted'}">
+                      👁️ 抓取預覽：${escapeHtml(shippingPreview.text)}
+                    </div>
+                  </div>
+
+                  <!-- 6. 出貨期限 -->
+                  <div class="form-group">
+                    <label class="form-label">⏰ 出貨期限</label>
+                    <div class="selector-input-row">
+                      <input type="text" id="cfg-scraper-deadline-sel" class="form-input" value="${escapeHtml(scraperSelectors.shippingDeadlineSelector || '')}" placeholder="例如: .deadline-time, .ship-by-date" />
+                      <button class="btn-pick" data-pick="shippingDeadlineSelector" data-scope="scraper" data-label="出貨期限">🎯 選取</button>
+                    </div>
+                    <div class="selector-preview-badge ${deadlinePreview.found ? 'success' : 'muted'}">
+                      👁️ 抓取預覽：${escapeHtml(deadlinePreview.text)}
+                    </div>
+                  </div>
+
+                  <div class="settings-section-divider" style="margin-top: 14px;">
+                    <span>🛍️ 商品明細資訊 (卡片內部)</span>
+                  </div>
+
+                  <!-- 7. 商品行容器 (Collection - 選填) -->
+                  <div class="form-group">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                      <label class="form-label" style="margin-bottom: 0;">📋 商品行容器 <span class="optional-tag">選填</span></label>
+                      <span class="sub-hint">若一筆訂單有多個商品列</span>
+                    </div>
+                    <div class="selector-input-row">
+                      <input type="text" id="cfg-scraper-itemrow-sel" class="form-input" value="${escapeHtml(scraperSelectors.productRowSelector || '')}" placeholder="例如: .order-item, .product-row" />
+                      <button class="btn-pick" data-pick="productRowSelector" data-scope="scraper" data-label="商品行容器" data-collection="true">🎯 選取</button>
+                    </div>
+                    <div class="selector-preview-badge ${itemRowPreview.found ? 'success' : 'muted'}">
+                      👁️ 抓取預覽：${escapeHtml(itemRowPreview.text)}
+                    </div>
+                  </div>
+
+                  <!-- 8. 商品名稱 -->
+                  <div class="form-group">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                      <label class="form-label" style="margin-bottom: 0;">🏷️ 商品名稱 <span class="required-tag">必要</span></label>
+                      <span class="sub-hint">商品品名文字</span>
+                    </div>
+                    <div class="selector-input-row">
+                      <input type="text" id="cfg-scraper-pname-sel" class="form-input" value="${escapeHtml(scraperSelectors.productNameSelector || '')}" placeholder="例如: .product-name, .item-title" />
+                      <button class="btn-pick" data-pick="productNameSelector" data-scope="scraper" data-label="商品名稱">🎯 選取</button>
+                    </div>
+                    <div class="selector-preview-badge ${pNamePreview.found ? 'success' : 'muted'}">
+                      👁️ 抓取預覽：${escapeHtml(pNamePreview.text)}
+                    </div>
+                  </div>
+
+                  <!-- 9. 規格名稱 -->
+                  <div class="form-group">
+                    <label class="form-label">🔖 規格名稱</label>
+                    <div class="selector-input-row">
+                      <input type="text" id="cfg-scraper-pspec-sel" class="form-input" value="${escapeHtml(scraperSelectors.specificationSelector || '')}" placeholder="例如: .variation, .spec-name" />
+                      <button class="btn-pick" data-pick="specificationSelector" data-scope="scraper" data-label="規格名稱">🎯 選取</button>
+                    </div>
+                    <div class="selector-preview-badge ${pSpecPreview.found ? 'success' : 'muted'}">
+                      👁️ 抓取預覽：${escapeHtml(pSpecPreview.text)}
+                    </div>
+                  </div>
+
+                  <!-- 10. 購買數量 -->
+                  <div class="form-group">
+                    <label class="form-label">🔢 購買數量</label>
+                    <div class="selector-input-row">
+                      <input type="text" id="cfg-scraper-pqty-sel" class="form-input" value="${escapeHtml(scraperSelectors.quantitySelector || '')}" placeholder="例如: .quantity, .item-count" />
+                      <button class="btn-pick" data-pick="quantitySelector" data-scope="scraper" data-label="購買數量">🎯 選取</button>
+                    </div>
+                    <div class="selector-preview-badge ${pQtyPreview.found ? 'success' : 'muted'}">
+                      👁️ 抓取預覽：${escapeHtml(pQtyPreview.text)}
+                    </div>
+                  </div>
+
+                  <div style="display: flex; gap: 8px; margin-top: 10px;">
+                    <button id="btn-save-scraper-selectors" class="btn-primary" style="flex: 2;">💾 儲存此平台訂單總覽選取器</button>
+                    <button id="btn-clear-scraper-selectors" class="btn-secondary" style="flex: 1;">🧹 清空</button>
+                  </div>
+                </div>
+              `
+              : `
+                <!-- 分頁 B: 單筆利潤與出貨設定 -->
+                <div class="settings-card">
+                  <div class="settings-title">🔗 後端 Google Apps Script 連線設定</div>
+                  <div class="form-group">
+                    <label class="form-label">Web App URL (即 APP 後端部署網址)</label>
+                    <input type="text" id="cfg-gas-url" class="form-input" value="${escapeHtml(state.gasUrl)}" placeholder="https://script.google.com/macros/s/.../exec" />
+                  </div>
+                  <div style="display: flex; gap: 8px;">
+                    <button id="btn-test-gas" class="btn-secondary" style="flex: 1;">🧪 測試連線</button>
+                    <button id="btn-save-gas" class="btn-primary" style="flex: 1;">💾 儲存網址</button>
+                  </div>
+                  <div id="gas-test-result" style="font-size: 11px; margin-top: 4px;"></div>
+                </div>
+
+                <div class="settings-card">
+                  <div class="settings-title">🎯 ${platformLabel} - 單筆訂單利潤與出貨選取器</div>
+                  <div style="font-size: 11px; color: #94a3b8; line-height: 1.5; margin-bottom: 10px;">
+                    專用於<b>「單筆訂單詳細頁面」</b>。抓取該訂單之純單號、實際撥款入帳金額與平台手續費，以精確核算利潤！
+                  </div>
+
+                  <!-- 訂單編號選取器 -->
+                  <div class="form-group">
+                    <label class="form-label">🏷️ 訂單編號 CSS Selector</label>
+                    <div class="selector-input-row">
+                      <input type="text" id="cfg-orderid-sel" class="form-input" value="${escapeHtml(selectors.orderIdSelector || '')}" placeholder="例如: .order-sn, #order_id" />
+                      <button class="btn-pick" data-pick="orderIdSelector" data-scope="profit" data-label="單筆訂單編號">🎯 選取</button>
+                    </div>
+                    <div class="selector-preview-badge ${orderIdProfitPreview.found ? 'success' : 'muted'}">
+                      👁️ 網頁抓取預覽：${escapeHtml(orderIdProfitPreview.text)}
+                    </div>
+                  </div>
+
+                  <!-- 實際入帳金額選取器 -->
+                  <div class="form-group">
+                    <label class="form-label">💵 實際入帳金額 CSS Selector</label>
+                    <div class="selector-input-row">
+                      <input type="text" id="cfg-income-sel" class="form-input" value="${escapeHtml(selectors.incomeSelector || '')}" placeholder="例如: .income-amount, #net-payout" />
+                      <button class="btn-pick" data-pick="incomeSelector" data-scope="profit" data-label="實際入帳金額">🎯 選取</button>
+                    </div>
+                    <div class="selector-preview-badge ${incomePreview.found ? 'success' : 'muted'}">
+                      👁️ 網頁抓取預覽：${escapeHtml(incomePreview.text)}
+                    </div>
+                  </div>
+
+                  <!-- 平台手續費選取器 -->
+                  <div class="form-group">
+                    <label class="form-label">📉 平台手續費 CSS Selector</label>
+                    <div class="selector-input-row">
+                      <input type="text" id="cfg-fee-sel" class="form-input" value="${escapeHtml(selectors.feeSelector || '')}" placeholder="例如: .fee-total, #service-fee" />
+                      <button class="btn-pick" data-pick="feeSelector" data-scope="profit" data-label="平台手續費">🎯 選取</button>
+                    </div>
+                    <div class="selector-preview-badge ${feePreview.found ? 'success' : 'muted'}">
+                      👁️ 網頁抓取預覽：${escapeHtml(feePreview.text)}
+                    </div>
+                  </div>
+
+                  <button id="btn-save-selectors" class="btn-primary" style="width: 100%; margin-top: 6px;">💾 儲存此平台利潤選取器</button>
+                </div>
+
+                <!-- 浮動按鈕位置設定 -->
+                <div class="settings-card">
+                  <div class="settings-title">📍 浮動展開按鈕位置 (防止遮擋網頁重要按鈕)</div>
+                  <div style="font-size: 11px; color: #94a3b8; margin-bottom: 8px;">
+                    提示：您也可以在網頁上直接<b>「按住浮動按鈕 ⠿ 上下拖曳」</b>至任意高度（或拖到左側邊緣）。
+                  </div>
+                  <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                    <button class="btn-pos-preset" data-pos="top-right">靠右上 (20%)</button>
+                    <button class="btn-pos-preset" data-pos="mid-right">靠右中 (38%)</button>
+                    <button class="btn-pos-preset" data-pos="bottom-right">靠右下 (70%)</button>
+                    <button class="btn-pos-preset" data-pos="mid-left">靠左中 (38%)</button>
+                    <button class="btn-pos-preset" data-pos="reset">🔄 恢復預設</button>
+                  </div>
+                </div>
+              `
+          }
 
           <div style="text-align: center;">
             <button id="btn-back-main" class="btn-secondary" style="width: 100%;">⬅️ 返回利潤與出貨看板</button>
+          </div>
+        </div>
+      `;
+    } else if (state.currentTab === 'scrape_orders') {
+      const selectedCount = Object.values(state.selectedOrderIdsToScrape).filter(Boolean).length;
+      const products = normalizeProducts(state.cloudData.products || []);
+
+      contentHtml = `
+        <div class="scrape-view">
+          <div class="scrape-header-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <span class="scrape-badge">📥 抓取網頁訂單寫入「網路訂單」</span>
+              <span style="font-size: 11px; color: #38bdf8; font-weight: 700;">共偵測 ${state.detectedOrders.length} 筆</span>
+            </div>
+            <div style="font-size: 11px; color: #94a3b8; line-height: 1.5; margin-bottom: 10px;">
+              系統已自動偵測頁面訂單並比對系統商品編號 (product_id)。請勾選欲寫入試算表的訂單並確認品號：
+            </div>
+
+            <!-- 批次選擇工具列 -->
+            <div class="scrape-toolbar">
+              <div style="display: flex; gap: 6px; align-items: center;">
+                <button id="btn-select-all-orders" class="btn-xs">全選</button>
+                <button id="btn-deselect-all-orders" class="btn-xs">取消全選</button>
+                <span style="font-size: 11px; color: #cbd5e1; font-weight: 600; margin-left: 4px;">
+                  已選取 <strong style="color: #38bdf8;">${selectedCount}</strong> / ${state.detectedOrders.length} 筆
+                </span>
+              </div>
+              <label class="overwrite-checkbox-label">
+                <input type="checkbox" id="chk-overwrite-orders" ${state.overwriteExistingOrders ? 'checked' : ''} />
+                <span>若訂單已存在則覆蓋更新</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- 訂單清單 -->
+          <div class="scrape-orders-list">
+            ${
+              state.detectedOrders.length === 0
+                ? `<div style="text-align: center; color: #94a3b8; padding: 28px 16px; font-size: 12px; background: #1e293b; border-radius: 8px; line-height: 1.6;">
+                     <div style="font-size: 28px; margin-bottom: 6px;">🔍</div>
+                     <div style="font-weight: 700; color: #f1f5f9; font-size: 14px; margin-bottom: 4px;">目前頁面未抓取到訂單</div>
+                     <div style="font-size: 11px; color: #94a3b8; margin-bottom: 14px;">
+                       若您在訂單總覽 / 待出貨清單頁面，請先設定「訂單總覽選取器」，自訂點選卡片、單號與商品等元素！
+                     </div>
+                     <button id="btn-goto-scraper-settings" class="btn-primary" style="padding: 8px 16px; font-size: 12px; margin: 0 auto; display: inline-flex; align-items: center; gap: 4px;">
+                       ⚙️ 前往設定「訂單總覽選取器」
+                     </button>
+                   </div>`
+                : state.detectedOrders
+                    .map((ord) => {
+                      const isSelected = Boolean(state.selectedOrderIdsToScrape[ord.order_id]);
+                      const isAlreadyInSheet = (state.cloudData.onlineOrders || []).some((o) => {
+                        const rawOid = String(o.order_id || o['訂單編號'] || '').trim().toLowerCase();
+                        return rawOid === ord.order_id.toLowerCase();
+                      });
+
+                      return `
+                        <div class="scrape-order-card ${isSelected ? 'selected' : ''}">
+                          <div class="scrape-card-top">
+                            <label class="scrape-check-wrapper">
+                              <input type="checkbox" class="order-select-checkbox" data-order-id="${escapeHtml(ord.order_id)}" ${isSelected ? 'checked' : ''} />
+                              <strong class="scrape-order-id">#${escapeHtml(ord.order_id)}</strong>
+                            </label>
+                            <span class="platform-badge" style="font-size: 10px;">${escapeHtml(ord.platform)}</span>
+                          </div>
+
+                          <div class="scrape-meta-row">
+                            <span>👤 買家: <strong>${escapeHtml(ord.customer_name || '無')}</strong></span>
+                            <span>💰 總計: <strong style="color: #38bdf8;">$${ord.total_amount ? ord.total_amount.toLocaleString() : '0'}</strong></span>
+                            ${ord.shipping_deadline ? `<span>⏰ 期限: <strong style="color: #fbbf24;">${escapeHtml(ord.shipping_deadline)}</strong></span>` : ''}
+                          </div>
+
+                          ${
+                            isAlreadyInSheet
+                              ? `<div class="scrape-existing-warn">
+                                   ⚠️ 試算表中已存在此訂單紀錄 (寫入時將依勾選進行覆蓋更新)
+                                 </div>`
+                              : ''
+                          }
+
+                          <!-- 商品清單與品號選取 -->
+                          <div class="scrape-items-box">
+                            <div style="font-size: 11px; color: #94a3b8; font-weight: 600; margin-bottom: 6px;">
+                              商品明細與系統品號比對 (${ord.items.length} 項)：
+                            </div>
+                            ${ord.items
+                              .map((it, itIdx) => {
+                                const itemKey = `${ord.order_id}_${itIdx}`;
+                                const currentPid = state.scrapedOrderProductIds[itemKey] !== undefined ? state.scrapedOrderProductIds[itemKey] : (it.matched_product_id || '');
+
+                                return `
+                                  <div class="scrape-item-row">
+                                    <div class="scrape-item-text">
+                                      <div class="scrape-item-title">${escapeHtml(it.product_name)}</div>
+                                      <div class="scrape-item-subinfo">
+                                        ${it.specification ? `<span class="scrape-spec-tag">規格: ${escapeHtml(it.specification)}</span>` : ''}
+                                        <span>數量: <strong>${it.quantity}</strong></span>
+                                        ${it.price ? `<span>單價: $${it.price}</span>` : ''}
+                                      </div>
+                                    </div>
+
+                                    <div class="scrape-pid-picker">
+                                      <div class="scrape-pid-title">
+                                        <span>商品編號 (product_id)：</span>
+                                        ${
+                                          currentPid
+                                            ? `<span class="scrape-match-tag">⚡ ${it.matched_product_id === currentPid ? '自動比對' : '已指定'}</span>`
+                                            : `<span class="scrape-unmatch-tag">⚠️ 尚未比對</span>`
+                                        }
+                                      </div>
+                                      <div class="scrape-pid-controls">
+                                        <select class="scrape-pid-select" data-item-key="${itemKey}">
+                                          <option value="" ${!currentPid ? 'selected' : ''}>-- 請選擇或輸入品號 --</option>
+                                          ${products
+                                            .map((p) => {
+                                              const isSel = currentPid && String(p.product_id).trim().toLowerCase() === String(currentPid).trim().toLowerCase();
+                                              return `<option value="${escapeHtml(p.product_id)}" ${isSel ? 'selected' : ''}>[${escapeHtml(p.product_id)}] ${escapeHtml(p.name)}</option>`;
+                                            })
+                                            .join('')}
+                                        </select>
+                                        <input type="text" class="scrape-pid-input" data-item-key="${itemKey}" value="${escapeHtml(currentPid)}" placeholder="輸入商品編號" />
+                                      </div>
+                                    </div>
+                                  </div>
+                                `;
+                              })
+                              .join('')}
+                          </div>
+                        </div>
+                      `;
+                    })
+                    .join('')
+            }
           </div>
         </div>
       `;
@@ -1360,9 +2193,12 @@
         <!-- 訂單識別與手動編輯欄位 (雙軌：支援自動抓取與手動貼上) -->
         <div class="order-banner">
           <div style="width: 100%;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 6px;">
               <span class="platform-badge">${platformLabel}</span>
-              <button class="btn-xs" id="btn-re-scrape-order" title="使用設定的選取器重新從網頁抓取">🎯 網頁抓取單號</button>
+              <div style="display: flex; gap: 6px;">
+                <button class="btn-xs highlight" id="btn-scrape-orders-page" title="抓取網頁上單筆或多筆訂單寫入網路訂單試算表">📥 抓取訂單入庫</button>
+                <button class="btn-xs" id="btn-re-scrape-order" title="使用設定的選取器重新從網頁抓取">🎯 網頁抓取單號</button>
+              </div>
             </div>
             <div class="order-id-input-group">
               <span style="font-size: 11px; color: #94a3b8; font-weight: 600; white-space: nowrap;">訂單編號：</span>
@@ -1547,7 +2383,17 @@
 
     // 抽屜底部出貨按鈕區
     let footerHtml = '';
-    if (state.currentTab === 'main') {
+    if (state.currentTab === 'scrape_orders') {
+      const selectedCount = Object.values(state.selectedOrderIdsToScrape).filter(Boolean).length;
+      footerHtml = `
+        <div style="display: flex; gap: 8px; width: 100%;">
+          <button id="btn-cancel-scrape" class="btn-secondary" style="flex: 1; padding: 10px;">⬅️ 返回</button>
+          <button id="btn-save-selected-orders" class="btn-ship" style="flex: 2; margin-top: 0; padding: 10px;" ${selectedCount === 0 || state.isSavingOrders ? 'disabled' : ''}>
+            ${state.isSavingOrders ? '<div class="spinner"></div> 寫入試算表中...' : `🚀 寫入網路訂單 (${selectedCount} 筆)`}
+          </button>
+        </div>
+      `;
+    } else if (state.currentTab === 'main') {
       if (analysis.isShipped) {
         footerHtml = `
           <button class="btn-ship-success" disabled>
@@ -1594,6 +2440,7 @@
               ${state.isSyncing ? '<div class="spinner" title="正在背景同步雲端試算表..."></div>' : ''}
             </div>
             <div class="header-actions">
+              <button class="icon-btn" id="btn-header-scrape" title="抓取網頁訂單寫入「網路訂單」試算表">📥</button>
               <button class="icon-btn" id="btn-refresh-cloud" title="立即同步試算表最新庫存">🔄</button>
               <button class="icon-btn" id="btn-toggle-settings" title="${state.currentTab === 'settings' ? '回主面板' : '設定選取器與 API'}">⚙️</button>
               <button class="icon-btn close" id="btn-close-drawer" title="收合面板">✖️</button>
@@ -1793,6 +2640,206 @@
       });
     }
 
+    // 啟動抓取網頁訂單流程
+    const scrapePageBtn = shadow.getElementById('btn-scrape-orders-page');
+    if (scrapePageBtn) {
+      scrapePageBtn.addEventListener('click', () => {
+        detectAndScrapeOrdersFromPage();
+      });
+    }
+
+    const headerScrapeBtn = shadow.getElementById('btn-header-scrape');
+    if (headerScrapeBtn) {
+      headerScrapeBtn.addEventListener('click', () => {
+        detectAndScrapeOrdersFromPage();
+      });
+    }
+
+    // 抓取訂單畫面：全選 / 取消全選
+    const selectAllBtn = shadow.getElementById('btn-select-all-orders');
+    if (selectAllBtn) {
+      selectAllBtn.addEventListener('click', () => {
+        state.detectedOrders.forEach((o) => {
+          state.selectedOrderIdsToScrape[o.order_id] = true;
+        });
+        render();
+      });
+    }
+
+    const deselectAllBtn = shadow.getElementById('btn-deselect-all-orders');
+    if (deselectAllBtn) {
+      deselectAllBtn.addEventListener('click', () => {
+        state.detectedOrders.forEach((o) => {
+          state.selectedOrderIdsToScrape[o.order_id] = false;
+        });
+        render();
+      });
+    }
+
+    // 覆蓋現有訂單開關
+    const overwriteChk = shadow.getElementById('chk-overwrite-orders');
+    if (overwriteChk) {
+      overwriteChk.addEventListener('change', (e) => {
+        state.overwriteExistingOrders = e.target.checked;
+      });
+    }
+
+    // 抓取訂單畫面：單筆訂單勾選切換
+    shadow.querySelectorAll('.order-select-checkbox').forEach((chk) => {
+      chk.addEventListener('change', (e) => {
+        const oid = e.target.getAttribute('data-order-id');
+        state.selectedOrderIdsToScrape[oid] = e.target.checked;
+        const card = e.target.closest('.scrape-order-card');
+        if (card) {
+          card.classList.toggle('selected', e.target.checked);
+        }
+        // 更新底部儲存按鈕文字與數量
+        const selectedCount = Object.values(state.selectedOrderIdsToScrape).filter(Boolean).length;
+        const saveBtn = shadow.getElementById('btn-save-selected-orders');
+        if (saveBtn) {
+          saveBtn.innerText = `🚀 寫入網路訂單 (${selectedCount} 筆)`;
+          saveBtn.disabled = selectedCount === 0 || state.isSavingOrders;
+        }
+      });
+    });
+
+    // 抓取訂單畫面：商品編號下拉選單與手動輸入連動
+    shadow.querySelectorAll('.scrape-pid-select').forEach((sel) => {
+      sel.addEventListener('change', (e) => {
+        const itemKey = e.target.getAttribute('data-item-key');
+        const chosenVal = e.target.value;
+        state.scrapedOrderProductIds[itemKey] = chosenVal;
+        const manualInput = shadow.querySelector(`.scrape-pid-input[data-item-key="${itemKey}"]`);
+        if (manualInput) {
+          manualInput.value = chosenVal;
+        }
+      });
+    });
+
+    shadow.querySelectorAll('.scrape-pid-input').forEach((inp) => {
+      inp.addEventListener('input', (e) => {
+        const itemKey = e.target.getAttribute('data-item-key');
+        const manualVal = e.target.value.trim();
+        state.scrapedOrderProductIds[itemKey] = manualVal;
+      });
+    });
+
+    // 抓取訂單畫面：取消並返回主面板
+    const cancelScrapeBtn = shadow.getElementById('btn-cancel-scrape');
+    if (cancelScrapeBtn) {
+      cancelScrapeBtn.addEventListener('click', () => {
+        state.currentTab = 'main';
+        render();
+      });
+    }
+
+    // 抓取訂單畫面：確認寫入網路訂單至 Google 試算表
+    const saveOrdersBtn = shadow.getElementById('btn-save-selected-orders');
+    if (saveOrdersBtn) {
+      saveOrdersBtn.addEventListener('click', () => {
+        if (!state.gasUrl) {
+          alert('⚠️ 尚未設定 Google Apps Script Web App URL，請先至【⚙️ 設定】中填入並儲存！');
+          state.currentTab = 'settings';
+          render();
+          return;
+        }
+
+        const selectedOrders = (state.detectedOrders || []).filter(
+          (o) => state.selectedOrderIdsToScrape[o.order_id]
+        );
+
+        if (selectedOrders.length === 0) {
+          alert('⚠️ 請至少勾選一筆要寫入的訂單！');
+          return;
+        }
+
+        // 檢查是否有已存在於試算表中的訂單
+        const sheetOrders = state.cloudData.onlineOrders || [];
+        const existingList = selectedOrders.filter((ord) => {
+          return sheetOrders.some((so) => {
+            const sOid = String(so.order_id || so['訂單編號'] || '').trim().toLowerCase();
+            return sOid === ord.order_id.toLowerCase();
+          });
+        });
+
+        if (existingList.length > 0) {
+          const namesStr = existingList.map((o) => `• #${o.order_id}`).join('\n');
+          const confirmOverwrite = confirm(
+            `⚠️ 提示：您勾選的訂單中，有 ${existingList.length} 筆已存在於「網路訂單」試算表：\n\n${namesStr}\n\n是否確認要覆蓋更新這些現有訂單？`
+          );
+          if (!confirmOverwrite) return;
+        }
+
+        // 組裝要寫入試算表的每一行資料
+        const rowsToSave = [];
+        for (const ord of selectedOrders) {
+          for (let i = 0; i < ord.items.length; i++) {
+            const it = ord.items[i];
+            const itemKey = `${ord.order_id}_${i}`;
+            const chosenPid = state.scrapedOrderProductIds[itemKey] !== undefined ? state.scrapedOrderProductIds[itemKey] : (it.matched_product_id || '');
+
+            rowsToSave.push({
+              order_id: ord.order_id,
+              product_id: chosenPid,
+              product_name: it.product_name,
+              specification: it.specification || '',
+              quantity: Number(it.quantity) || 1,
+              price: Number(it.price) || 0,
+              total_amount: Number(ord.total_amount) || 0,
+              order_status: ord.order_status || '正常',
+              customer_name: ord.customer_name || '',
+              platform: ord.platform || platformLabel,
+              shipping_method: ord.shipping_method || '',
+              shipping_deadline: ord.shipping_deadline || ''
+            });
+          }
+        }
+
+        state.isSavingOrders = true;
+        render();
+
+        chrome.runtime.sendMessage(
+          {
+            type: 'SAVE_ONLINE_ORDERS',
+            gasUrl: state.gasUrl,
+            orders: rowsToSave,
+            overwrite: state.overwriteExistingOrders !== false
+          },
+          (res) => {
+            state.isSavingOrders = false;
+            if (chrome.runtime.lastError || !res || !res.success) {
+              const err = chrome.runtime.lastError?.message || res?.error || '寫入失敗，請確認 Apps Script 權限與連線';
+              alert(`❌ 寫入網路訂單失敗: ${err}`);
+              render();
+              return;
+            }
+
+            alert(`🎉 成功寫入 ${selectedOrders.length} 筆訂單 (${rowsToSave.length} 項商品) 至「網路訂單」試算表！`);
+
+            // 樂觀更新本地記憶體與快取
+            const selOidsSet = new Set(selectedOrders.map((o) => o.order_id.toLowerCase()));
+            const remainingOrders = (state.cloudData.onlineOrders || []).filter((so) => {
+              const sOid = String(so.order_id || so['訂單編號'] || '').trim().toLowerCase();
+              return !selOidsSet.has(sOid);
+            });
+            state.cloudData.onlineOrders = [...remainingOrders, ...rowsToSave];
+            chrome.storage.local.set({ cachedCloudData: state.cloudData });
+
+            // 設定為第一筆單號以供立即可見真實利潤
+            if (selectedOrders.length > 0) {
+              state.currentOrderId = selectedOrders[0].order_id;
+              chrome.storage.local.set({ lastOrderId: selectedOrders[0].order_id });
+            }
+
+            // 返回主面板並背景同步
+            state.currentTab = 'main';
+            render();
+            silentRefreshCloudData(false);
+          }
+        );
+      });
+    }
+
     // 執行出貨
     const doShipBtn = shadow.getElementById('btn-do-ship');
     if (doShipBtn) {
@@ -1831,6 +2878,25 @@
       });
     });
 
+    // 設定頁：次分頁切換
+    shadow.querySelectorAll('.settings-subtab-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const id = e.currentTarget.id;
+        state.settingsSubTab = id === 'btn-subtab-scraper' ? 'scraper' : 'profit';
+        render();
+      });
+    });
+
+    // 抓取未找到訂單提示頁：跳轉至選取器設定
+    const gotoScraperSettingsBtn = shadow.getElementById('btn-goto-scraper-settings');
+    if (gotoScraperSettingsBtn) {
+      gotoScraperSettingsBtn.addEventListener('click', () => {
+        state.currentTab = 'settings';
+        state.settingsSubTab = 'scraper';
+        render();
+      });
+    }
+
     // 設定頁：儲存 GAS URL
     const saveGasBtn = shadow.getElementById('btn-save-gas');
     const gasInput = shadow.getElementById('cfg-gas-url');
@@ -1864,7 +2930,7 @@
       });
     }
 
-    // 設定頁：儲存 Selectors
+    // 設定頁：儲存單筆利潤 Selectors
     const saveSelectorsBtn = shadow.getElementById('btn-save-selectors');
     if (saveSelectorsBtn) {
       saveSelectorsBtn.addEventListener('click', () => {
@@ -1873,23 +2939,92 @@
         const orderIdSel = shadow.getElementById('cfg-orderid-sel')?.value.trim() || '';
 
         state.platformSelectors[currentPlatform] = {
+          ...state.platformSelectors[currentPlatform],
           incomeSelector: incomeSel,
           feeSelector: feeSel,
           orderIdSelector: orderIdSel
         };
         chrome.storage.local.set({ platformSelectors: state.platformSelectors });
-        alert(`✅ 已儲存 ${platformLabel} 的選取器！`);
+        alert(`✅ 已儲存 ${platformLabel} 的單筆利潤選取器！`);
         detectOrderId(true);
         state.currentTab = 'main';
         render();
       });
     }
 
-    // 設定頁：啟動視覺化選取器 (🎯 選取)
+    // 設定頁：儲存訂單總覽 Scraper Selectors (10 項)
+    const saveScraperBtn = shadow.getElementById('btn-save-scraper-selectors');
+    if (saveScraperBtn) {
+      saveScraperBtn.addEventListener('click', () => {
+        const cardSel = shadow.getElementById('cfg-scraper-card-sel')?.value.trim() || '';
+        const oidSel = shadow.getElementById('cfg-scraper-orderid-sel')?.value.trim() || '';
+        const custSel = shadow.getElementById('cfg-scraper-customer-sel')?.value.trim() || '';
+        const amountSel = shadow.getElementById('cfg-scraper-amount-sel')?.value.trim() || '';
+        const shipSel = shadow.getElementById('cfg-scraper-shipping-sel')?.value.trim() || '';
+        const deadlineSel = shadow.getElementById('cfg-scraper-deadline-sel')?.value.trim() || '';
+        const itemRowSel = shadow.getElementById('cfg-scraper-itemrow-sel')?.value.trim() || '';
+        const pNameSel = shadow.getElementById('cfg-scraper-pname-sel')?.value.trim() || '';
+        const pSpecSel = shadow.getElementById('cfg-scraper-pspec-sel')?.value.trim() || '';
+        const pQtySel = shadow.getElementById('cfg-scraper-pqty-sel')?.value.trim() || '';
+
+        if (!state.platformSelectors[currentPlatform]) {
+          state.platformSelectors[currentPlatform] = {
+            incomeSelector: '',
+            feeSelector: '',
+            orderIdSelector: ''
+          };
+        }
+        state.platformSelectors[currentPlatform].orderScraper = {
+          cardSelector: cardSel,
+          orderIdSelector: oidSel,
+          customerNameSelector: custSel,
+          totalAmountSelector: amountSel,
+          shippingMethodSelector: shipSel,
+          shippingDeadlineSelector: deadlineSel,
+          productRowSelector: itemRowSel,
+          productNameSelector: pNameSel,
+          specificationSelector: pSpecSel,
+          quantitySelector: pQtySel
+        };
+        chrome.storage.local.set({ platformSelectors: state.platformSelectors });
+        alert(`✅ 已儲存 ${platformLabel} 的訂單總覽選取器！\n\n您現在可點擊面板頂部 📥 按鈕測試抓取！`);
+        render();
+      });
+    }
+
+    // 設定頁：清空訂單總覽 Scraper Selectors
+    const clearScraperBtn = shadow.getElementById('btn-clear-scraper-selectors');
+    if (clearScraperBtn) {
+      clearScraperBtn.addEventListener('click', () => {
+        if (!confirm(`確定要清空 ${platformLabel} 的訂單總覽選取器嗎？`)) return;
+        if (state.platformSelectors[currentPlatform]) {
+          state.platformSelectors[currentPlatform].orderScraper = {
+            cardSelector: '',
+            orderIdSelector: '',
+            customerNameSelector: '',
+            totalAmountSelector: '',
+            shippingMethodSelector: '',
+            shippingDeadlineSelector: '',
+            productRowSelector: '',
+            productNameSelector: '',
+            specificationSelector: '',
+            quantitySelector: ''
+          };
+          chrome.storage.local.set({ platformSelectors: state.platformSelectors });
+          alert(`✅ 已清空 ${platformLabel} 的訂單總覽選取器！`);
+          render();
+        }
+      });
+    }
+
+    // 設定頁：啟動視覺化選取器 (🎯 選取 - 支援不同 scope 與 collection)
     shadow.querySelectorAll('.btn-pick').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         const targetField = e.currentTarget.getAttribute('data-pick');
-        startElementPicker(targetField);
+        const scope = e.currentTarget.getAttribute('data-scope') || 'profit';
+        const label = e.currentTarget.getAttribute('data-label') || '';
+        const isCollection = e.currentTarget.getAttribute('data-collection') === 'true';
+        startElementPicker(targetField, scope, label, isCollection);
       });
     });
 

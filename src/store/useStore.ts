@@ -431,18 +431,61 @@ const normalizeAndFillOnlineOrders = (rawItems: any[], _products?: Product[], _s
     const quantity = Number(getVal(['quantity', 'qty', 'count', '數量', '件數', '個數', '買家購買數量'])) || 1;
     let specification = String(getVal(['specification', 'spec', 'variant', '商品規格', '規格', '規格描述', '選項'])).trim();
 
-    // Link with system products if available
+    const rawSheetProductId = product_id;
+    let has_invalid_product_id = false;
+    let invalid_product_id_reason: 'missing' | 'not_found' | 'mismatch' | undefined;
+    let suggested_product_id: string | undefined;
+    let suggested_product_name: string | undefined;
+
+    // Link and validate with system products if available
     let matchedProd: Product | undefined;
     if (_products && _products.length > 0) {
-      if (product_id) {
-        matchedProd = _products.find(p => String(p.product_id || '').trim().toLowerCase() === product_id.toLowerCase());
+      const prodById = rawSheetProductId
+        ? _products.find(p => String(p.product_id || '').trim().toLowerCase() === rawSheetProductId.toLowerCase())
+        : undefined;
+
+      const prodByName = product_name
+        ? _products.find(p => {
+            const pName = String(p.name || '').trim().toLowerCase();
+            const targetName = product_name.toLowerCase();
+            return pName === targetName || (pName.length >= 4 && targetName.length >= 4 && (pName.includes(targetName) || targetName.includes(pName)));
+          })
+        : undefined;
+
+      if (!rawSheetProductId) {
+        has_invalid_product_id = true;
+        invalid_product_id_reason = 'missing';
+        if (prodByName) {
+          suggested_product_id = prodByName.product_id;
+          suggested_product_name = prodByName.name;
+          matchedProd = prodByName;
+        }
+      } else if (!prodById) {
+        has_invalid_product_id = true;
+        invalid_product_id_reason = 'not_found';
+        if (prodByName) {
+          suggested_product_id = prodByName.product_id;
+          suggested_product_name = prodByName.name;
+          matchedProd = prodByName;
+        }
+      } else if (prodByName && prodById && prodById.product_id !== prodByName.product_id) {
+        const pIdName = String(prodById.name || '').trim().toLowerCase();
+        const curName = product_name.toLowerCase();
+        if (!pIdName.includes(curName) && !curName.includes(pIdName)) {
+          has_invalid_product_id = true;
+          invalid_product_id_reason = 'mismatch';
+          suggested_product_id = prodByName.product_id;
+          suggested_product_name = prodByName.name;
+          matchedProd = prodById;
+        } else {
+          matchedProd = prodById;
+        }
+      } else {
+        matchedProd = prodById || prodByName;
       }
-      if (!matchedProd && product_name) {
-        matchedProd = _products.find(p => String(p.name || '').trim().toLowerCase() === product_name.toLowerCase());
-      }
-      if (matchedProd) {
-        if (!product_id) product_id = matchedProd.product_id;
-        if (!product_name) product_name = matchedProd.name;
+
+      if (matchedProd && !product_name) {
+        product_name = matchedProd.name;
       }
     }
 
@@ -473,7 +516,12 @@ const normalizeAndFillOnlineOrders = (rawItems: any[], _products?: Product[], _s
       order_status: calcStatus,
       created_at,
       specification,
-      shipping_method
+      shipping_method,
+      has_invalid_product_id,
+      raw_sheet_product_id: rawSheetProductId,
+      invalid_product_id_reason,
+      suggested_product_id,
+      suggested_product_name
     });
   }
 
@@ -540,6 +588,17 @@ export interface OrderFetchSummary {
   duplicateOrderIds: string[];
   alreadyShippedOrderIds: string[];
   sheetDuplicateOrderIds: string[];
+  invalidProductIdCount: number;
+  invalidProductIdFixableCount: number;
+  invalidProductIdItems: Array<{
+    orderId: string;
+    itemIndex: number;
+    productName: string;
+    rawSheetProductId?: string;
+    suggestedProductId?: string;
+    suggestedProductName?: string;
+    reason: 'missing' | 'not_found' | 'mismatch';
+  }>;
   details: OrderDuplicateCheckResult[];
 }
 
@@ -677,6 +736,37 @@ export const analyzeOnlineOrdersDuplication = (
     });
   }
 
+  // Calculate product_id validity across all incoming items
+  const invalidProductIdItems: Array<{
+    orderId: string;
+    itemIndex: number;
+    productName: string;
+    rawSheetProductId?: string;
+    suggestedProductId?: string;
+    suggestedProductName?: string;
+    reason: 'missing' | 'not_found' | 'mismatch';
+  }> = [];
+
+  const orderItemIndexTracker = new Map<string, number>();
+  for (const it of resolvedIncomingOrders) {
+    const curIdx = orderItemIndexTracker.get(it.order_id) || 0;
+    orderItemIndexTracker.set(it.order_id, curIdx + 1);
+
+    if (it.has_invalid_product_id) {
+      invalidProductIdItems.push({
+        orderId: it.order_id,
+        itemIndex: curIdx,
+        productName: it.product_name,
+        rawSheetProductId: it.raw_sheet_product_id,
+        suggestedProductId: it.suggested_product_id,
+        suggestedProductName: it.suggested_product_name,
+        reason: it.invalid_product_id_reason || 'not_found'
+      });
+    }
+  }
+
+  const invalidProductIdFixableCount = invalidProductIdItems.filter(i => Boolean(i.suggestedProductId)).length;
+
   return {
     fetchedAt: new Date().toISOString(),
     totalRawRows: rawIncomingOrders.length,
@@ -688,6 +778,9 @@ export const analyzeOnlineOrdersDuplication = (
     duplicateOrderIds,
     alreadyShippedOrderIds,
     sheetDuplicateOrderIds,
+    invalidProductIdCount: invalidProductIdItems.length,
+    invalidProductIdFixableCount,
+    invalidProductIdItems,
     details
   };
 };
@@ -1510,6 +1603,8 @@ interface AppState {
   completeAndStockInAllRemainingPO: (poId: string) => Promise<void>;
   updateOnlineOrderStatus: (orderId: string, status: string, productId?: string) => Promise<boolean>;
   updateOnlineOrderItemSpecification: (orderId: string, itemIdx: number, newSpec: string) => Promise<void>;
+  updateOnlineOrderItemProductId: (orderId: string, itemIdx: number, newProductId: string) => Promise<boolean>;
+  fixAllInvalidProductIds: () => Promise<number>;
   deleteOnlineOrder: (orderId: string) => Promise<boolean>;
   deduplicateOnlineOrders: (targetOrderId?: string) => Promise<{ success: boolean; removedRowCount: number; affectedOrderCount: number }>;
   addProduct: (product: Omit<Product, 'created_at'>, isManual?: boolean) => Promise<void>;
@@ -2798,12 +2893,15 @@ export const useStore = create<AppState>((set, get) => ({
           orderFetchSummary: summary
         });
 
-        if (summary.duplicateOrderCount > 0) {
+        const invalidNote = summary.invalidProductIdCount > 0 
+          ? `，⚠️ 發現 ${summary.invalidProductIdCount} 項商品編號異常${summary.invalidProductIdFixableCount > 0 ? ` (${summary.invalidProductIdFixableCount} 項可自動修正)` : ''}`
+          : '';
+        if (summary.duplicateOrderCount > 0 || summary.invalidProductIdCount > 0) {
           const shippedNote = summary.alreadyShippedOrderIds.length > 0 ? `，${summary.alreadyShippedOrderIds.length} 筆為歷史已出貨` : '';
           const sheetDupNote = summary.sheetDuplicateRowCount > 0 ? `，${summary.sheetDuplicateRowCount} 行試算表內相同品項重複` : '';
-          showToast(`⚠️ 讀取完成！共 ${summary.totalUniqueOrders} 筆訂單，發現 ${summary.duplicateOrderCount} 筆重複或已出貨訂單${shippedNote}${sheetDupNote}。`);
+          showToast(`⚠️ 讀取完成！共 ${summary.totalUniqueOrders} 筆訂單${shippedNote}${sheetDupNote}${invalidNote}。`);
         } else {
-          showToast(`✨ 成功讀取 ${summary.totalUniqueOrders} 筆訂單！(商品名稱、編號與數量皆無重複)`);
+          showToast(`✨ 成功讀取 ${summary.totalUniqueOrders} 筆訂單！(商品名稱、編號與數量皆已檢驗無誤)`);
         }
       } else {
         throw new Error(`狀態碼: ${rO.status}`);
@@ -3308,6 +3406,95 @@ export const useStore = create<AppState>((set, get) => ({
       const o = updatedOrders[i];
       await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id || 'unlinked'}_${i}`, o);
     }
+  },
+
+  updateOnlineOrderItemProductId: async (orderId: string, itemIdx: number, newProductId: string) => {
+    const { onlineOrders, products, transactions, gasApiUrl, showToast } = get();
+    const cleanNewPid = String(newProductId || '').trim();
+    if (!cleanNewPid) return false;
+
+    const matchedProd = products.find(p => String(p.product_id).trim().toLowerCase() === cleanNewPid.toLowerCase());
+    let currentIdxInOrder = 0;
+    let oldPid = '';
+    let targetPName = '';
+
+    const updatedOrders = onlineOrders.map(o => {
+      if (o.order_id === orderId) {
+        if (currentIdxInOrder === itemIdx) {
+          oldPid = o.raw_sheet_product_id || o.product_id;
+          targetPName = o.product_name;
+          currentIdxInOrder++;
+          return {
+            ...o,
+            product_id: cleanNewPid,
+            raw_sheet_product_id: cleanNewPid,
+            has_invalid_product_id: false,
+            invalid_product_id_reason: undefined,
+            suggested_product_id: undefined,
+            suggested_product_name: undefined,
+            price: (matchedProd && matchedProd.cost_price && !o.price) ? matchedProd.cost_price : o.price
+          };
+        }
+        currentIdxInOrder++;
+      }
+      return o;
+    });
+
+    set({ onlineOrders: updatedOrders });
+
+    // Update local cache
+    await dbOnlineOrders.clear();
+    for (let i = 0; i < updatedOrders.length; i++) {
+      const o = updatedOrders[i];
+      await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id || 'unlinked'}_${i}`, o);
+    }
+
+    // Refresh duplication & validation summary
+    const newSummary = analyzeOnlineOrdersDuplication(updatedOrders, updatedOrders, get().onlineOrders, transactions);
+    set({ orderFetchSummary: newSummary });
+
+    showToast(`✅ 已修正商品編號為 [${cleanNewPid}]`);
+
+    // Synchronize to Google Apps Script in background if configured
+    if (gasApiUrl && gasApiUrl.trim().startsWith('http')) {
+      try {
+        await fetch(`${gasApiUrl.trim()}?action=updateOnlineOrderProductId`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            order_id: orderId,
+            item_index: itemIdx,
+            new_product_id: cleanNewPid,
+            product_name: targetPName,
+            old_product_id: oldPid
+          })
+        });
+      } catch (e) {
+        console.warn("Could not sync updated product_id to cloud:", e);
+      }
+    }
+    return true;
+  },
+
+  fixAllInvalidProductIds: async () => {
+    const { orderFetchSummary, updateOnlineOrderItemProductId, showToast } = get();
+    const fixableItems = (orderFetchSummary.invalidProductIdItems || []).filter(item => Boolean(item.suggestedProductId));
+
+    if (fixableItems.length === 0) {
+      showToast("ℹ️ 目前沒有可自動比對品號的異常項目");
+      return 0;
+    }
+
+    let successCount = 0;
+    for (const item of fixableItems) {
+      if (item.suggestedProductId) {
+        const ok = await updateOnlineOrderItemProductId(item.orderId, item.itemIndex, item.suggestedProductId);
+        if (ok) successCount++;
+      }
+    }
+
+    showToast(`⚡ 批次修正完成！共自動更新 ${successCount} 項商品編號。`);
+    return successCount;
   },
 
   deduplicateOnlineOrders: async (targetOrderId?: string) => {

@@ -36,6 +36,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
+
+  if (request.type === 'SAVE_ONLINE_ORDERS') {
+    handleSaveOnlineOrders(request.gasUrl, request.orders, request.overwrite)
+      .then(result => sendResponse(result))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
 });
 
 // 建立乾淨的 GAS Web App API 網址 (自動清除結尾斜線、處理問號與參數)
@@ -298,3 +305,60 @@ async function handleBatchShipment(gasUrl, payload) {
     throw err;
   }
 }
+
+// 寫入/覆蓋網路訂單至 Google 試算表
+async function handleSaveOnlineOrders(gasUrl, orders, overwrite = true) {
+  const url = buildGasUrl(gasUrl, 'saveOnlineOrders');
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 25000);
+
+  try {
+    const payload = {
+      action: 'saveOnlineOrders',
+      orders: orders,
+      overwrite: overwrite !== false
+    };
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8'
+      },
+      redirect: 'follow',
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`寫入網路訂單 API 失敗 (HTTP ${response.status})`);
+    }
+
+    const rawText = await response.text();
+    const cleanText = rawText ? rawText.replace(/^\uFEFF/, '').trim() : '';
+    if (!cleanText || cleanText.startsWith('<')) {
+      throw new Error('Google 試算表尚未支援 saveOnlineOrders，請前往 Google 試算表更新指令碼並發布新版本！');
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(cleanText);
+    } catch (e) {
+      throw new Error(`試算表回傳格式錯誤: ${cleanText.slice(0, 100)}`);
+    }
+
+    if (!parsed || parsed.success !== true) {
+      throw new Error(parsed?.error || '寫入網路訂單失敗');
+    }
+
+    return { success: true, result: parsed };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error('寫入網路訂單請求逾時 (超過 25 秒無回應)');
+    }
+    throw err;
+  }
+}
+

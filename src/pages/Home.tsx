@@ -77,6 +77,8 @@ export default function Home() {
     deleteOnlineOrder,
     deduplicateOnlineOrders,
     updateOnlineOrderItemSpecification,
+    updateOnlineOrderItemProductId,
+    fixAllInvalidProductIds,
     refreshStock
   } = useStore();
 
@@ -108,7 +110,7 @@ export default function Home() {
   const [orderStatusFilter, setOrderStatusFilter] = useState('ALL');
   const [orderStockFilter, setOrderStockFilter] = useState<'ALL' | 'READY' | 'SHORTFALL'>('ALL');
   const [orderShippingFilter, setOrderShippingFilter] = useState('ALL');
-  const [orderQuickFilter, setOrderQuickFilter] = useState<'ALL' | 'OVERDUE' | 'DUE_SOON' | 'SHORTFALL' | 'READY' | 'DUPLICATE'>('ALL');
+  const [orderQuickFilter, setOrderQuickFilter] = useState<'ALL' | 'OVERDUE' | 'DUE_SOON' | 'SHORTFALL' | 'READY' | 'DUPLICATE' | 'INVALID_PRODUCT_ID'>('ALL');
 
   // Sorting state for online orders board
   const [orderSortType, setOrderSortType] = useState<
@@ -530,6 +532,7 @@ export default function Home() {
       if (orderQuickFilter === 'SHORTFALL' && !order.items.some((item: any) => !checkItemHealth(item).ok)) return false;
       if (orderQuickFilter === 'READY' && !order.items.every((item: any) => checkItemHealth(item).ok)) return false;
       if (orderQuickFilter === 'DUPLICATE' && !duplicateOrderIdsSet.has(order.order_id)) return false;
+      if (orderQuickFilter === 'INVALID_PRODUCT_ID' && !order.items.some((item: any) => item.has_invalid_product_id)) return false;
 
       // 2. Platform Dropdown Filter
       if (orderPlatformFilter !== 'ALL' && order.platform !== orderPlatformFilter) {
@@ -1512,6 +1515,32 @@ export default function Home() {
                             <span>一鍵清理重複訂單 (只留一筆 · 共 {cleanableDuplicateInfo.duplicateRowCount} 項)</span>
                           </button>
                         )}
+                        {orderFetchSummary.invalidProductIdCount > 0 && (
+                          <div className="flex items-center gap-2 flex-wrap w-full mt-1 pt-1.5 border-t border-rose-500/20">
+                            <span className="px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 font-medium flex items-center gap-1.5 text-xs">
+                              <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                              <span>商品編號異常: <strong className="text-rose-400 font-mono font-bold">{orderFetchSummary.invalidProductIdCount}</strong> 項 (查無此品號或未建檔)</span>
+                            </span>
+                            {orderFetchSummary.invalidProductIdFixableCount > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => fixAllInvalidProductIds()}
+                                className="px-3 py-1 rounded-lg bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-400 hover:to-indigo-500 text-white font-extrabold text-xs shadow-md shadow-indigo-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
+                                title="依商品名稱比對系統商品庫，自動更新商品編號"
+                              >
+                                <Sparkles className="w-3.5 h-3.5" />
+                                <span>⚡ 一鍵自動修正可比對品號 ({orderFetchSummary.invalidProductIdFixableCount} 項)</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setOrderQuickFilter('INVALID_PRODUCT_ID')}
+                              className="text-xs text-indigo-400 hover:text-indigo-300 underline font-bold cursor-pointer"
+                            >
+                              檢視異常訂單
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1607,6 +1636,25 @@ export default function Home() {
                         <span>⚠️ 相同品項單號</span>
                         <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-black/30 font-mono font-bold">
                           {duplicateOrdersCount}
+                        </span>
+                      </button>
+                    )}
+
+                    {(orderFetchSummary?.invalidProductIdCount || 0) > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setOrderQuickFilter('INVALID_PRODUCT_ID')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                          orderQuickFilter === 'INVALID_PRODUCT_ID'
+                            ? 'bg-rose-500 text-white shadow-md shadow-rose-500/30 ring-1 ring-rose-400 font-extrabold'
+                            : 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/25 border border-rose-500/30'
+                        }`}
+                        title="篩選商品編號異常或未比對到系統之訂單"
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+                        <span>⚠️ 品號異常</span>
+                        <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-black/30 font-mono font-bold">
+                          {orderFetchSummary?.invalidProductIdCount || 0}
                         </span>
                       </button>
                     )}
@@ -1928,6 +1976,26 @@ export default function Home() {
                                             <span className="text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/35 px-1.5 py-0.2 rounded shrink-0" title="此訂單內存在相同品名、編號與數量的重複品項行">
                                               ⚠️ 重複品項行
                                             </span>
+                                          )}
+                                          {item.has_invalid_product_id && (
+                                            <span className="text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/35 px-1.5 py-0.2 rounded flex items-center gap-1 shrink-0" title={item.invalid_product_id_reason || '商品編號異常'}>
+                                              <AlertTriangle className="w-2.5 h-2.5 text-rose-400" />
+                                              <span>⚠️ 品號異常 ({item.raw_sheet_product_id || item.product_id || '未填寫'})</span>
+                                            </span>
+                                          )}
+                                          {item.has_invalid_product_id && item.suggested_product_id && (
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                updateOnlineOrderItemProductId(order.order_id, idx, item.suggested_product_id);
+                                              }}
+                                              className="text-[10px] font-bold bg-indigo-500 hover:bg-indigo-400 text-slate-950 px-2 py-0.5 rounded flex items-center gap-1 transition-all shadow-sm cursor-pointer shrink-0"
+                                              title={`建議修正為商品庫中品名相符之品號：${item.suggested_product_id} (${item.suggested_product_name || ''})`}
+                                            >
+                                              <Sparkles className="w-2.5 h-2.5" />
+                                              <span>一鍵修正品號 [{item.suggested_product_id}]</span>
+                                            </button>
                                           )}
                                           {sysProd ? (
                                             <span className="text-[10px] font-mono bg-sky-500/10 text-sky-300 border border-sky-500/20 px-1.5 py-0.2 rounded font-medium">
@@ -2435,6 +2503,37 @@ export default function Home() {
                               )}
                             </div>
                             <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                              {item.has_invalid_product_id && (
+                                <span className="text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/35 px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0" title={item.invalid_product_id_reason || '商品編號異常'}>
+                                  <AlertTriangle className="w-2.5 h-2.5 text-rose-400" />
+                                  <span>⚠️ 品號異常 ({item.raw_sheet_product_id || item.product_id || '未填寫'})</span>
+                                </span>
+                              )}
+                              {item.has_invalid_product_id && item.suggested_product_id && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    updateOnlineOrderItemProductId(selectedOrder.order_id, idx, item.suggested_product_id);
+                                    setSelectedOrder((prev: any) => {
+                                      if (!prev) return prev;
+                                      const newItems = [...prev.items];
+                                      newItems[idx] = { 
+                                        ...newItems[idx], 
+                                        product_id: item.suggested_product_id,
+                                        raw_sheet_product_id: item.suggested_product_id,
+                                        has_invalid_product_id: false,
+                                        suggested_product_id: undefined 
+                                      };
+                                      return { ...prev, items: newItems };
+                                    });
+                                  }}
+                                  className="text-[10px] font-bold bg-indigo-500 hover:bg-indigo-400 text-slate-950 px-2 py-0.5 rounded flex items-center gap-1 transition-all shadow-sm cursor-pointer shrink-0"
+                                  title={`建議修正為商品庫中品名相符之品號：${item.suggested_product_id} (${item.suggested_product_name || ''})`}
+                                >
+                                  <Sparkles className="w-2.5 h-2.5" />
+                                  <span>一鍵修正品號 [{item.suggested_product_id}]</span>
+                                </button>
+                              )}
                               {item.product_id ? (
                                 <span className="text-[10px] font-mono bg-white/10 text-zinc-300 px-1.5 py-0.5 rounded">商品ID: {item.product_id}</span>
                               ) : (

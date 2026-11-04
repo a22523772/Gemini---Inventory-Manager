@@ -51,6 +51,11 @@ export type OnlineOrder = {
   created_at: string;
   specification?: string; // 商品規格
   shipping_method?: string; // 物流方式
+  has_invalid_product_id?: boolean; // 商品編號是否異常
+  raw_sheet_product_id?: string; // 試算表原本記錄的編號
+  invalid_product_id_reason?: 'missing' | 'not_found' | 'mismatch'; // 異常原因
+  suggested_product_id?: string; // 系統建議編號
+  suggested_product_name?: string; // 系統建議品名
 };
 
 export type Product = {
