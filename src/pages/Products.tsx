@@ -333,7 +333,7 @@ export default function Products() {
                 </h1>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap justify-end">
+              <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap sm:flex-nowrap justify-start sm:justify-end">
                 {/* Status quick filter pills */}
                 <div className="flex bg-white/5 border border-white/10 rounded-full p-0.5 text-xs overflow-x-auto max-w-full">
                   <button
@@ -460,7 +460,7 @@ export default function Products() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 md:grid md:grid-cols-2 lg:grid-cols-3 md:gap-4 md:space-y-0">
+      <div className="flex-1 overflow-y-auto p-4 pb-24 md:pb-6 space-y-3 md:grid md:grid-cols-2 lg:grid-cols-3 md:gap-4 md:space-y-0">
         {paginatedProducts.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-[var(--color-text-dim)] py-12 md:col-span-2 lg:col-span-3">
             <PackageOpen className="w-12 h-12 mb-3 opacity-50" />
@@ -482,8 +482,8 @@ export default function Products() {
 
             return (
               <div key={groupId} className={`glass-panel border ${isPaused ? 'border-amber-500/40 bg-amber-500/5' : isExpired ? 'border-red-500/50 bg-red-500/5' : isExpiringSoon ? 'border-orange-500/50 bg-orange-500/5' : isLowStock ? 'border-amber-500/50 bg-amber-500/5' : 'border-[var(--color-glass-border)]'} rounded-xl p-4 transition-all shadow-sm`}>
-                <div className="flex justify-between items-start mb-2">
-                  <div className="flex-1 pr-2">
+                <div className="flex justify-between items-start gap-2 mb-2">
+                  <div className="flex-1 min-w-0 pr-1">
                     <h3 className="font-bold text-[var(--color-text-main)] text-base flex flex-wrap gap-1 items-center">
                       {p.name} 
                       {p.brand && <span className="text-[10px] font-normal px-1.5 py-0.5 ml-1 bg-white/10 rounded-md text-[var(--color-text-dim)]">{p.brand}</span>}
@@ -526,7 +526,7 @@ export default function Products() {
                       <ProductSpecStockBadges product={p} size="xs" />
                     </div>
                   </div>
-                  <div className="flex flex-col items-end gap-2">
+                  <div className="flex flex-col items-end gap-2 shrink-0">
                     <div className={`${isExpired ? 'bg-red-500/20 text-red-400 border-red-500/30' : isExpiringSoon ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' : isLowStock ? 'bg-amber-500/20 text-amber-500 border-amber-500/30' : 'bg-[var(--color-glass-bg)] text-[var(--color-accent-blue)] border-[var(--color-glass-border)]'} px-2.5 py-1 rounded-lg text-sm font-bold border flex items-center`}>
                       庫存: {group.totalStock} {p.unit}
                     </div>
@@ -677,7 +677,7 @@ export default function Products() {
 
       {/* Pagination Footer */}
       {groupedProducts.length > 0 && (
-        <div className="glass-panel border-x-0 border-b-0 px-4 py-3 flex items-center justify-between text-xs text-[var(--color-text-dim)] shrink-0 sticky bottom-0 z-10 bg-[#0f172a]/90 backdrop-blur-md">
+        <div className="glass-panel border-x-0 border-b-0 px-4 py-3 flex items-center justify-between text-xs text-[var(--color-text-dim)] shrink-0 sticky bottom-16 md:bottom-0 z-10 bg-[#0f172a]/90 backdrop-blur-md">
           <div className="font-mono">
             共 <span className="text-white font-bold">{groupedProducts.length}</span> 項商品
             {totalPages > 1 && ` (第 ${currentPage} / ${totalPages} 頁)`}

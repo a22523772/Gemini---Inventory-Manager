@@ -293,21 +293,21 @@ export default function Reports() {
   // --- Render Chart View (Standard Active Products) ---
   const renderDashboard = () => (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-4">
-        <div className="glass-panel p-4 rounded-xl border border-[var(--color-accent-blue)]/30">
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-4">
+        <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-[var(--color-accent-blue)]/30 min-w-0">
           <div className="flex items-center space-x-2 mb-2 text-[var(--color-text-dim)]">
-            <DollarSign className="w-5 h-5 text-emerald-400" />
-            <span className="text-xs uppercase font-bold tracking-wider">在庫正常總價值</span>
+            <DollarSign className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400 shrink-0" />
+            <span className="text-[11px] sm:text-xs uppercase font-bold tracking-wider">在庫正常總價值</span>
           </div>
-          <div className="text-2xl font-bold text-white">${reportData.totalInventoryValue.toLocaleString()}</div>
+          <div className="text-lg sm:text-2xl font-bold text-white tabular-nums break-all">${reportData.totalInventoryValue.toLocaleString()}</div>
           <div className="text-[11px] text-zinc-400 mt-1">有效品項共 {reportData.activeProductsCount} 件</div>
         </div>
-        <div className="glass-panel p-4 rounded-xl border border-red-500/30">
+        <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-red-500/30 min-w-0">
           <div className="flex items-center space-x-2 mb-2 text-[var(--color-text-dim)]">
-            <AlertTriangle className="w-5 h-5 text-red-400" />
-            <span className="text-xs uppercase font-bold tracking-wider">過期損失估計</span>
+            <AlertTriangle className="w-4 h-4 sm:w-5 sm:h-5 text-red-400 shrink-0" />
+            <span className="text-[11px] sm:text-xs uppercase font-bold tracking-wider">過期損失估計</span>
           </div>
-          <div className="text-2xl font-bold text-red-400">${reportData.totalExpiredLoss.toLocaleString()}</div>
+          <div className="text-lg sm:text-2xl font-bold text-red-400 tabular-nums break-all">${reportData.totalExpiredLoss.toLocaleString()}</div>
           <div className="text-[11px] text-red-400/80 mt-1">共 {reportData.expiredList.length} 批次過期</div>
         </div>
       </div>
@@ -421,7 +421,7 @@ export default function Reports() {
 
       {/* Low Stock (Grouped by Vendor) */}
       <section>
-        <div className="flex justify-between items-center mb-3">
+        <div className="flex flex-wrap justify-between items-center gap-1.5 mb-3">
           <h3 className="text-lg font-bold text-white flex items-center">
             <PackageX className="w-5 h-5 mr-2 text-[var(--color-accent-blue)]" />
             低庫存待採購清單 (依供應商)
@@ -515,40 +515,40 @@ export default function Reports() {
   const renderPausedReport = () => (
     <div className="space-y-6">
       {/* 1. Header Overview Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="glass-panel p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/5">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
+        <div className="glass-panel p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/5 min-w-0">
           <div className="flex items-center space-x-1.5 mb-1 text-amber-300">
-            <Ban className="w-4 h-4" />
+            <Ban className="w-4 h-4 shrink-0" />
             <span className="text-[11px] font-bold uppercase tracking-wider">專報品項數</span>
           </div>
-          <div className="text-xl font-bold text-white">{reportData.pausedProductsCount} <span className="text-xs font-normal text-zinc-400">項</span></div>
+          <div className="text-lg sm:text-xl font-bold text-white tabular-nums break-all">{reportData.pausedProductsCount} <span className="text-xs font-normal text-zinc-400">項</span></div>
           <div className="text-[10px] text-zinc-400 mt-1">暫時缺貨獨立存檔</div>
         </div>
 
-        <div className="glass-panel p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/5">
+        <div className="glass-panel p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/5 min-w-0">
           <div className="flex items-center space-x-1.5 mb-1 text-amber-300">
-            <Layers className="w-4 h-4" />
+            <Layers className="w-4 h-4 shrink-0" />
             <span className="text-[11px] font-bold uppercase tracking-wider">殘留在庫件數</span>
           </div>
-          <div className="text-xl font-bold text-white">{reportData.pausedTotalStock} <span className="text-xs font-normal text-zinc-400">件</span></div>
+          <div className="text-lg sm:text-xl font-bold text-white tabular-nums break-all">{reportData.pausedTotalStock} <span className="text-xs font-normal text-zinc-400">件</span></div>
           <div className="text-[10px] text-zinc-400 mt-1">倉庫剩餘實體件數</div>
         </div>
 
-        <div className="glass-panel p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-500/5">
+        <div className="glass-panel p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-500/5 min-w-0">
           <div className="flex items-center space-x-1.5 mb-1 text-emerald-300">
-            <DollarSign className="w-4 h-4" />
+            <DollarSign className="w-4 h-4 shrink-0" />
             <span className="text-[11px] font-bold uppercase tracking-wider">殘值佔用金額</span>
           </div>
-          <div className="text-xl font-bold text-white">${reportData.pausedTotalValue.toLocaleString()}</div>
+          <div className="text-lg sm:text-xl font-bold text-white tabular-nums break-all">${reportData.pausedTotalValue.toLocaleString()}</div>
           <div className="text-[10px] text-zinc-400 mt-1">積壓成本價值</div>
         </div>
 
-        <div className="glass-panel p-3.5 rounded-xl border border-sky-500/30 bg-sky-500/5">
+        <div className="glass-panel p-3.5 rounded-xl border border-sky-500/30 bg-sky-500/5 min-w-0">
           <div className="flex items-center space-x-1.5 mb-1 text-sky-300">
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className="w-4 h-4 shrink-0" />
             <span className="text-[11px] font-bold uppercase tracking-wider">涉及供應商</span>
           </div>
-          <div className="text-xl font-bold text-white">{reportData.pausedVendorsCount} <span className="text-xs font-normal text-zinc-400">家</span></div>
+          <div className="text-lg sm:text-xl font-bold text-white tabular-nums break-all">{reportData.pausedVendorsCount} <span className="text-xs font-normal text-zinc-400">家</span></div>
           <div className="text-[10px] text-zinc-400 mt-1">廠商追蹤與協調</div>
         </div>
       </div>
@@ -634,7 +634,7 @@ export default function Reports() {
                       <span className={`px-2 py-0.5 text-[11px] font-bold rounded-full ${item.statusInfo.badgeClass}`}>
                         {item.statusInfo.label}
                       </span>
-                      <h4 className="font-bold text-white text-base truncate">{p.name || '未命名商品'}</h4>
+                      <h4 className="font-bold text-white text-base break-words leading-snug">{p.name || '未命名商品'}</h4>
                     </div>
                     <div className="text-xs text-zinc-400 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
                       {p.product_id && <span>編號: <strong className="text-zinc-200">{p.product_id}</strong></span>}
@@ -655,17 +655,17 @@ export default function Reports() {
 
                 {/* Meta details & financial value */}
                 <div className="bg-white/5 rounded-lg p-2.5 my-2.5 text-xs grid grid-cols-3 gap-2 border border-white/5">
-                  <div>
+                  <div className="min-w-0">
                     <span className="text-zinc-400 block text-[10px]">成本單價</span>
-                    <span className="font-mono text-zinc-200 font-bold">${(p.cost_price || 0).toLocaleString()}</span>
+                    <span className="font-mono text-zinc-200 font-bold break-all tabular-nums">${(p.cost_price || 0).toLocaleString()}</span>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <span className="text-zinc-400 block text-[10px]">庫存殘值</span>
-                    <span className="font-mono text-amber-300 font-bold">${item.stockValue.toLocaleString()}</span>
+                    <span className="font-mono text-amber-300 font-bold break-all tabular-nums">${item.stockValue.toLocaleString()}</span>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <span className="text-zinc-400 block text-[10px]">近 30 天出貨</span>
-                    <span className="font-mono text-zinc-200 font-bold">{item.recentSales} 件</span>
+                    <span className="font-mono text-zinc-200 font-bold break-all tabular-nums">{item.recentSales} 件</span>
                   </div>
                 </div>
 
@@ -719,39 +719,39 @@ export default function Reports() {
       </header>
 
       {/* Tabs */}
-      <div className="flex p-1 bg-white/5 rounded-xl border border-white/10">
+      <div className="flex p-1 bg-white/5 rounded-xl border border-white/10 gap-1">
         <button 
           onClick={() => setActiveTab('dashboard')}
-          className={`flex-1 flex items-center justify-center py-2 text-xs sm:text-sm font-bold rounded-lg transition-all ${
+          className={`flex-1 flex items-center justify-center py-2 px-1.5 sm:px-2 text-[11px] sm:text-sm whitespace-nowrap font-bold rounded-lg transition-all ${
             activeTab === 'dashboard' 
               ? 'bg-[var(--color-accent-blue)] text-black shadow-lg shadow-sky-500/20' 
               : 'text-[var(--color-text-dim)] hover:text-white'
           }`}
         >
-          <BarChart2 className="w-4 h-4 mr-1.5" /> 指標圖表
+          <BarChart2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1 sm:mr-1.5 shrink-0" /> 指標圖表
         </button>
         <button 
           onClick={() => setActiveTab('list')}
-          className={`flex-1 flex items-center justify-center py-2 text-xs sm:text-sm font-bold rounded-lg transition-all ${
+          className={`flex-1 flex items-center justify-center py-2 px-1.5 sm:px-2 text-[11px] sm:text-sm whitespace-nowrap font-bold rounded-lg transition-all ${
             activeTab === 'list' 
               ? 'bg-[var(--color-accent-blue)] text-black shadow-lg shadow-sky-500/20' 
               : 'text-[var(--color-text-dim)] hover:text-white'
           }`}
         >
-          <List className="w-4 h-4 mr-1.5" /> 詳細清單
+          <List className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1 sm:mr-1.5 shrink-0" /> 詳細清單
         </button>
         <button 
           onClick={() => setActiveTab('paused')}
-          className={`flex-1 flex items-center justify-center py-2 text-xs sm:text-sm font-bold rounded-lg transition-all relative ${
+          className={`flex-1 flex items-center justify-center py-2 px-1.5 sm:px-2 text-[11px] sm:text-sm whitespace-nowrap font-bold rounded-lg transition-all relative ${
             activeTab === 'paused' 
               ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/30 font-black' 
               : 'text-amber-300 hover:text-white'
           }`}
         >
-          <Ban className="w-4 h-4 mr-1.5" /> 
+          <Ban className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1 sm:mr-1.5 shrink-0" /> 
           <span>暫時缺貨專報</span>
           {reportData.pausedProductsCount > 0 && (
-            <span className={`ml-1.5 px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+            <span className={`ml-1 sm:ml-1.5 px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
               activeTab === 'paused' ? 'bg-black/30 text-black' : 'bg-amber-500/30 text-amber-200'
             }`}>
               {reportData.pausedProductsCount}

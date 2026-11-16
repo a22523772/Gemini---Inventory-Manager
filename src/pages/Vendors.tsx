@@ -119,7 +119,7 @@ export default function Vendors() {
               className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] focus:border-[var(--color-accent-blue)] focus:ring-1 outline-none transition-all"
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">聯絡人</label>
               <input
@@ -157,27 +157,27 @@ export default function Vendors() {
           </div>
         ) : (
           vendors.map(v => (
-            <div key={v.vendor_id} className="glass-panel p-4 rounded-2xl flex items-center justify-between group">
-              <div>
-                <h3 className="text-base font-bold text-[var(--color-text-main)]">{v.vendor_name}</h3>
-                <div className="flex items-center space-x-3 mt-2 text-[var(--color-text-dim)] text-xs">
+            <div key={v.vendor_id} className="glass-panel p-4 rounded-2xl flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 group">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-base font-bold text-[var(--color-text-main)] break-words">{v.vendor_name}</h3>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-[var(--color-text-dim)] text-xs">
                   {v.contact && (
                     <span className="flex items-center">
-                      <User className="w-3 h-3 mr-1" />
+                      <User className="w-3 h-3 mr-1 shrink-0" />
                       {v.contact}
                     </span>
                   )}
                   {v.phone && (
                     <span className="flex items-center">
-                      <Phone className="w-3 h-3 mr-1" />
+                      <Phone className="w-3 h-3 mr-1 shrink-0" />
                       {v.phone}
                     </span>
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 {confirmDeleteId === v.vendor_id ? (
-                   <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-2">
+                   <div className="flex flex-wrap items-center gap-2 animate-in fade-in slide-in-from-right-2">
                      <span className="text-xs font-bold text-red-400 mr-1">確定刪除？</span>
                      <button onClick={() => executeDelete(v.vendor_id)} className="p-1 px-3 glass-panel rounded-lg text-red-400 hover:bg-red-500/20 text-xs font-bold transition-colors">確認</button>
                      <button onClick={() => setConfirmDeleteId(null)} className="p-1 px-3 glass-panel rounded-lg text-white hover:bg-white/10 text-xs transition-colors">取消</button>

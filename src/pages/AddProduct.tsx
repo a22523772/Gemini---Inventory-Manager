@@ -239,7 +239,7 @@ export default function AddProduct() {
         </div>
 
         <div className="glass-panel p-4 rounded-2xl space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">分類</label>
               <input list="categories-list" type="text" value={category} onChange={(e) => setCategory(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
@@ -256,7 +256,7 @@ export default function AddProduct() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">單位 *</label>
               <input type="text" required value={unit} onChange={(e) => setUnit(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)] transition-all" />
@@ -359,7 +359,7 @@ export default function AddProduct() {
               {/* 暫時缺貨詳細設定：預計進貨日 (若未填寫即為停產) */}
               {productStatus === 'out_of_stock' && (
                 <div className="mt-3 p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-2.5 animate-fadeIn">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <label className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
                       <Calendar className="w-3.5 h-3.5 text-amber-400" />
                       <span>預計進貨日 (選填)</span>
@@ -373,8 +373,8 @@ export default function AddProduct() {
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <div className="relative flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="relative flex-1 min-w-[160px]">
                       <input
                         type="date"
                         value={expectedRestockDate}

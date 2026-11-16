@@ -406,13 +406,13 @@ export default function StockManage() {
           <div className="flex gap-2">
             <div 
               onClick={() => setIsSearchModalOpen(true)}
-              className="flex-1 flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] cursor-pointer hover:bg-white/10 transition-colors"
+              className="flex-1 min-w-0 flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] cursor-pointer hover:bg-white/10 transition-colors"
             >
-              <Search className="w-4 h-4 text-[var(--color-text-dim)]" />
+              <Search className="w-4 h-4 text-[var(--color-text-dim)] shrink-0" />
               {product ? (
-                <span className="text-white font-medium">{product.name} ({product.product_id})</span>
+                <span className="text-white font-medium truncate">{product.name} ({product.product_id})</span>
               ) : (
-                <span className="text-[var(--color-text-dim)]">點擊搜尋商品、條碼、ID...</span>
+                <span className="text-[var(--color-text-dim)] truncate">點擊搜尋商品、條碼、ID...</span>
               )}
             </div>
              <button 
@@ -606,22 +606,22 @@ export default function StockManage() {
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
-          <div>
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+          <div className="min-w-0">
             <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">儲位</label>
             <input list="locations" type="text" required value={location} onChange={(e) => setLocation(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]" />
             <datalist id="locations">
                {uniqueLocations.map(l => <option key={l} value={l} />)}
             </datalist>
           </div>
-          <div>
+          <div className="min-w-0">
             <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">樓層</label>
             <input list="floors" type="text" required value={floor} onChange={(e) => setFloor(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]" />
             <datalist id="floors">
                {uniqueFloors.map(f => <option key={f} value={f} />)}
             </datalist>
           </div>
-          <div>
+          <div className="min-w-0">
             <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">區域</label>
             <input list="areas" type="text" required value={area} onChange={(e) => setArea(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]" />
             <datalist id="areas">
@@ -631,7 +631,7 @@ export default function StockManage() {
         </div>
 
         {type === 'stock_in' && (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">進貨成本</label>
               <input type="number" step="0.01" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} className="block w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] focus:ring-1 focus:ring-[var(--color-accent-blue)]" />
@@ -662,7 +662,7 @@ export default function StockManage() {
           </div>
         )}
 
-        <div className="pt-4 pb-12">
+        <div className="pt-4 pb-24 md:pb-12">
           {type === 'adjust' && operator !== 'admin' ? (
              <p className="text-[#f87171] text-sm font-bold text-center">僅管理員能進行庫存盤點與調整。</p>
           ) : (() => {

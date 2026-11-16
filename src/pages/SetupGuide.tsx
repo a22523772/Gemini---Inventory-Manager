@@ -75,7 +75,7 @@ export default function SetupGuide() {
   };
 
   return (
-    <div className="h-full flex flex-col pb-12">
+    <div className="h-full flex flex-col pb-24 md:pb-12">
       <div className="glass-panel border-x-0 border-t-0 px-4 pt-6 pb-2">
         <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text-main)] mb-4">設定與同步</h1>
         <div className="flex space-x-4 border-b border-white/10">
@@ -233,7 +233,7 @@ export default function SetupGuide() {
             </div>
 
             <div className="glass-panel p-5 rounded-2xl border border-white/10 space-y-4">
-              <div className="flex justify-between items-center">
+              <div className="flex flex-wrap justify-between items-center gap-2">
                  <div>
                    <h2 className="text-base font-bold text-[var(--color-text-main)] flex items-center gap-2">
                      <span>雲端同步狀態</span>
@@ -344,8 +344,8 @@ export default function SetupGuide() {
                       }
 
                       return (
-                        <div key={item.id || qIdx} className="flex items-center justify-between p-2.5 rounded-lg bg-black/40 border border-white/5 text-xs">
-                          <div className="flex items-center gap-2 min-w-0">
+                        <div key={item.id || qIdx} className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-black/40 border border-white/5 text-xs">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
                             <span className="w-5 text-slate-500 font-mono text-[11px] shrink-0">{qIdx + 1}.</span>
                             <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30 shrink-0">
                               {actionName}
@@ -486,7 +486,7 @@ export default function SetupGuide() {
              <section>
                 <h3 className="text-base font-bold text-[var(--color-text-main)]">1. Google Sheets 結構設定</h3>
                 <p className="text-[var(--color-text-dim)] mt-1">請建立一個 Google Sheet，並確保下方有這六個工作表（<strong>欄位順序無須固定，系統會依照第 1 列的表頭名稱自動動態對齊，只要包含該欄位即可</strong>）：</p>
-                <ul className="list-disc pl-5 mt-2 space-y-1 text-white/80 font-mono text-xs">
+                <ul className="list-disc pl-5 mt-2 space-y-1 text-white/80 font-mono text-xs break-words">
                   <li><strong>products</strong> (商品表): product_id, barcode, name, category, brand, unit, cost_price, vendor_id, has_expiry, specification, min_stock, is_discontinued, expected_restock_date, created_at</li>
                   <li><strong>vendors</strong> (供應商): vendor_id, vendor_name, contact, phone</li>
                   <li><strong>stock</strong> (庫存表): stock_id, product_id, name, location, floor, area, quantity, expiry_date, specification, last_update</li>

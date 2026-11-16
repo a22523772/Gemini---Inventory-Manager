@@ -896,7 +896,7 @@ export default function ImportExcelOrderModal({
                       className="w-full h-48 bg-slate-900/90 border border-white/15 rounded-xl p-4 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-emerald-500 font-mono custom-scrollbar"
                     />
                   </div>
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <button
                       type="button"
                       onClick={() => setPastedText(`經典手作原味奶茶 500ml *20瓶\n極致黑深焙研磨咖啡豆 半磅(227g) *15包\n有機天然洋甘菊舒壓茶包 20入/盒 *30盒\n日式低溫研磨抹茶粉 100g精裝版 *10罐\n多功能折疊烘鞋機 雙重定時款 *5台\n9吋靜音空氣循環扇 【夜霧灰】 *3台\n2.0L高硼矽玻璃快煮壺 KPK-200 *2台\n雙層防燙不鏽鋼快煮壺 1.5L白色 *4台`)}
@@ -996,21 +996,21 @@ export default function ImportExcelOrderModal({
               {/* Advanced Column Mapping Drawer */}
               {showAdvancedMapping && (
                 <div className="p-4 bg-slate-900/90 border border-sky-500/20 rounded-xl space-y-4 animate-fadeIn">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-bold text-sky-300 flex items-center gap-1.5">
-                      <ArrowUpDown className="w-4 h-4" />
+                      <ArrowUpDown className="w-4 h-4 shrink-0" />
                       自訂 Excel 欄位對應（若自動辨識欄位不準確，可手動指派）
                     </span>
                     <button
                       type="button"
                       onClick={handleApplyCustomMapping}
-                      className="px-3 py-1 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                      className="px-3 py-1 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold rounded-lg text-xs transition-colors cursor-pointer shrink-0"
                     >
                       套用對應
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs [&>div]:min-w-0">
                     <div>
                       <label className="text-[11px] text-slate-400 block mb-1">起始資料列 (從第幾列開始)</label>
                       <input
@@ -1203,7 +1203,7 @@ export default function ImportExcelOrderModal({
 
               {/* Items Preview Table */}
               <div className="border border-white/10 rounded-xl overflow-hidden">
-                <div className="p-3 bg-white/5 border-b border-white/10 flex items-center justify-between">
+                <div className="p-3 bg-white/5 border-b border-white/10 flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-bold text-slate-300">
                     解析清單預覽 ({parsedItems.length} 項)
                   </span>
@@ -1219,7 +1219,7 @@ export default function ImportExcelOrderModal({
                     <p>請點擊上方的「自訂欄位對應」按鈕，手動指定「出貨明細」或「品名」位於哪一欄！</p>
                   </div>
                 ) : (
-                  <div className="max-h-72 overflow-y-auto custom-scrollbar">
+                  <div className="max-h-72 overflow-auto custom-scrollbar">
                     <table className="w-full text-left text-xs border-collapse">
                       <thead className="sticky top-0 bg-[#1e293b] text-slate-400 font-bold border-b border-white/10 z-10">
                         <tr>

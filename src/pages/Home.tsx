@@ -137,6 +137,10 @@ export default function Home() {
   const [confirmDeduplicateModal, setConfirmDeduplicateModal] = useState<{ orderId?: string; count: number; affectedOrders?: number } | null>(null);
   const [isDeduplicating, setIsDeduplicating] = useState(false);
 
+  // Delete order confirmation modal state
+  const [confirmDeleteOrderModal, setConfirmDeleteOrderModal] = useState<any | null>(null);
+  const [isDeletingOrder, setIsDeletingOrder] = useState(false);
+
   const handleOpenShortcutModal = () => {
     setEditingShortcuts(activeShortcutIds);
     setIsShortcutModalOpen(true);
@@ -1090,44 +1094,44 @@ export default function Home() {
 
       {/* Top 4 KPI Metrics Bar */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <Link to="/products" className="glass-panel p-4 rounded-2xl border border-white/10 hover:border-sky-500/40 transition-all group flex items-center justify-between">
-          <div>
+        <Link to="/products" className="glass-panel p-3 sm:p-4 rounded-2xl border border-white/10 hover:border-sky-500/40 transition-all group flex items-center justify-between gap-2 min-w-0">
+          <div className="min-w-0">
             <span className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider block">總商品建檔數</span>
-            <div className="text-2xl sm:text-3xl font-black text-sky-400 mt-1 font-mono">{products.length} <span className="text-xs text-slate-400 font-normal">品項</span></div>
+            <div className="text-xl sm:text-3xl font-black text-sky-400 mt-1 font-mono tabular-nums">{products.length} <span className="text-xs text-slate-400 font-normal">品項</span></div>
           </div>
-          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 group-hover:scale-110 transition-transform">
+          <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 group-hover:scale-110 transition-transform shrink-0">
             <Package className="w-5 h-5 sm:w-6 sm:h-6" />
           </div>
         </Link>
 
-        <Link to="/products" className="glass-panel p-4 rounded-2xl border border-white/10 hover:border-emerald-500/40 transition-all group flex items-center justify-between">
-          <div>
+        <Link to="/products" className="glass-panel p-3 sm:p-4 rounded-2xl border border-white/10 hover:border-emerald-500/40 transition-all group flex items-center justify-between gap-2 min-w-0">
+          <div className="min-w-0">
             <span className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider block">在席總庫存量</span>
-            <div className="text-2xl sm:text-3xl font-black text-emerald-400 mt-1 font-mono">{totalStock} <span className="text-xs text-slate-400 font-normal">件</span></div>
+            <div className="text-xl sm:text-3xl font-black text-emerald-400 mt-1 font-mono tabular-nums">{totalStock} <span className="text-xs text-slate-400 font-normal">件</span></div>
           </div>
-          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 group-hover:scale-110 transition-transform">
+          <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 group-hover:scale-110 transition-transform shrink-0">
             <CheckCircle className="w-5 h-5 sm:w-6 sm:h-6" />
           </div>
         </Link>
 
-        <div onClick={() => setIsOrderDashboardOpen(true)} className="glass-panel p-4 rounded-2xl border border-indigo-500/30 hover:border-indigo-500/60 transition-all group flex items-center justify-between cursor-pointer">
-          <div>
+        <div onClick={() => setIsOrderDashboardOpen(true)} className="glass-panel p-3 sm:p-4 rounded-2xl border border-indigo-500/30 hover:border-indigo-500/60 transition-all group flex items-center justify-between gap-2 min-w-0 cursor-pointer">
+          <div className="min-w-0">
             <span className="text-[10px] sm:text-xs font-bold text-indigo-300 uppercase tracking-wider block">網路待處理訂單</span>
-            <div className="text-2xl sm:text-3xl font-black text-indigo-400 mt-1 font-mono">{pendingOrdersCount} <span className="text-xs text-slate-400 font-normal">筆</span></div>
+            <div className="text-xl sm:text-3xl font-black text-indigo-400 mt-1 font-mono tabular-nums">{pendingOrdersCount} <span className="text-xs text-slate-400 font-normal">筆</span></div>
           </div>
-          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 group-hover:scale-110 transition-transform">
+          <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 group-hover:scale-110 transition-transform shrink-0">
             <Globe className="w-5 h-5 sm:w-6 sm:h-6" />
           </div>
         </div>
 
-        <div onClick={() => setIsOrderDashboardOpen(true)} className="glass-panel p-4 rounded-2xl border border-red-500/30 hover:border-red-500/60 transition-all group flex items-center justify-between cursor-pointer">
-          <div>
+        <div onClick={() => setIsOrderDashboardOpen(true)} className="glass-panel p-3 sm:p-4 rounded-2xl border border-red-500/30 hover:border-red-500/60 transition-all group flex items-center justify-between gap-2 min-w-0 cursor-pointer">
+          <div className="min-w-0">
             <span className="text-[10px] sm:text-xs font-bold text-red-300 uppercase tracking-wider block">逾期出貨警示</span>
-            <div className={`text-2xl sm:text-3xl font-black mt-1 font-mono ${overdueOrdersCount > 0 ? 'text-red-400 animate-pulse' : 'text-slate-400'}`}>
+            <div className={`text-xl sm:text-3xl font-black mt-1 font-mono tabular-nums ${overdueOrdersCount > 0 ? 'text-red-400 animate-pulse' : 'text-slate-400'}`}>
               {overdueOrdersCount} <span className="text-xs text-slate-400 font-normal">筆</span>
             </div>
           </div>
-          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 group-hover:scale-110 transition-transform">
+          <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 group-hover:scale-110 transition-transform shrink-0">
             <Flame className="w-5 h-5 sm:w-6 sm:h-6" />
           </div>
         </div>
@@ -1508,7 +1512,7 @@ export default function Home() {
                           <button
                             type="button"
                             onClick={() => setConfirmDeduplicateModal({ count: cleanableDuplicateInfo.duplicateRowCount, affectedOrders: cleanableDuplicateInfo.affectedOrderCount })}
-                            className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs shadow-md shadow-amber-500/20 flex items-center gap-1.5 transition-all cursor-pointer ml-auto"
+                            className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs shadow-md shadow-amber-500/20 flex items-center justify-center text-center gap-1.5 transition-all cursor-pointer w-full sm:w-auto sm:ml-auto"
                             title="一鍵刪除全部重複的訂單品項行，每項只保留一筆"
                           >
                             <Sparkles className="w-3.5 h-3.5" />
@@ -1684,14 +1688,14 @@ export default function Home() {
                       </div>
 
                       {/* Sort Selector */}
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="text-xs text-slate-400 font-bold flex items-center gap-1">
+                      <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
+                        <span className="text-xs text-slate-400 font-bold flex items-center gap-1 shrink-0">
                           <ArrowUpDown className="w-3.5 h-3.5 text-indigo-400" /> 排序:
                         </span>
                         <select
                           value={orderSortType}
                           onChange={(e) => setOrderSortType(e.target.value as any)}
-                          className="bg-slate-900 border border-white/10 rounded-xl text-xs font-medium text-white px-3 py-2 outline-none focus:border-indigo-500 cursor-pointer"
+                          className="flex-1 sm:flex-initial min-w-0 bg-slate-900 border border-white/10 rounded-xl text-xs font-medium text-white px-3 py-2 outline-none focus:border-indigo-500 cursor-pointer"
                         >
                           <option value="deadline_asc">⏰ 最晚出貨期限：近 ➔ 遠 (優先)</option>
                           <option value="deadline_desc">⏰ 最晚出貨期限：遠 ➔ 近</option>
@@ -1830,14 +1834,45 @@ export default function Home() {
                             });
                           });
 
+                          // 整張訂單物流方式（優先擷取各品項非空物流並去重，回退訂單層級 shipping_method）
+                          const itemShipMethods = order.items
+                            .map((it: any) => String(it.shipping_method || '').trim())
+                            .filter(Boolean);
+                          const fallbackShip = String(order.shipping_method || '').trim();
+                          const uniqueShipMethods = Array.from(
+                            new Set(itemShipMethods.length > 0 ? itemShipMethods : (fallbackShip ? [fallbackShip] : []))
+                          );
+                          const shippingText = uniqueShipMethods.length > 0 ? uniqueShipMethods.join(' / ') : '未指定物流';
+
+                          // 計算整張訂單總進貨成本
+                          let totalCostPrice = 0;
+                          let costedItemsCount = 0;
+                          order.items.forEach((it: any) => {
+                            const matchedProd = it.product_id
+                              ? productMap.get(it.product_id)
+                              : (it.product_name
+                                  ? products.find(p => p.name === it.product_name || p.product_id === it.product_name)
+                                  : null);
+                            const resolvedProd = matchedProd || getItemInventoryStatus(it).product;
+                            const unitCost = resolvedProd?.cost_price !== undefined && resolvedProd?.cost_price !== null && !isNaN(Number(resolvedProd.cost_price))
+                              ? Number(resolvedProd.cost_price)
+                              : null;
+                            if (unitCost !== null) {
+                              totalCostPrice += unitCost * (Number(it.quantity) || 1);
+                              costedItemsCount += 1;
+                            }
+                          });
+                          const hasAnyCost = costedItemsCount > 0;
+                          const hasMissingCost = costedItemsCount < order.items.length;
+
                           return (
                             <div 
                               key={order.order_id} 
-                              className="glass-panel p-4 rounded-xl flex flex-col justify-between space-y-3 relative overflow-hidden transition-all duration-200 hover:border-indigo-500/50 border-white/10 bg-slate-900/80"
+                              className="glass-panel p-3.5 sm:p-4 rounded-xl flex flex-col justify-between space-y-3 relative overflow-hidden transition-all duration-200 hover:border-indigo-500/50 border-white/10 bg-slate-900/80"
                             >
-                              {/* Top Header: SWAPPED Position 1 -> 訂單狀態 (Order Status) */}
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center space-x-2 min-w-0 flex-wrap">
+                              {/* Top Header: Platform + Order ID + Buyer Name on left; Order Status + Edit on right */}
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-wrap flex-1">
                                   <span className={`text-[10px] uppercase font-black px-2 py-0.5 rounded-full shrink-0 ${
                                     isShopee ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' :
                                     isMomo ? 'bg-pink-500/20 text-pink-400 border border-pink-500/30' :
@@ -1845,10 +1880,17 @@ export default function Home() {
                                   }`}>
                                     {order.platform}
                                   </span>
-                                  <span className="text-xs font-mono font-bold text-white truncate">{order.order_id}</span>
+                                  <span className="text-xs font-mono font-bold text-white break-all">{order.order_id}</span>
+                                  <span
+                                    className="inline-flex items-center gap-1 text-[11px] font-bold text-sky-200 bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 rounded-md max-w-[160px]"
+                                    title={`買家：${order.customer_name || '未知買家'}`}
+                                  >
+                                    <User className="w-3 h-3 text-sky-400 shrink-0" />
+                                    <span className="truncate">{order.customer_name || '未知買家'}</span>
+                                  </span>
                                   {duplicateOrderIdsSet.has(order.order_id) && (
                                     <span 
-                                      className="text-[10px] font-bold px-1.5 py-0.2 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/35 flex items-center gap-1 shrink-0"
+                                      className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/35 flex items-center gap-1 shrink-0"
                                       title="比對出商品名稱、商品編號與數量皆相符之重複紀錄"
                                     >
                                       <AlertTriangle className="w-2.5 h-2.5 text-amber-400 shrink-0" />
@@ -1871,82 +1913,22 @@ export default function Home() {
                                   )}
                                 </div>
 
-                                {/* 訂單狀態 Badge + Manual Edit Button */}
+                                {/* 訂單狀態 Badge + Manual Edit Button (頂部彙總缺貨標籤已移除，改於商品框內各自呈現) */}
                                 <div className="flex items-center gap-1.5 shrink-0">
-                                  {(() => {
-                                    const shortageItems = order.items
-                                      .map((it: any) => getItemInventoryStatus(it))
-                                      .filter((inv: any) => inv.isShortage || inv.statusInfo.isPaused);
-
-                                    if (shortageItems.length === 0) return null;
-
-                                    const isAnyDiscontinued = shortageItems.some((inv: any) => inv.statusInfo.isDiscontinued);
-                                    const isAnyPaused = shortageItems.some((inv: any) => inv.statusInfo.isPaused);
-                                    const isAnyExpired = shortageItems.some((inv: any) => inv.validStock < inv.reqQty && inv.totalStock >= inv.reqQty);
-
-                                    if (isAnyDiscontinued) {
-                                      return (
-                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center gap-1">
-                                          🚫 包含停產
-                                        </span>
-                                      );
-                                    }
-
-                                    if (isAnyPaused) {
-                                      return (
-                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
-                                          ⏸️ 暫停出貨
-                                        </span>
-                                      );
-                                    }
-
-                                    if (isAnyExpired) {
-                                      return (
-                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center gap-1">
-                                          ⚠️ 庫存已過期
-                                        </span>
-                                      );
-                                    }
-
-                                    const totalShortfall = shortageItems.reduce((sum: number, inv: any) => sum + inv.shortfall, 0);
-                                    const totalOnOrder = shortageItems.reduce((sum: number, inv: any) => sum + inv.onOrderQty, 0);
-
-                                    // 單一品項或多品項彙整顯示
-                                    const prefix = shortageItems.length > 1 ? '合計缺貨' : '缺貨';
-
-                                    if (totalOnOrder >= totalShortfall) {
-                                      return (
-                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1 shadow-sm">
-                                          🟡 {prefix} {totalShortfall} 件 (已採購 {totalOnOrder} 件在途)
-                                        </span>
-                                      );
-                                    } else if (totalOnOrder > 0) {
-                                      return (
-                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40 flex items-center gap-1 shadow-sm">
-                                          🔴 {prefix} {totalShortfall} 件 (已採購 {totalOnOrder} 件仍不足)
-                                        </span>
-                                      );
-                                    } else {
-                                      return (
-                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40 flex items-center gap-1 shadow-sm">
-                                          🔴 {prefix} {totalShortfall} 件 (無在途採購)
-                                        </span>
-                                      );
-                                    }
-                                  })()}
                                   <span className={`text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-lg flex items-center gap-1 ${statusStyle.color}`}>
                                     {statusStyle.text}
                                   </span>
                                   <button
+                                    type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       setEditingStatusOrder(order);
                                       setCustomStatusInput(order.raw_order_status || order.order_status);
                                     }}
-                                    className="p-1 text-slate-400 hover:text-indigo-300 hover:bg-white/10 rounded-lg border border-white/5 transition-all"
+                                    className="p-1.5 text-slate-400 hover:text-indigo-300 hover:bg-white/10 rounded-lg border border-white/5 transition-all cursor-pointer"
                                     title="人工修改訂單狀態"
                                   >
-                                    <Edit2 className="w-3 h-3" />
+                                    <Edit2 className="w-3.5 h-3.5" />
                                   </button>
                                 </div>
                               </div>
@@ -1962,23 +1944,23 @@ export default function Home() {
                                     return sameId && sameName && sameQty;
                                   });
                                   const spec = item.specification || getProductSpecification(item.product_id);
-                                  const shipMethod = item.shipping_method || order.shipping_method;
-                                  const sysProd = item.product_id ? productMap.get(item.product_id) : (item.product_name ? products.find(p => p.name === item.product_name || p.product_id === item.product_name) : null);
+                                  const inv = getItemInventoryStatus(item);
+                                  const sysProd = (item.product_id ? productMap.get(item.product_id) : null) || inv.product;
                                   const vendorName = sysProd?.vendor_id ? (vendorsMap.get(sysProd.vendor_id) || sysProd.vendor_id) : null;
                                   const costPrice = sysProd?.cost_price !== undefined && sysProd?.cost_price !== null && !isNaN(Number(sysProd.cost_price)) ? Number(sysProd.cost_price) : null;
 
                                   return (
-                                    <div key={idx} className="bg-white/5 rounded-lg p-2.5 flex items-start justify-between text-xs hover:bg-white/10 transition-colors">
-                                      <div className="flex-1 min-w-0 mr-2 space-y-1">
+                                    <div key={idx} className="bg-white/5 rounded-lg p-2.5 flex items-start justify-between gap-2 text-xs hover:bg-white/10 transition-colors">
+                                      <div className="flex-1 min-w-0 space-y-1">
                                         <div className="flex items-center gap-1.5 flex-wrap">
                                           <p className="font-semibold text-white break-words leading-snug">{item.product_name}</p>
                                           {isDuplicateRowInOrder && (
-                                            <span className="text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/35 px-1.5 py-0.2 rounded shrink-0" title="此訂單內存在相同品名、編號與數量的重複品項行">
+                                            <span className="text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/35 px-1.5 py-0.5 rounded shrink-0" title="此訂單內存在相同品名、編號與數量的重複品項行">
                                               ⚠️ 重複品項行
                                             </span>
                                           )}
                                           {item.has_invalid_product_id && (
-                                            <span className="text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/35 px-1.5 py-0.2 rounded flex items-center gap-1 shrink-0" title={item.invalid_product_id_reason || '商品編號異常'}>
+                                            <span className="text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/35 px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0" title={item.invalid_product_id_reason || '商品編號異常'}>
                                               <AlertTriangle className="w-2.5 h-2.5 text-rose-400" />
                                               <span>⚠️ 品號異常 ({item.raw_sheet_product_id || item.product_id || '未填寫'})</span>
                                             </span>
@@ -1998,11 +1980,11 @@ export default function Home() {
                                             </button>
                                           )}
                                           {sysProd ? (
-                                            <span className="text-[10px] font-mono bg-sky-500/10 text-sky-300 border border-sky-500/20 px-1.5 py-0.2 rounded font-medium">
+                                            <span className="text-[10px] font-mono bg-sky-500/10 text-sky-300 border border-sky-500/20 px-1.5 py-0.5 rounded font-medium">
                                               系統商品
                                             </span>
                                           ) : (
-                                            <span className="text-[10px] font-mono bg-amber-500/10 text-amber-300 border border-amber-500/20 px-1.5 py-0.2 rounded italic">
+                                            <span className="text-[10px] font-mono bg-amber-500/10 text-amber-300 border border-amber-500/20 px-1.5 py-0.5 rounded italic">
                                               非系統商品
                                             </span>
                                           )}
@@ -2039,15 +2021,10 @@ export default function Home() {
                                               </span>
                                             ) : null;
                                           })()}
-                                          {shipMethod && (
-                                            <span className="inline-block bg-teal-500/10 text-teal-300 px-1.5 py-0.5 rounded border border-teal-500/20 font-medium">
-                                              物流: {shipMethod}
-                                            </span>
-                                          )}
                                           {sysProd && (
                                             <>
                                               {costPrice !== null && (
-                                                <span className="inline-block bg-amber-500/10 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/20 font-mono font-bold" title={`單件進價: $${costPrice.toLocaleString()}`}>
+                                                <span className="inline-block bg-amber-500/10 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/20 font-mono font-bold tabular-nums" title={`單件進價: $${costPrice.toLocaleString()}`}>
                                                   進價: ${costPrice.toLocaleString()} {item.quantity > 1 ? `(小計 $${(costPrice * item.quantity).toLocaleString()})` : ''}
                                                 </span>
                                               )}
@@ -2063,63 +2040,161 @@ export default function Home() {
                                           </div>
                                         )}
                                       </div>
-                                      <div className="text-right shrink-0 font-mono">
-                                        <p className="text-slate-400 text-xs">數量: <strong className="text-white font-black">{item.quantity}</strong></p>
+
+                                      {/* Right column: Quantity + Item Stock / Shortage Status right below */}
+                                      <div className="text-right shrink-0 flex flex-col items-end gap-1.5">
+                                        <p className="text-slate-400 text-xs font-mono tabular-nums">
+                                          數量: <strong className="text-white font-black">{item.quantity}</strong>
+                                        </p>
+                                        {(() => {
+                                          if (!inv.product) {
+                                            return (
+                                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 whitespace-nowrap">
+                                                ⚠️ 尚未建檔
+                                              </span>
+                                            );
+                                          }
+                                          if (inv.statusInfo.isDiscontinued) {
+                                            return (
+                                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/35 whitespace-nowrap">
+                                                🚫 停產
+                                              </span>
+                                            );
+                                          }
+                                          if (inv.statusInfo.isPaused) {
+                                            return (
+                                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/35 whitespace-nowrap">
+                                                ⏸️ 暫停出貨
+                                              </span>
+                                            );
+                                          }
+                                          if (inv.validStock < inv.reqQty && inv.totalStock >= inv.reqQty) {
+                                            return (
+                                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/35 whitespace-nowrap">
+                                                ⚠️ 庫存已過期
+                                              </span>
+                                            );
+                                          }
+                                          if (inv.totalStock < inv.reqQty) {
+                                            if (inv.onOrderQty >= inv.shortfall) {
+                                              return (
+                                                <div className="flex flex-col items-end gap-0.5">
+                                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 whitespace-nowrap font-mono tabular-nums">
+                                                    🟡 缺貨 {inv.shortfall} 件
+                                                  </span>
+                                                  <span className="text-[9px] text-amber-300/90 font-mono tabular-nums whitespace-nowrap">
+                                                    (已採購 {inv.onOrderQty} 在途)
+                                                  </span>
+                                                </div>
+                                              );
+                                            }
+                                            if (inv.onOrderQty > 0) {
+                                              return (
+                                                <div className="flex flex-col items-end gap-0.5">
+                                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 whitespace-nowrap font-mono tabular-nums">
+                                                    🔴 缺貨 {inv.shortfall} 件
+                                                  </span>
+                                                  <span className="text-[9px] text-rose-300/90 font-mono tabular-nums whitespace-nowrap">
+                                                    (在途 {inv.onOrderQty} 仍不足)
+                                                  </span>
+                                                </div>
+                                              );
+                                            }
+                                            return (
+                                              <div className="flex flex-col items-end gap-0.5">
+                                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 whitespace-nowrap font-mono tabular-nums">
+                                                  🔴 缺貨 {inv.shortfall} 件
+                                                </span>
+                                                <span className="text-[9px] text-slate-400 whitespace-nowrap">
+                                                  (無在途採購)
+                                                </span>
+                                              </div>
+                                            );
+                                          }
+                                          return (
+                                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/25 whitespace-nowrap font-mono tabular-nums">
+                                              🟢 庫存充足 ({inv.validStock})
+                                            </span>
+                                          );
+                                        })()}
                                       </div>
                                     </div>
                                   );
                                 })}
                               </div>
 
-                              {/* Footer Controls: SWAPPED Position 2 -> 最晚出貨期限 (Shipping Deadline) */}
-                              <div className="flex items-center justify-between pt-2 border-t border-white/5">
-                                <div className="flex flex-col text-[10px] text-slate-300 space-y-0.5">
-                                  <span className="flex items-center gap-1 text-slate-400"><User className="w-3 h-3" /> {order.customer_name}</span>
-                                  <span className="flex items-center gap-1 font-bold text-amber-300" title="最晚出貨期限">
-                                    <Clock className="w-3 h-3 text-amber-400" /> 最晚出貨: {order.shipping_deadline || '未設定'}
+                              {/* Footer Controls: Bottom-left Shipping Method above Deadline; Bottom-right Total Cost left of Order Total Amount + Actions */}
+                              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 pt-2.5 border-t border-white/5">
+                                <div className="flex flex-col text-[11px] text-slate-300 space-y-1 min-w-0">
+                                  <span className="flex items-start gap-1.5 font-bold text-teal-300 break-words" title="物流方式">
+                                    <Truck className="w-3.5 h-3.5 text-teal-400 shrink-0 mt-0.5" />
+                                    <span>物流: {shippingText}</span>
+                                  </span>
+                                  <span className="flex items-center gap-1.5 font-bold text-amber-300" title="最晚出貨期限">
+                                    <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                    <span>最晚出貨: {order.shipping_deadline || '未設定'}</span>
                                   </span>
                                 </div>
 
-                                <div className="flex items-center gap-2">
-                                  <div className="mr-1 text-right">
-                                    <span className="block text-[9px] text-slate-400">總金額</span>
-                                    <span className="text-xs font-bold text-indigo-400 font-mono">
-                                      {orderPrice > 0 ? `$${orderPrice.toLocaleString()}` : '無'}
-                                    </span>
+                                <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2.5 shrink-0">
+                                  <div className="flex items-center gap-3 mr-0.5">
+                                    <div className="text-right">
+                                      <span className="block text-[9px] text-slate-400 whitespace-nowrap">
+                                        總進貨成本{hasMissingCost && hasAnyCost ? ' (含部分)' : ''}
+                                      </span>
+                                      <span className="text-xs font-bold text-amber-300 font-mono tabular-nums">
+                                        {hasAnyCost ? `$${totalCostPrice.toLocaleString()}` : '未設定'}
+                                      </span>
+                                    </div>
+                                    <div className="text-right">
+                                      <span className="block text-[9px] text-slate-400 whitespace-nowrap">訂單總金額</span>
+                                      <span className="text-xs font-bold text-indigo-400 font-mono tabular-nums">
+                                        {orderPrice > 0 ? `$${orderPrice.toLocaleString()}` : '無'}
+                                      </span>
+                                    </div>
                                   </div>
-                                  <button 
-                                    onClick={() => setSelectedOrder(order)}
-                                    className="px-2 py-1 text-xs text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors border border-white/5"
-                                  >
-                                    詳情
-                                  </button>
-                                  <button 
-                                    disabled={shippingOrderIds.has(String(order.order_id))}
-                                    onClick={() => handleShipOrder(order)}
-                                    className={`px-2.5 py-1 text-xs font-bold rounded-lg flex items-center gap-1 transition-all shadow-md ${
-                                      shippingOrderIds.has(String(order.order_id))
-                                        ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
-                                        : 'bg-indigo-500 hover:bg-indigo-400 text-slate-950 shadow-indigo-500/20 active:scale-95'
-                                    }`}
-                                  >
-                                    {shippingOrderIds.has(String(order.order_id)) ? (
-                                      <>
-                                        <span className="w-3.5 h-3.5 border-2 border-slate-400 border-t-transparent rounded-full animate-spin inline-block" />
-                                        出貨中...
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Truck className="w-3.5 h-3.5" /> 出貨
-                                      </>
-                                    )}
-                                  </button>
-                                  <button 
-                                    onClick={() => handleDeleteOrder(order.order_id)}
-                                    className="p-1 text-slate-400 hover:text-red-400 bg-white/5 hover:bg-red-500/10 rounded-lg border border-white/5 transition-all"
-                                    title="刪除單筆訂單"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
+
+                                  <div className="flex items-center gap-1.5">
+                                    <button 
+                                      type="button"
+                                      onClick={() => setSelectedOrder(order)}
+                                      className="px-2.5 py-1.5 text-xs text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors border border-white/5 cursor-pointer"
+                                    >
+                                      詳情
+                                    </button>
+                                    <button 
+                                      type="button"
+                                      disabled={shippingOrderIds.has(String(order.order_id))}
+                                      onClick={() => handleShipOrder(order)}
+                                      className={`px-2.5 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1 transition-all shadow-md ${
+                                        shippingOrderIds.has(String(order.order_id))
+                                          ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                                          : 'bg-indigo-500 hover:bg-indigo-400 text-slate-950 shadow-indigo-500/20 active:scale-95 cursor-pointer'
+                                      }`}
+                                    >
+                                      {shippingOrderIds.has(String(order.order_id)) ? (
+                                        <>
+                                          <span className="w-3.5 h-3.5 border-2 border-slate-400 border-t-transparent rounded-full animate-spin inline-block" />
+                                          出貨中...
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Truck className="w-3.5 h-3.5" /> 出貨
+                                        </>
+                                      )}
+                                    </button>
+                                    <button 
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setConfirmDeleteOrderModal(order);
+                                      }}
+                                      className="p-1.5 text-slate-400 hover:text-red-400 bg-white/5 hover:bg-red-500/15 rounded-lg border border-white/5 hover:border-red-500/30 transition-all cursor-pointer"
+                                      title="刪除單筆訂單（需二次確認）"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
 
@@ -2137,27 +2212,27 @@ export default function Home() {
                 <div className="space-y-4 animate-in fade-in duration-150">
                   {/* KPI Summary Cards */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="bg-black/40 border border-white/10 rounded-xl p-3.5 space-y-1">
+                    <div className="bg-black/40 border border-white/10 rounded-xl p-3 sm:p-3.5 space-y-1 min-w-0">
                       <span className="text-[11px] text-slate-400 font-medium block">需求商品品項數</span>
-                      <span className="text-xl font-black text-indigo-400 font-mono">
+                      <span className="text-lg sm:text-xl font-black text-indigo-400 font-mono tabular-nums break-all block">
                         {consolidatedOrderItems.length} <span className="text-xs font-normal text-slate-500">種</span>
                       </span>
                     </div>
-                    <div className="bg-black/40 border border-white/10 rounded-xl p-3.5 space-y-1">
+                    <div className="bg-black/40 border border-white/10 rounded-xl p-3 sm:p-3.5 space-y-1 min-w-0">
                       <span className="text-[11px] text-slate-400 font-medium block">網路訂單總需求件數</span>
-                      <span className="text-xl font-black text-sky-400 font-mono">
+                      <span className="text-lg sm:text-xl font-black text-sky-400 font-mono tabular-nums break-all block">
                         {consolidatedOrderItems.reduce((a, c) => a + c.total_ordered_qty, 0)} <span className="text-xs font-normal text-slate-500">件</span>
                       </span>
                     </div>
-                    <div className="bg-black/40 border border-amber-500/30 rounded-xl p-3.5 space-y-1">
+                    <div className="bg-black/40 border border-amber-500/30 rounded-xl p-3 sm:p-3.5 space-y-1 min-w-0">
                       <span className="text-[11px] text-amber-300 font-medium block">庫存不足需訂貨品項</span>
-                      <span className={`text-xl font-black font-mono ${consolidatedOrderItems.some(i => i.shortfall_qty > 0) ? 'text-amber-400 animate-pulse' : 'text-slate-400'}`}>
+                      <span className={`text-lg sm:text-xl font-black font-mono tabular-nums break-all block ${consolidatedOrderItems.some(i => i.shortfall_qty > 0) ? 'text-amber-400 animate-pulse' : 'text-slate-400'}`}>
                         {consolidatedOrderItems.filter(i => i.shortfall_qty > 0).length} <span className="text-xs font-normal text-slate-500">種缺貨</span>
                       </span>
                     </div>
-                    <div className="bg-black/40 border border-emerald-500/30 rounded-xl p-3.5 space-y-1">
+                    <div className="bg-black/40 border border-emerald-500/30 rounded-xl p-3 sm:p-3.5 space-y-1 min-w-0">
                       <span className="text-[11px] text-emerald-300 font-medium block">預估補貨採購總金額</span>
-                      <span className="text-xl font-black text-emerald-400 font-mono">
+                      <span className="text-lg sm:text-xl font-black text-emerald-400 font-mono tabular-nums break-all block">
                         ${consolidatedOrderItems.reduce((a, c) => a + (c.cost_price * c.shortfall_qty), 0).toLocaleString()}
                       </span>
                     </div>
@@ -2210,137 +2285,229 @@ export default function Home() {
                     </div>
 
                     {/* Export Actions */}
-                    <div className="flex items-center gap-2 shrink-0 justify-end">
+                    <div className="flex flex-wrap items-center gap-2 shrink-0 w-full lg:w-auto justify-end">
                       <button
                         onClick={copySummaryForExcel}
-                        className="px-3 py-2 text-xs font-extrabold bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 rounded-xl flex items-center gap-1.5 transition-all active:scale-95"
+                        className="flex-1 sm:flex-none justify-center px-3 py-2 text-xs font-extrabold bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 rounded-xl flex items-center gap-1.5 transition-all active:scale-95"
                         title="複製 TSV 格式，開啟 Excel 直接按 Ctrl+V 貼上"
                       >
-                        <Copy className="w-3.5 h-3.5" />
+                        <Copy className="w-3.5 h-3.5 shrink-0" />
                         <span>複製至 Excel (Ctrl+V)</span>
                       </button>
                       <button
                         onClick={exportSummaryToExcel}
-                        className="px-3.5 py-2 text-xs font-extrabold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/20 active:scale-95"
+                        className="flex-1 sm:flex-none justify-center px-3.5 py-2 text-xs font-extrabold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/20 active:scale-95"
                         title="下載包含全單商品的 Excel / CSV 檔"
                       >
-                        <FileSpreadsheet className="w-3.5 h-3.5" />
+                        <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
                         <span>下載 Excel (CSV)</span>
                       </button>
                     </div>
                   </div>
 
-                  {/* Summary Table */}
+                  {/* Summary Table / Mobile Cards */}
                   {filteredConsolidatedItems.length === 0 ? (
                     <div className="text-center py-16 space-y-2 bg-black/20 rounded-2xl border border-white/5">
                       <ShoppingBag className="w-12 h-12 text-slate-600 mx-auto" />
                       <p className="text-sm font-medium text-slate-400">目前沒有符合條件的彙整商品</p>
                     </div>
                   ) : (
-                    <div className="overflow-x-auto rounded-xl border border-white/10 custom-scrollbar">
-                      <table className="w-full text-left text-xs border-collapse">
-                        <thead>
-                          <tr className="bg-slate-900/90 text-slate-300 border-b border-white/10 font-bold">
-                            <th className="p-3">商品名稱 / 編號 / 規格</th>
-                            <th className="p-3">供應商</th>
-                            <th className="p-3 text-center">單位</th>
-                            <th className="p-3 text-right">訂單需求總量</th>
-                            <th className="p-3 text-right">目前現有庫存</th>
-                            <th className="p-3 text-center">建議訂購量 (缺貨差額)</th>
-                            <th className="p-3 text-center">
-                              <div className="flex items-center justify-center gap-1">
-                                <Truck className="w-3.5 h-3.5 text-amber-400" />
-                                <span>在途採購量</span>
-                              </div>
-                            </th>
-                            <th className="p-3 text-right">預估進價成本</th>
-                            <th className="p-3 text-right">採購預算小計</th>
-                            <th className="p-3 text-center">涉及訂單筆數</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-white/5 bg-slate-950/60">
-                          {filteredConsolidatedItems.map((item, idx) => {
-                            const isShortfall = item.shortfall_qty > 0;
-                            const subtotal = (item.cost_price || 0) * item.shortfall_qty;
+                    <>
+                      {/* Mobile Card List */}
+                      <div className="md:hidden space-y-3">
+                        {filteredConsolidatedItems.map((item, idx) => {
+                          const isShortfall = item.shortfall_qty > 0;
+                          const subtotal = (item.cost_price || 0) * item.shortfall_qty;
 
-                            return (
-                              <tr key={idx} className={`hover:bg-white/5 transition-colors ${isShortfall ? 'bg-amber-500/5' : ''}`}>
-                                <td className="p-3">
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <p className="font-extrabold text-white text-sm">{item.product_name}</p>
+                          return (
+                            <div
+                              key={`mob-sum-${idx}`}
+                              className={`bg-slate-950/80 border rounded-xl p-3.5 space-y-2.5 text-xs ${
+                                isShortfall ? 'border-amber-500/40 bg-amber-950/15' : 'border-white/10'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0 flex-1 space-y-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <p className="font-extrabold text-white text-sm break-words leading-snug">{item.product_name}</p>
                                     {item.is_non_system && (
                                       <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[10px] font-bold shrink-0">
                                         非系統商品
                                       </span>
                                     )}
                                   </div>
-                                  <div className="flex items-center gap-2 mt-0.5 font-mono text-[11px]">
+                                  <div className="flex items-center gap-1.5 flex-wrap font-mono text-[11px]">
                                     <span className="text-slate-400">ID: {item.product_id}</span>
                                     <span className="text-indigo-300 bg-indigo-500/10 px-1.5 py-0.2 rounded border border-indigo-500/20">
                                       {item.specification}
                                     </span>
                                   </div>
+                                  <div className="text-[11px] text-slate-400">
+                                    供應商：<span className={item.is_non_system ? 'text-amber-300/80 italic' : 'text-slate-200 font-medium'}>{item.vendor_name}</span>
+                                  </div>
                                   {item.product_id && (
-                                    <div className="mt-1">
+                                    <div className="pt-0.5">
                                       <ProductSpecStockBadges productId={item.product_id} size="xs" />
                                     </div>
                                   )}
-                                </td>
-                                <td className="p-3">
-                                  <span className={`font-medium ${item.is_non_system ? 'text-amber-300/80 italic text-[11px]' : 'text-slate-300'}`}>
-                                    {item.vendor_name}
-                                  </span>
-                                </td>
-                                <td className="p-3 text-center">
-                                  <span className="text-slate-400 font-mono">{item.unit}</span>
-                                </td>
-                                <td className="p-3 text-right font-mono font-black text-sky-400 text-sm">
-                                  {item.total_ordered_qty} {item.unit}
-                                </td>
-                                <td className="p-3 text-right font-mono font-bold">
-                                  <span className={item.current_stock_qty >= item.total_ordered_qty ? 'text-emerald-400' : 'text-amber-400'}>
+                                </div>
+
+                                <div className="shrink-0">
+                                  {isShortfall ? (
+                                    <span className="inline-flex items-center gap-1 font-black px-2 py-1 bg-red-500/20 text-red-300 border border-red-500/40 rounded-full font-mono text-[11px]">
+                                      <AlertTriangle className="w-3 h-3 text-red-400 shrink-0" />
+                                      補 {item.shortfall_qty} {item.unit}
+                                    </span>
+                                  ) : (
+                                    <span className="inline-block px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-[11px] font-bold">
+                                      ✅ 充裕
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-3 gap-2 bg-black/40 rounded-lg p-2.5 border border-white/5">
+                                <div className="min-w-0">
+                                  <span className="block text-[10px] text-slate-400">需求總量</span>
+                                  <span className="font-mono font-black text-sky-400 tabular-nums">{item.total_ordered_qty} {item.unit}</span>
+                                </div>
+                                <div className="min-w-0">
+                                  <span className="block text-[10px] text-slate-400">現有庫存</span>
+                                  <span className={`font-mono font-bold tabular-nums ${item.current_stock_qty >= item.total_ordered_qty ? 'text-emerald-400' : 'text-amber-400'}`}>
                                     {item.current_stock_qty} {item.unit}
                                   </span>
-                                </td>
-                                <td className="p-3 text-center">
-                                  {isShortfall ? (
-                                    <span className="inline-flex items-center gap-1 font-black px-2.5 py-1 bg-red-500/20 text-red-300 border border-red-500/40 rounded-full font-mono text-xs animate-pulse">
-                                      <AlertTriangle className="w-3 h-3 text-red-400 shrink-0" />
-                                      需補貨 {item.shortfall_qty} {item.unit}
-                                    </span>
-                                  ) : (
-                                    <span className="inline-block px-2.5 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-[11px] font-bold">
-                                      ✅ 庫存充裕
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="p-3 text-center">
-                                  {(item.on_order_qty || 0) > 0 ? (
-                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full font-mono text-xs font-bold shadow-sm">
+                                </div>
+                                <div className="min-w-0">
+                                  <span className="block text-[10px] text-slate-400">採購預算小計</span>
+                                  <span className="font-mono font-bold text-emerald-400 tabular-nums">${subtotal.toLocaleString()}</span>
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span>單價進價: <strong className="text-slate-200 font-mono">${item.cost_price ? item.cost_price.toLocaleString() : '0'}</strong></span>
+                                  {(item.on_order_qty || 0) > 0 && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full font-mono text-[10px] font-bold">
                                       <Truck className="w-3 h-3 text-amber-400 shrink-0" />
-                                      <span>{item.on_order_qty} {item.unit}</span>
+                                      在途 {item.on_order_qty} {item.unit}
                                     </span>
-                                  ) : (
-                                    <span className="text-slate-600 font-mono text-[11px]">0</span>
                                   )}
-                                </td>
-                                <td className="p-3 text-right font-mono text-slate-300">
-                                  ${item.cost_price ? item.cost_price.toLocaleString() : '0'}
-                                </td>
-                                <td className="p-3 text-right font-mono font-bold text-emerald-400 text-sm">
-                                  ${subtotal.toLocaleString()}
-                                </td>
-                                <td className="p-3 text-center">
-                                  <span className="px-2 py-0.5 bg-white/10 text-slate-200 rounded font-mono text-xs font-bold" title={`涉及訂單: ${item.order_ids.join(', ')}`}>
-                                    {item.orders_count} 筆訂單
-                                  </span>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+                                </div>
+                                <span className="px-2 py-0.5 bg-white/10 text-slate-200 rounded font-mono font-bold">
+                                  {item.orders_count} 筆訂單
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Desktop Table */}
+                      <div className="hidden md:block overflow-x-auto rounded-xl border border-white/10 custom-scrollbar">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="bg-slate-900/90 text-slate-300 border-b border-white/10 font-bold">
+                              <th className="p-3">商品名稱 / 編號 / 規格</th>
+                              <th className="p-3">供應商</th>
+                              <th className="p-3 text-center">單位</th>
+                              <th className="p-3 text-right">訂單需求總量</th>
+                              <th className="p-3 text-right">目前現有庫存</th>
+                              <th className="p-3 text-center">建議訂購量 (缺貨差額)</th>
+                              <th className="p-3 text-center">
+                                <div className="flex items-center justify-center gap-1">
+                                  <Truck className="w-3.5 h-3.5 text-amber-400" />
+                                  <span>在途採購量</span>
+                                </div>
+                              </th>
+                              <th className="p-3 text-right">預估進價成本</th>
+                              <th className="p-3 text-right">採購預算小計</th>
+                              <th className="p-3 text-center">涉及訂單筆數</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-white/5 bg-slate-950/60">
+                            {filteredConsolidatedItems.map((item, idx) => {
+                              const isShortfall = item.shortfall_qty > 0;
+                              const subtotal = (item.cost_price || 0) * item.shortfall_qty;
+
+                              return (
+                                <tr key={idx} className={`hover:bg-white/5 transition-colors ${isShortfall ? 'bg-amber-500/5' : ''}`}>
+                                  <td className="p-3">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <p className="font-extrabold text-white text-sm">{item.product_name}</p>
+                                      {item.is_non_system && (
+                                        <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[10px] font-bold shrink-0">
+                                          非系統商品
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-2 mt-0.5 font-mono text-[11px]">
+                                      <span className="text-slate-400">ID: {item.product_id}</span>
+                                      <span className="text-indigo-300 bg-indigo-500/10 px-1.5 py-0.2 rounded border border-indigo-500/20">
+                                        {item.specification}
+                                      </span>
+                                    </div>
+                                    {item.product_id && (
+                                      <div className="mt-1">
+                                        <ProductSpecStockBadges productId={item.product_id} size="xs" />
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="p-3">
+                                    <span className={`font-medium ${item.is_non_system ? 'text-amber-300/80 italic text-[11px]' : 'text-slate-300'}`}>
+                                      {item.vendor_name}
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-center">
+                                    <span className="text-slate-400 font-mono">{item.unit}</span>
+                                  </td>
+                                  <td className="p-3 text-right font-mono font-black text-sky-400 text-sm">
+                                    {item.total_ordered_qty} {item.unit}
+                                  </td>
+                                  <td className="p-3 text-right font-mono font-bold">
+                                    <span className={item.current_stock_qty >= item.total_ordered_qty ? 'text-emerald-400' : 'text-amber-400'}>
+                                      {item.current_stock_qty} {item.unit}
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-center">
+                                    {isShortfall ? (
+                                      <span className="inline-flex items-center gap-1 font-black px-2.5 py-1 bg-red-500/20 text-red-300 border border-red-500/40 rounded-full font-mono text-xs animate-pulse">
+                                        <AlertTriangle className="w-3 h-3 text-red-400 shrink-0" />
+                                        需補貨 {item.shortfall_qty} {item.unit}
+                                      </span>
+                                    ) : (
+                                      <span className="inline-block px-2.5 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-[11px] font-bold">
+                                        ✅ 庫存充裕
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-center">
+                                    {(item.on_order_qty || 0) > 0 ? (
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full font-mono text-xs font-bold shadow-sm">
+                                        <Truck className="w-3 h-3 text-amber-400 shrink-0" />
+                                        <span>{item.on_order_qty} {item.unit}</span>
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-600 font-mono text-[11px]">0</span>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-right font-mono text-slate-300">
+                                    ${item.cost_price ? item.cost_price.toLocaleString() : '0'}
+                                  </td>
+                                  <td className="p-3 text-right font-mono font-bold text-emerald-400 text-sm">
+                                    ${subtotal.toLocaleString()}
+                                  </td>
+                                  <td className="p-3 text-center">
+                                    <span className="px-2 py-0.5 bg-white/10 text-slate-200 rounded font-mono text-xs font-bold" title={`涉及訂單: ${item.order_ids.join(', ')}`}>
+                                      {item.orders_count} 筆訂單
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
                   )}
                 </div>
               )}
@@ -2700,7 +2867,7 @@ export default function Home() {
             </div>
 
             {/* Actions */}
-            <div className="p-4 border-t border-white/10 bg-zinc-900/40 flex justify-end gap-3">
+            <div className="p-4 border-t border-white/10 bg-zinc-900/40 flex flex-wrap justify-end gap-2.5">
               <button 
                 onClick={() => setSelectedOrder(null)}
                 className="px-4 py-2 text-xs font-semibold bg-white/5 hover:bg-white/10 text-zinc-300 rounded-lg transition-colors"
@@ -2723,7 +2890,7 @@ export default function Home() {
                   </>
                 ) : (
                   <>
-                    <Truck className="w-4 h-4" /> 執行整單出貨 (扣減庫存 & 刪除記錄)
+                    <Truck className="w-4 h-4" /> 執行整單出貨 (扣存 & 刪除記錄)
                   </>
                 )}
               </button>
@@ -2985,6 +3152,111 @@ export default function Home() {
                   <>
                     <Trash2 className="w-3.5 h-3.5" />
                     <span>確認清理（只留一筆）</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Order Secondary Confirmation Modal */}
+      {confirmDeleteOrderModal && (
+        <div className="fixed inset-0 z-[105] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl relative text-left">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="p-2.5 bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-xl shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div className="space-y-1 min-w-0">
+                  <h3 className="text-sm font-extrabold text-white">
+                    確認刪除此網路訂單？
+                  </h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    刪除後將一併從待出貨看板與 Google 試算表移除此筆訂單記錄（不會自動扣減庫存）。
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isDeletingOrder}
+                onClick={() => setConfirmDeleteOrderModal(null)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="bg-black/40 border border-white/10 rounded-xl p-3.5 space-y-2 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-400">訂單編號</span>
+                <span className="font-mono font-black text-rose-300 break-all text-right">
+                  {confirmDeleteOrderModal.order_id}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-400">來源平台 / 買家</span>
+                <span className="font-bold text-white text-right">
+                  {confirmDeleteOrderModal.platform} · {confirmDeleteOrderModal.customer_name || '未知買家'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-400">訂單總金額</span>
+                <span className="font-mono font-bold text-indigo-300 tabular-nums">
+                  {getOrderPrice(confirmDeleteOrderModal) > 0 ? `$${getOrderPrice(confirmDeleteOrderModal).toLocaleString()}` : '無'}
+                </span>
+              </div>
+              <div className="pt-2 border-t border-white/10 space-y-1">
+                <span className="text-[11px] text-slate-400 block">
+                  包含品項 (共 {confirmDeleteOrderModal.items?.length || 0} 項)：
+                </span>
+                <ul className="space-y-1 text-[11px] text-slate-200 max-h-28 overflow-y-auto pr-1">
+                  {(confirmDeleteOrderModal.items || []).slice(0, 4).map((it: any, idx: number) => (
+                    <li key={idx} className="flex items-center justify-between gap-2">
+                      <span className="truncate">{it.product_name}{it.specification ? ` (${it.specification})` : ''}</span>
+                      <span className="font-mono text-slate-400 shrink-0">x{it.quantity}</span>
+                    </li>
+                  ))}
+                  {(confirmDeleteOrderModal.items || []).length > 4 && (
+                    <li className="text-slate-400 italic">...還有 {(confirmDeleteOrderModal.items || []).length - 4} 項商品</li>
+                  )}
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-1">
+              <button
+                type="button"
+                disabled={isDeletingOrder}
+                onClick={() => setConfirmDeleteOrderModal(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition-colors cursor-pointer"
+              >
+                取消保留
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingOrder}
+                onClick={async () => {
+                  setIsDeletingOrder(true);
+                  try {
+                    await handleDeleteOrder(confirmDeleteOrderModal.order_id);
+                    setConfirmDeleteOrderModal(null);
+                  } finally {
+                    setIsDeletingOrder(false);
+                  }
+                }}
+                className="px-4 py-2 text-xs font-extrabold rounded-xl bg-rose-600 hover:bg-rose-500 text-white flex items-center gap-1.5 shadow-lg shadow-rose-600/25 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingOrder ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>刪除中...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>確認刪除訂單</span>
                   </>
                 )}
               </button>

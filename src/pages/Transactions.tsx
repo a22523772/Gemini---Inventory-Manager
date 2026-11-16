@@ -599,34 +599,34 @@ export default function Transactions() {
 
           {/* Quick Stats Summary Banner */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-            <div className="bg-slate-900/60 border border-white/5 rounded-xl p-2 sm:p-2.5 flex items-center justify-between">
-              <div>
+            <div className="bg-slate-900/60 border border-white/5 rounded-xl p-2 sm:p-2.5 flex items-center justify-between gap-2 min-w-0">
+              <div className="min-w-0">
                 <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">總進貨量</span>
-                <span className="text-sm sm:text-base font-black text-sky-400 font-mono">+{summaryStats.totalInQty} <span className="text-[10px] font-normal text-slate-400">件</span></span>
+                <span className="text-sm sm:text-base font-black text-sky-400 font-mono tabular-nums break-all block">+{summaryStats.totalInQty} <span className="text-[10px] font-normal text-slate-400">件</span></span>
               </div>
               <ArrowDownToLine className="w-4 h-4 text-sky-400/60 shrink-0" />
             </div>
 
-            <div className="bg-slate-900/60 border border-white/5 rounded-xl p-2 sm:p-2.5 flex items-center justify-between">
-              <div>
+            <div className="bg-slate-900/60 border border-white/5 rounded-xl p-2 sm:p-2.5 flex items-center justify-between gap-2 min-w-0">
+              <div className="min-w-0">
                 <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">總出貨量</span>
-                <span className="text-sm sm:text-base font-black text-rose-400 font-mono">-{summaryStats.totalOutQty} <span className="text-[10px] font-normal text-slate-400">件</span></span>
+                <span className="text-sm sm:text-base font-black text-rose-400 font-mono tabular-nums break-all block">-{summaryStats.totalOutQty} <span className="text-[10px] font-normal text-slate-400">件</span></span>
               </div>
               <ArrowUpFromLine className="w-4 h-4 text-rose-400/60 shrink-0" />
             </div>
 
-            <div className="bg-slate-900/60 border border-white/5 rounded-xl p-2 sm:p-2.5 flex items-center justify-between">
-              <div>
+            <div className="bg-slate-900/60 border border-white/5 rounded-xl p-2 sm:p-2.5 flex items-center justify-between gap-2 min-w-0">
+              <div className="min-w-0">
                 <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">進貨總成本</span>
-                <span className="text-sm sm:text-base font-black text-emerald-400 font-mono">${summaryStats.totalInCost.toLocaleString()}</span>
+                <span className="text-sm sm:text-base font-black text-emerald-400 font-mono tabular-nums break-all block">${summaryStats.totalInCost.toLocaleString()}</span>
               </div>
               <TrendingUp className="w-4 h-4 text-emerald-400/60 shrink-0" />
             </div>
 
-            <div className="bg-slate-900/60 border border-white/5 rounded-xl p-2 sm:p-2.5 flex items-center justify-between">
-              <div>
+            <div className="bg-slate-900/60 border border-white/5 rounded-xl p-2 sm:p-2.5 flex items-center justify-between gap-2 min-w-0">
+              <div className="min-w-0">
                 <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">出貨總金額</span>
-                <span className="text-sm sm:text-base font-black text-purple-400 font-mono">${summaryStats.totalOutAmount.toLocaleString()}</span>
+                <span className="text-sm sm:text-base font-black text-purple-400 font-mono tabular-nums break-all block">${summaryStats.totalOutAmount.toLocaleString()}</span>
               </div>
               <TrendingDown className="w-4 h-4 text-purple-400/60 shrink-0" />
             </div>
@@ -792,7 +792,7 @@ export default function Transactions() {
       </div>
 
       {/* Main List Container */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-4 md:space-y-0">
+      <div className="flex-1 overflow-y-auto p-4 pb-24 md:pb-6 space-y-3 md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-4 md:space-y-0">
         <div className="flex flex-wrap justify-between items-center gap-2 px-1 mb-1 md:col-span-2 xl:col-span-3">
           <p className="text-xs text-[var(--color-text-dim)] font-medium">
             {transactions.length > 0 && transactions.length !== filteredTransactions.length ? (
@@ -1044,7 +1044,7 @@ export default function Transactions() {
                       </div>
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-2 mt-2 pt-2 border-t border-white/5">
-                      <div className="flex items-center gap-3">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                         <p className={`text-xs font-mono font-bold ${isStockIn ? 'text-sky-400' : 'text-rose-400'}`}>
                           {isStockIn ? '總進貨件數: +' : '總出貨件數: -'}{totalQuantity} 件
                         </p>

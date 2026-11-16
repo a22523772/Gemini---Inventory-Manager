@@ -430,13 +430,13 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
           {/* Vendor Quick Dropdown & Category */}
           <div className="flex flex-wrap items-center gap-2">
             {/* Vendor Filter */}
-            <div className="flex items-center gap-1.5 bg-black/40 border border-white/10 rounded-xl px-2.5 py-1.5">
+            <div className="flex items-center gap-1.5 bg-black/40 border border-white/10 rounded-xl px-2.5 py-1.5 min-w-0 max-w-full">
               <Building2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
               <span className="text-xs text-slate-400 font-bold shrink-0">供應商:</span>
               <select
                 value={selectedVendor}
                 onChange={(e) => setSelectedVendor(e.target.value)}
-                className="bg-transparent text-xs font-bold text-sky-300 outline-none cursor-pointer max-w-[220px] truncate"
+                className="bg-transparent text-xs font-bold text-sky-300 outline-none cursor-pointer min-w-0 flex-1 max-w-full sm:max-w-[220px] truncate"
               >
                 <option value="ALL" className="bg-slate-900 text-white">全部供應商 ({products.length})</option>
                 {vendorOptions.map(v => (
@@ -449,13 +449,13 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
 
             {/* Category Filter */}
             {categoryOptions.length > 0 && (
-              <div className="flex items-center gap-1.5 bg-black/40 border border-white/10 rounded-xl px-2.5 py-1.5">
+              <div className="flex items-center gap-1.5 bg-black/40 border border-white/10 rounded-xl px-2.5 py-1.5 min-w-0 max-w-full">
                 <Layers className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
                 <span className="text-xs text-slate-400 font-bold shrink-0">分類:</span>
                 <select
                   value={selectedCategory}
                   onChange={(e) => setSelectedCategory(e.target.value)}
-                  className="bg-transparent text-xs font-bold text-indigo-300 outline-none cursor-pointer max-w-[180px] truncate"
+                  className="bg-transparent text-xs font-bold text-indigo-300 outline-none cursor-pointer min-w-0 flex-1 max-w-full sm:max-w-[180px] truncate"
                 >
                   <option value="ALL" className="bg-slate-900 text-white">全部分類</option>
                   {categoryOptions.map(c => (
@@ -494,8 +494,8 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
           </div>
 
           {/* Search and Sort */}
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1 md:w-64">
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+            <div className="relative flex-1 min-w-[180px] md:w-64">
               <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
@@ -517,7 +517,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as any)}
-              className="bg-black/40 border border-white/10 rounded-xl text-xs font-medium text-slate-300 px-2.5 py-1.5 outline-none cursor-pointer shrink-0"
+              className="w-full sm:w-auto max-w-full bg-black/40 border border-white/10 rounded-xl text-xs font-medium text-slate-300 px-2.5 py-1.5 outline-none cursor-pointer shrink-0"
             >
               <option value="stock_asc" className="bg-slate-900 text-white">庫存：少 ➔ 多 (優先叫貨)</option>
               <option value="stock_desc" className="bg-slate-900 text-white">庫存：多 ➔ 少</option>
@@ -529,8 +529,8 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
         </div>
       </div>
 
-      {/* Main Table Content */}
-      <div className="flex-1 overflow-auto p-4">
+      {/* Main Table / Mobile Cards Content */}
+      <div className="flex-1 overflow-auto p-3 sm:p-4 pb-24 md:pb-6">
         {filteredItems.length === 0 ? (
           <div className="text-center py-20 bg-black/20 rounded-2xl border border-white/5 space-y-3">
             <Package className="w-12 h-12 text-slate-600 mx-auto" />
@@ -550,8 +550,178 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
             )}
           </div>
         ) : (
-          <div className="bg-slate-900/90 border border-white/10 rounded-2xl overflow-hidden shadow-2xl">
-            <table className="w-full text-left border-collapse text-xs">
+          <>
+            {/* Mobile Card View */}
+            <div className="md:hidden space-y-3">
+              {filteredItems.map((item, idx) => {
+                const isOutOfStock = item.is_out_of_stock;
+                const isOut = item.is_out;
+                const isLow = item.is_low;
+
+                let stockBadgeColor = 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
+                let stockText = `${item.current_stock} ${item.unit}`;
+
+                if (isOutOfStock) {
+                  stockBadgeColor = 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+                } else if (isOut) {
+                  stockBadgeColor = 'bg-red-500/20 text-red-300 border-red-500/40 font-black animate-pulse';
+                  stockText = `⚠️ 缺貨 (0 ${item.unit})`;
+                } else if (isLow) {
+                  stockBadgeColor = 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold';
+                  stockText = `⚡ 偏低 (${item.current_stock} ${item.unit})`;
+                }
+
+                return (
+                  <div
+                    key={`mobile-${item.product_id}`}
+                    className={`bg-slate-900/90 border rounded-2xl p-3.5 space-y-3 shadow-lg ${
+                      isOutOfStock
+                        ? 'opacity-75 border-amber-500/30 bg-amber-950/15'
+                        : isOut
+                        ? 'border-red-500/40 bg-red-950/15'
+                        : isLow
+                        ? 'border-amber-500/40 bg-amber-950/10'
+                        : 'border-white/10'
+                    }`}
+                  >
+                    {/* Header Row */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[11px] font-mono font-bold text-slate-500">#{idx + 1}</span>
+                          <span className="font-bold text-white text-sm break-words leading-snug">{item.name}</span>
+                          {item.brand && (
+                            <span className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-white/10 font-medium">
+                              {item.brand}
+                            </span>
+                          )}
+                          {item.is_paused && (
+                            item.is_discontinued ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold">
+                                🔴 停產
+                              </span>
+                            ) : (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold inline-flex items-center gap-1">
+                                <Calendar className="w-2.5 h-2.5 text-amber-400" />
+                                <span>🟡 暫時缺貨 {item.expected_restock_date ? `(預計: ${item.expected_restock_date})` : ''}</span>
+                              </span>
+                            )
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400 font-mono">
+                          <span className="bg-white/5 px-1.5 py-0.5 rounded border border-white/5">ID: {item.product_id}</span>
+                          {item.barcode && <span>條碼: {item.barcode}</span>}
+                          {item.category && <span className="text-indigo-400">[{item.category}]</span>}
+                        </div>
+                        <div className="flex items-center gap-1 text-[11px] text-slate-300">
+                          <Building2 className="w-3 h-3 text-slate-500 shrink-0" />
+                          <span className="truncate">{item.vendor_name}</span>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => onOpenAdjustModal({ product: item.product, stockEntries: item.stock_entries })}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs border font-mono shrink-0 transition-all active:scale-95 cursor-pointer ${stockBadgeColor}`}
+                        title="點擊直接快速調整庫存"
+                      >
+                        <span className="font-black">{stockText}</span>
+                        <Pencil className="w-3 h-3 opacity-60" />
+                      </button>
+                    </div>
+
+                    {/* Specs */}
+                    <div>
+                      <ProductSpecStockBadges product={item.product} size="xs" />
+                    </div>
+
+                    {/* Metrics Grid */}
+                    <div className="grid grid-cols-3 gap-2 bg-black/30 rounded-xl p-2.5 border border-white/5 text-xs">
+                      <div className="min-w-0">
+                        <span className="block text-[10px] text-slate-400">安全水位</span>
+                        <span className="font-mono font-bold text-slate-200 tabular-nums">{item.min_stock} {item.unit}</span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="block text-[10px] text-slate-400">進價成本</span>
+                        <span className="font-mono font-bold text-slate-200 tabular-nums">${item.cost_price.toLocaleString()}</span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="block text-[10px] text-slate-400">建議叫貨量</span>
+                        {item.is_paused ? (
+                          <span className={`text-[10px] font-bold ${item.is_discontinued ? 'text-rose-300' : 'text-amber-300'}`}>
+                            {item.is_discontinued ? '停產禁採' : '缺貨禁採'}
+                          </span>
+                        ) : item.suggested_order_qty > 0 ? (
+                          <span className="font-mono font-black text-sky-300 tabular-nums">+ {item.suggested_order_qty} {item.unit}</span>
+                        ) : (
+                          <span className="text-[11px] text-slate-500">庫存充足</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* On-Order + Status & Actions */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/10">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          onClick={() => toggleOutOfStock(item.product_id)}
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold transition-all border cursor-pointer ${
+                            item.is_discontinued
+                              ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                              : item.is_paused
+                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                          }`}
+                        >
+                          {item.is_discontinued ? (
+                            <>
+                              <span className="text-xs">🔴</span>
+                              <span>已停產</span>
+                            </>
+                          ) : item.is_paused ? (
+                            <>
+                              <PauseCircle className="w-3.5 h-3.5 text-amber-400" />
+                              <span>暫時缺貨</span>
+                            </>
+                          ) : (
+                            <>
+                              <PlayCircle className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>正常供應</span>
+                            </>
+                          )}
+                        </button>
+
+                        {item.on_order_qty > 0 && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full font-mono text-[11px] font-bold">
+                            <Truck className="w-3 h-3 text-amber-400 shrink-0" />
+                            <span>在途 {item.on_order_qty} {item.unit}</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => onOpenAdjustModal({ product: item.product, stockEntries: item.stock_entries })}
+                          className="px-2.5 py-1 bg-white/5 hover:bg-white/15 text-sky-300 border border-white/10 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors"
+                        >
+                          <Sliders className="w-3 h-3" />
+                          <span>盤點</span>
+                        </button>
+                        <Link
+                          to={`/add-product?editId=${encodeURIComponent(item.product_id)}`}
+                          className="p-1.5 text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 transition-colors"
+                          title="編輯商品完整資料"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop Table View */}
+            <div className="hidden md:block bg-slate-900/90 border border-white/10 rounded-2xl overflow-x-auto shadow-2xl custom-scrollbar">
+              <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="bg-black/50 border-b border-white/10 text-slate-400 font-bold">
                   <th className="p-3 text-center w-12">#</th>
@@ -793,7 +963,8 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                 })}
               </tbody>
             </table>
-          </div>
+            </div>
+          </>
         )}
       </div>
     </div>

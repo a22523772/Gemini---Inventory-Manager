@@ -25,9 +25,9 @@ export default function StorageLocationSelector({
   const [isCustomArea, setIsCustomArea] = useState(!availableAreas.includes(area) && !!area);
 
   return (
-    <div className="grid grid-cols-3 gap-1 min-w-[210px]">
+    <div className="grid grid-cols-3 gap-1 w-full min-w-0 sm:min-w-[210px]">
       {/* 1. Location / Warehouse */}
-      <div>
+      <div className="min-w-0">
         {!isCustomLocation ? (
           <div className="relative">
             <select
@@ -78,7 +78,7 @@ export default function StorageLocationSelector({
       </div>
 
       {/* 2. Floor */}
-      <div>
+      <div className="min-w-0">
         {!isCustomFloor ? (
           <div className="relative">
             <select
@@ -129,7 +129,7 @@ export default function StorageLocationSelector({
       </div>
 
       {/* 3. Area */}
-      <div>
+      <div className="min-w-0">
         {!isCustomArea ? (
           <div className="relative">
             <select

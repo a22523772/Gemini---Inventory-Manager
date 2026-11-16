@@ -1176,23 +1176,23 @@ export default function Purchases() {
             setStatusFilter('ALL');
           }}
           className={cn(
-            "p-4 rounded-xl border flex items-center justify-between transition-all cursor-pointer select-none group",
+            "p-3 sm:p-4 rounded-xl border flex items-center justify-between gap-2 transition-all cursor-pointer select-none group min-w-0",
             statusFilter === 'ALL'
               ? "bg-sky-500/15 border-sky-500/50 shadow-lg shadow-sky-500/10 ring-1 ring-sky-500/30"
               : "bg-[#0f172a] border-white/10 hover:border-sky-500/30 hover:bg-sky-500/5"
           )}
           title="點擊切換篩選：全部採購單"
         >
-          <div>
-            <div className="flex items-center gap-1.5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">採購在途總數量</span>
               {statusFilter === 'ALL' && (
                 <span className="text-[10px] px-1.5 py-0.2 bg-sky-500/30 text-sky-200 rounded font-extrabold">全部</span>
               )}
             </div>
-            <div className="text-2xl font-black text-sky-400 mt-0.5">{stats.totalOnOrderUnits} <span className="text-xs font-normal text-slate-400">件</span></div>
+            <div className="text-xl sm:text-2xl font-black text-sky-400 mt-0.5 tabular-nums">{stats.totalOnOrderUnits} <span className="text-xs font-normal text-slate-400">件</span></div>
           </div>
-          <div className="p-2.5 bg-sky-500/10 rounded-xl text-sky-400 group-hover:scale-110 transition-transform">
+          <div className="p-2 sm:p-2.5 bg-sky-500/10 rounded-xl text-sky-400 group-hover:scale-110 transition-transform shrink-0">
             <Package className="w-5 h-5" />
           </div>
         </div>
@@ -1203,23 +1203,23 @@ export default function Purchases() {
             setStatusFilter(statusFilter === 'pending' ? 'ALL' : 'pending');
           }}
           className={cn(
-            "p-4 rounded-xl border flex items-center justify-between transition-all cursor-pointer select-none group",
+            "p-3 sm:p-4 rounded-xl border flex items-center justify-between gap-2 transition-all cursor-pointer select-none group min-w-0",
             statusFilter === 'pending'
               ? "bg-amber-500/15 border-amber-500/50 shadow-lg shadow-amber-500/10 ring-1 ring-amber-500/30"
               : "bg-[#0f172a] border-white/10 hover:border-amber-500/30 hover:bg-amber-500/5"
           )}
           title="點擊切換篩選：待到貨訂單"
         >
-          <div>
-            <div className="flex items-center gap-1.5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">待驗收到貨訂單</span>
               {statusFilter === 'pending' && (
                 <span className="text-[10px] px-1.5 py-0.2 bg-amber-500/30 text-amber-200 rounded font-extrabold">已選</span>
               )}
             </div>
-            <div className="text-2xl font-black text-amber-400 mt-0.5">{stats.pendingCount} <span className="text-xs font-normal text-slate-400">單</span></div>
+            <div className="text-xl sm:text-2xl font-black text-amber-400 mt-0.5 tabular-nums">{stats.pendingCount} <span className="text-xs font-normal text-slate-400">單</span></div>
           </div>
-          <div className="p-2.5 bg-amber-500/10 rounded-xl text-amber-400 group-hover:scale-110 transition-transform">
+          <div className="p-2 sm:p-2.5 bg-amber-500/10 rounded-xl text-amber-400 group-hover:scale-110 transition-transform shrink-0">
             <Clock className="w-5 h-5" />
           </div>
         </div>
@@ -1230,23 +1230,23 @@ export default function Purchases() {
             setStatusFilter(statusFilter === 'partial' ? 'ALL' : 'partial');
           }}
           className={cn(
-            "p-4 rounded-xl border flex items-center justify-between transition-all cursor-pointer select-none group",
+            "p-3 sm:p-4 rounded-xl border flex items-center justify-between gap-2 transition-all cursor-pointer select-none group min-w-0",
             statusFilter === 'partial'
               ? "bg-indigo-500/15 border-indigo-500/50 shadow-lg shadow-indigo-500/10 ring-1 ring-indigo-500/30"
               : "bg-[#0f172a] border-white/10 hover:border-indigo-500/30 hover:bg-indigo-500/5"
           )}
           title="點擊切換篩選：部分到貨訂單"
         >
-          <div>
-            <div className="flex items-center gap-1.5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">部分到貨訂單</span>
               {statusFilter === 'partial' && (
                 <span className="text-[10px] px-1.5 py-0.2 bg-indigo-500/30 text-indigo-200 rounded font-extrabold">已選</span>
               )}
             </div>
-            <div className="text-2xl font-black text-indigo-400 mt-0.5">{stats.partialCount} <span className="text-xs font-normal text-slate-400">單</span></div>
+            <div className="text-xl sm:text-2xl font-black text-indigo-400 mt-0.5 tabular-nums">{stats.partialCount} <span className="text-xs font-normal text-slate-400">單</span></div>
           </div>
-          <div className="p-2.5 bg-indigo-500/10 rounded-xl text-indigo-400 group-hover:scale-110 transition-transform">
+          <div className="p-2 sm:p-2.5 bg-indigo-500/10 rounded-xl text-indigo-400 group-hover:scale-110 transition-transform shrink-0">
             <AlertCircle className="w-5 h-5" />
           </div>
         </div>
@@ -1257,66 +1257,66 @@ export default function Purchases() {
             setStatusFilter(statusFilter === 'completed' ? 'ALL' : 'completed');
           }}
           className={cn(
-            "p-4 rounded-xl border flex items-center justify-between transition-all cursor-pointer select-none group",
+            "p-3 sm:p-4 rounded-xl border flex items-center justify-between gap-2 transition-all cursor-pointer select-none group min-w-0",
             statusFilter === 'completed'
               ? "bg-emerald-500/15 border-emerald-500/50 shadow-lg shadow-emerald-500/10 ring-1 ring-emerald-500/30"
               : "bg-[#0f172a] border-white/10 hover:border-emerald-500/30 hover:bg-emerald-500/5"
           )}
           title="點擊切換篩選：已完成結案"
         >
-          <div>
-            <div className="flex items-center gap-1.5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">已完成結案</span>
               {statusFilter === 'completed' && (
                 <span className="text-[10px] px-1.5 py-0.2 bg-emerald-500/30 text-emerald-200 rounded font-extrabold">已選</span>
               )}
             </div>
-            <div className="text-2xl font-black text-emerald-400 mt-0.5">{stats.completedCount} <span className="text-xs font-normal text-slate-400">單</span></div>
+            <div className="text-xl sm:text-2xl font-black text-emerald-400 mt-0.5 tabular-nums">{stats.completedCount} <span className="text-xs font-normal text-slate-400">單</span></div>
           </div>
-          <div className="p-2.5 bg-emerald-500/10 rounded-xl text-emerald-400 group-hover:scale-110 transition-transform">
+          <div className="p-2 sm:p-2.5 bg-emerald-500/10 rounded-xl text-emerald-400 group-hover:scale-110 transition-transform shrink-0">
             <CheckCircle2 className="w-5 h-5" />
           </div>
         </div>
       </div>
 
       {/* Main Tabs Navigation */}
-      <div className="flex border-b border-white/10 gap-2">
+      <div className="flex border-b border-white/10 gap-2 overflow-x-auto custom-scrollbar">
         <button
           onClick={() => setActiveTab('list')}
           className={cn(
-            "flex items-center gap-2 px-5 py-3 text-sm font-bold border-b-2 transition-all cursor-pointer",
+            "flex items-center gap-2 px-3.5 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-bold border-b-2 transition-all cursor-pointer shrink-0 whitespace-nowrap",
             activeTab === 'list'
               ? "border-sky-500 text-sky-400 bg-sky-500/5"
               : "border-transparent text-slate-400 hover:text-slate-200"
           )}
         >
-          <FileText className="w-4 h-4" />
+          <FileText className="w-4 h-4 shrink-0" />
           <span>採購訂單與在途追蹤 ({purchaseOrders.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('scan')}
           className={cn(
-            "flex items-center gap-2 px-5 py-3 text-sm font-bold border-b-2 transition-all cursor-pointer",
+            "flex items-center gap-2 px-3.5 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-bold border-b-2 transition-all cursor-pointer shrink-0 whitespace-nowrap",
             activeTab === 'scan'
               ? "border-sky-500 text-sky-400 bg-sky-500/5"
               : "border-transparent text-slate-400 hover:text-slate-200"
           )}
         >
-          <Camera className="w-4 h-4" />
+          <Camera className="w-4 h-4 shrink-0" />
           <span>📷 拍照 / 智慧單據辨識</span>
         </button>
 
         <button
           onClick={() => setActiveTab('create')}
           className={cn(
-            "flex items-center gap-2 px-5 py-3 text-sm font-bold border-b-2 transition-all cursor-pointer",
+            "flex items-center gap-2 px-3.5 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-bold border-b-2 transition-all cursor-pointer shrink-0 whitespace-nowrap",
             activeTab === 'create'
               ? "border-sky-500 text-sky-400 bg-sky-500/5"
               : "border-transparent text-slate-400 hover:text-slate-200"
           )}
         >
-          <Plus className="w-4 h-4" />
+          <Plus className="w-4 h-4 shrink-0" />
           <span>➕ 建立新採購單</span>
         </button>
       </div>
@@ -1354,7 +1354,7 @@ export default function Purchases() {
               <select
                 value={vendorFilter}
                 onChange={(e) => setVendorFilter(e.target.value)}
-                className="bg-[#1e293b] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500 max-w-[180px] truncate font-medium"
+                className="bg-[#1e293b] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500 w-full sm:w-auto sm:max-w-[180px] min-w-0 truncate font-medium"
               >
                 <option value="ALL">所有供應商 ({allKnownVendors.length})</option>
                 {allKnownVendors.map(v => (
@@ -1365,15 +1365,15 @@ export default function Purchases() {
 
             {/* Bottom Row: Sorting, Invoice Number Filter, Photo Filter, and Reset */}
             <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/5 text-xs">
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 max-w-full">
                 {/* Sort Order Selector (No PO ID per request) */}
-                <div className="flex items-center gap-1.5 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/10">
-                  <ArrowUpDown className="w-3.5 h-3.5 text-sky-400" />
-                  <span className="text-[11px] text-slate-400 font-bold">排序:</span>
+                <div className="flex items-center gap-1.5 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/10 max-w-full min-w-0">
+                  <ArrowUpDown className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                  <span className="text-[11px] text-slate-400 font-bold shrink-0">排序:</span>
                   <select
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value as any)}
-                    className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer font-medium"
+                    className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer font-medium min-w-0 max-w-full truncate"
                   >
                     <option value="order_date_desc" className="bg-slate-900 text-slate-200">下單日期：新 ➔ 舊 (預設)</option>
                     <option value="order_date_asc" className="bg-slate-900 text-slate-200">下單日期：舊 ➔ 新</option>
@@ -1385,13 +1385,13 @@ export default function Purchases() {
                 </div>
 
                 {/* Invoice / Document Number Filter */}
-                <div className="flex items-center gap-1.5 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/10">
-                  <Filter className="w-3.5 h-3.5 text-amber-400" />
-                  <span className="text-[11px] text-slate-400 font-bold">單據/發票號:</span>
+                <div className="flex items-center gap-1.5 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/10 max-w-full min-w-0">
+                  <Filter className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span className="text-[11px] text-slate-400 font-bold shrink-0">單據/發票號:</span>
                   <select
                     value={invoiceFilter}
                     onChange={(e) => setInvoiceFilter(e.target.value as any)}
-                    className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer font-medium"
+                    className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer font-medium min-w-0 max-w-full truncate"
                   >
                     <option value="ALL" className="bg-slate-900 text-slate-200">全部單據狀態</option>
                     <option value="missing_invoice" className="bg-slate-900 text-amber-300">⚠️ 缺單據/發票號 (需補充)</option>
@@ -1400,13 +1400,13 @@ export default function Purchases() {
                 </div>
 
                 {/* Photo Filter */}
-                <div className="flex items-center gap-1.5 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/10">
-                  <Camera className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="text-[11px] text-slate-400 font-bold">單據照片:</span>
+                <div className="flex items-center gap-1.5 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/10 max-w-full min-w-0">
+                  <Camera className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span className="text-[11px] text-slate-400 font-bold shrink-0">單據照片:</span>
                   <select
                     value={photoFilter}
                     onChange={(e) => setPhotoFilter(e.target.value as any)}
-                    className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer font-medium"
+                    className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer font-medium min-w-0 max-w-full truncate"
                   >
                     <option value="ALL" className="bg-slate-900 text-slate-200">全部</option>
                     <option value="has_photo" className="bg-slate-900 text-emerald-300">📷 有照片存檔</option>
@@ -1868,19 +1868,19 @@ export default function Purchases() {
       {/* TAB 2: AI / LOCAL SCANNER & INVOICE OCR (MULTI-IMAGE SUPPORT) */}
       {activeTab === 'scan' && (
         <div className="space-y-6" onPaste={handlePasteImage}>
-          <div className="bg-[#0f172a] border border-white/10 rounded-2xl p-6 space-y-5">
-            <div className="flex items-start justify-between gap-4">
-              <div>
+          <div className="bg-[#0f172a] border border-white/10 rounded-2xl p-4 sm:p-6 space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+              <div className="min-w-0">
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <Camera className="w-5 h-5 text-sky-400" />
-                  進貨單據拍照 / 雙引擎智慧辨識（支援多張 / 跨頁單據）
+                  <Camera className="w-5 h-5 text-sky-400 shrink-0" />
+                  <span>進貨單據拍照 / 雙引擎智慧辨識（支援多張 / 跨頁單據）</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
                   支援選取或連續拍攝 <span className="text-sky-300 font-bold">2 張以上多頁進貨單、出貨單、發票</span>。可使用「⚡ 本地離線辨識」或「✨ 雲端 AI 跨頁深度解析」，辨識後自動將所有頁面商品整合入庫。
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap shrink-0">
                 <button
                   onClick={() => cameraInputRef.current?.click()}
                   className="flex items-center gap-1.5 px-3.5 py-2 bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold rounded-xl text-xs shadow-md shadow-sky-500/20 cursor-pointer"
@@ -2148,7 +2148,7 @@ export default function Purchases() {
       {/* TAB 3: CREATE MANUAL PURCHASE ORDER */}
       {activeTab === 'create' && (
         <div className="space-y-6">
-          <div className="bg-[#0f172a] border border-white/10 rounded-2xl p-6 space-y-6">
+          <div className="bg-[#0f172a] border border-white/10 rounded-2xl p-4 sm:p-6 space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
@@ -3044,7 +3044,7 @@ export default function Purchases() {
                   />
                 </div>
 
-                <div className="col-span-2">
+                <div className="sm:col-span-2">
                   <label className="block text-slate-400 font-bold mb-1">關聯採購訂單 (在途扣抵)</label>
                   <select
                     value={confirmSelectedPOId}
