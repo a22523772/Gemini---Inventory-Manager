@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useStore, getProductStatusInfo, ProductStatusInfo } from '../store/useStore';
+import { useStore, getProductStatusInfo, ProductStatusInfo, getProductSpecifications, formatConsistentTxDate } from '../store/useStore';
 import { Search, ScanBarcode, PackageOpen, Pencil, Trash2, MoreHorizontal, Filter, AlertCircle, Clock, ArrowUpDown, SlidersHorizontal, X, PauseCircle, PlayCircle, Layers, TableProperties, TrendingUp, ClipboardList, Ban, Calendar, RefreshCw } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { differenceInDays } from 'date-fns';
@@ -11,7 +11,7 @@ import ProductSpecStockBadges from '../components/ProductSpecStockBadges';
 type SortType = 'name_asc' | 'name_desc' | 'newest' | 'stock_low' | 'stock_high';
 
 export default function Products() {
-  const { products, stock, deleteProduct, showToast, vendors, lowStockAlertEnabled, expiryThreshold, productsPageState, setProductsPageState, toggleDiscontinued, toggleOutOfStock, setProductAvailability, refreshProducts } = useStore();
+  const { products, stock, deleteProduct, showToast, vendors, operator, lowStockAlertEnabled, expiryThreshold, productsPageState, setProductsPageState, toggleDiscontinued, toggleOutOfStock, setProductAvailability, refreshProducts } = useStore();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<'list' | 'compact' | 'replenishment'>(
@@ -39,19 +39,43 @@ export default function Products() {
   const [selectedStockId, setSelectedStockId] = useState<string>('');
   const [targetQty, setTargetQty] = useState<string>('0');
   const [adjustNote, setAdjustNote] = useState<string>('盤點校正');
+  const [adjustSpec, setAdjustSpec] = useState<string>('');
+  const [adjustLocation, setAdjustLocation] = useState<string>('倉庫');
+  const [adjustFloor, setAdjustFloor] = useState<string>('1F');
+  const [adjustArea, setAdjustArea] = useState<string>('A區');
+  const [adjustExpiry, setAdjustExpiry] = useState<string>('');
   const [isSubmittingAdjust, setIsSubmittingAdjust] = useState<boolean>(false);
 
   const openAdjustModal = (group: any, stockEntry?: any) => {
+    if (operator !== 'admin') {
+      showToast('❌ 僅管理員（admin）能進行庫存盤點與調整！');
+      return;
+    }
+    const statusInfo = getProductStatusInfo(group.product);
+    if (statusInfo.isPaused) {
+      showToast(`❌ 【${group.product.name}】目前為「${statusInfo.isDiscontinued ? '停產' : '暫時缺貨'}」狀態，禁止進行庫存調整操作！`);
+      return;
+    }
+
     setAdjustGroup(group);
-    if (stockEntry) {
-      setSelectedStockId(stockEntry.stock_id);
-      setTargetQty(String(stockEntry.quantity));
-    } else if (group.stockEntries && group.stockEntries.length > 0) {
-      setSelectedStockId(group.stockEntries[0].stock_id);
-      setTargetQty(String(group.stockEntries[0].quantity));
+    const chosen = stockEntry || (group.stockEntries && group.stockEntries.length > 0 ? group.stockEntries[0] : null);
+    if (chosen) {
+      setSelectedStockId(chosen.stock_id);
+      setTargetQty(String(chosen.quantity));
+      setAdjustSpec(chosen.specification || '');
+      setAdjustLocation(chosen.location || '倉庫');
+      setAdjustFloor(chosen.floor || '1F');
+      setAdjustArea(chosen.area || 'A區');
+      setAdjustExpiry(chosen.expiry_date || '');
     } else {
+      const specs = getProductSpecifications(group.product.product_id, products, stock);
       setSelectedStockId('');
       setTargetQty('0');
+      setAdjustSpec(specs[0] || '');
+      setAdjustLocation('倉庫');
+      setAdjustFloor('1F');
+      setAdjustArea('A區');
+      setAdjustExpiry('');
     }
     setAdjustNote('盤點校正');
   };
@@ -62,37 +86,61 @@ export default function Products() {
       const entry = adjustGroup.stockEntries.find((s: any) => s.stock_id === stockId);
       if (entry) {
         setTargetQty(String(entry.quantity));
+        setAdjustSpec(entry.specification || '');
+        setAdjustLocation(entry.location || '倉庫');
+        setAdjustFloor(entry.floor || '1F');
+        setAdjustArea(entry.area || 'A區');
+        setAdjustExpiry(entry.expiry_date || '');
       }
     }
   };
 
   const handleConfirmAdjust = async () => {
     if (!adjustGroup || isSubmittingAdjust) return;
+    if (operator !== 'admin') {
+      showToast('❌ 僅管理員（admin）能進行庫存盤點與調整！');
+      return;
+    }
     const p = adjustGroup.product;
+    const statusInfo = getProductStatusInfo(p);
+    if (statusInfo.isPaused) {
+      showToast(`❌ 【${p.name}】為「${statusInfo.isDiscontinued ? '停產' : '暫時缺貨'}」狀態，禁止調整庫存！`);
+      return;
+    }
+
     const parsedQty = Number(targetQty);
     if (isNaN(parsedQty) || parsedQty < 0) {
       showToast('❌ 請輸入有效的庫存數量（不可為負數）！');
       return;
     }
 
+    const currentEntry = (adjustGroup.stockEntries || []).find((s: any) => s.stock_id === selectedStockId) || (adjustGroup.stockEntries || [])[0];
+    if (!currentEntry && parsedQty === 0) {
+      showToast('❌ 此商品目前無庫存批次，若要建立新庫存請輸入大於 0 的數量！');
+      return;
+    }
+
     setIsSubmittingAdjust(true);
     try {
-      const currentEntry = adjustGroup.stockEntries.find((s: any) => s.stock_id === selectedStockId) || adjustGroup.stockEntries[0];
       const prevQty = currentEntry ? Number(currentEntry.quantity) || 0 : 0;
       const delta = parsedQty - prevQty;
       const deltaStr = delta >= 0 ? `+${delta}` : `${delta}`;
       const changeNote = `[${deltaStr}=${parsedQty}] ${adjustNote.trim() || '盤點校正'}`.trim();
 
       const payload = {
-        stock_id: currentEntry?.stock_id,
+        stock_id: currentEntry?.stock_id || undefined,
         product_id: p.product_id,
+        name: p.name,
+        product_name: p.name,
         quantity: parsedQty,
         delta: delta,
         final_quantity: parsedQty,
-        location: currentEntry?.location || '倉庫',
-        floor: currentEntry?.floor || '1F',
-        area: currentEntry?.area || 'A區',
-        specification: currentEntry?.specification || '',
+        location: (currentEntry ? currentEntry.location : adjustLocation).trim() || '倉庫',
+        floor: (currentEntry ? currentEntry.floor : adjustFloor).trim() || '1F',
+        area: (currentEntry ? currentEntry.area : adjustArea).trim() || 'A區',
+        expiry_date: (currentEntry ? currentEntry.expiry_date : adjustExpiry) || '',
+        specification: (currentEntry ? currentEntry.specification : adjustSpec) || '',
+        date: formatConsistentTxDate(new Date()),
         note: changeNote,
         operator: useStore.getState().operator
       };
@@ -620,8 +668,8 @@ export default function Products() {
                                 </div>
                                 <button
                                   onClick={() => openAdjustModal(group, entry)}
-                                  className="px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-300 rounded-md text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 shrink-0"
-                                  title="調整此批次庫存"
+                                  className={`px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-300 rounded-md text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 shrink-0 ${operator !== 'admin' || statusInfo.isPaused ? 'opacity-45' : ''}`}
+                                  title={operator !== 'admin' ? '僅限管理員（admin）調整庫存' : statusInfo.isPaused ? '商品暫停供應中' : '調整此批次庫存'}
                                 >
                                   <SlidersHorizontal className="w-3 h-3" />
                                   調整
@@ -642,7 +690,8 @@ export default function Products() {
                       </Link>
                       <button
                         onClick={() => openAdjustModal(group)}
-                        className="flex-1 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-bold rounded-xl text-center transition-all flex items-center justify-center gap-1 cursor-pointer shadow-lg shadow-amber-500/5"
+                        className={`flex-1 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-bold rounded-xl text-center transition-all flex items-center justify-center gap-1 cursor-pointer shadow-lg shadow-amber-500/5 ${operator !== 'admin' || statusInfo.isPaused ? 'opacity-45' : ''}`}
+                        title={operator !== 'admin' ? '僅限管理員（admin）調整庫存' : statusInfo.isPaused ? '商品暫停供應中' : '調整庫存'}
                       >
                         <SlidersHorizontal className="w-4 h-4" />
                         調整庫存
@@ -661,8 +710,8 @@ export default function Products() {
                     </Link>
                     <button
                       onClick={() => openAdjustModal(group)}
-                      className="px-3 py-2 bg-amber-500/15 border border-amber-500/30 hover:bg-amber-500/25 text-amber-300 text-xs font-bold rounded-lg text-center transition-all flex items-center justify-center gap-1 cursor-pointer shrink-0"
-                      title="調整庫存"
+                      className={`px-3 py-2 bg-amber-500/15 border border-amber-500/30 hover:bg-amber-500/25 text-amber-300 text-xs font-bold rounded-lg text-center transition-all flex items-center justify-center gap-1 cursor-pointer shrink-0 ${operator !== 'admin' || statusInfo.isPaused ? 'opacity-45' : ''}`}
+                      title={operator !== 'admin' ? '僅限管理員（admin）調整庫存' : statusInfo.isPaused ? '商品暫停供應中' : '調整庫存'}
                     >
                       <SlidersHorizontal className="w-3.5 h-3.5" />
                       調整
@@ -739,7 +788,7 @@ export default function Products() {
               </p>
             </div>
 
-            {/* Select Stock Batch if multiple exist */}
+            {/* Select Stock Batch if multiple exist, or configure new batch when 0 stock */}
             {adjustGroup.stockEntries && adjustGroup.stockEntries.length > 0 ? (
               <div className="space-y-2">
                 <label className="text-xs font-bold text-white/80 block">
@@ -752,16 +801,81 @@ export default function Products() {
                 >
                   {adjustGroup.stockEntries.map((entry: any) => (
                     <option key={entry.stock_id} value={entry.stock_id} className="bg-slate-900 text-white">
-                      {entry.location}-{entry.floor}-{entry.area} {entry.specification ? `(${entry.specification})` : ''} - 現有 {entry.quantity} {adjustGroup.product.unit || '個'}
+                      {entry.location}-{entry.floor}-{entry.area} {entry.specification ? `(${entry.specification})` : ''} {entry.expiry_date ? `[效:${entry.expiry_date}]` : ''} - 現有 {entry.quantity} {adjustGroup.product.unit || '個'}
                     </option>
                   ))}
                 </select>
               </div>
-            ) : (
-              <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-200">
-                ⚠️ 此商品目前無庫存批次紀錄，提交調整將自動於【倉庫-1F-A區】建立第一筆庫存紀錄。
-              </div>
-            )}
+            ) : (() => {
+              const specOptions = getProductSpecifications(adjustGroup.product.product_id, products, stock);
+              return (
+                <div className="space-y-3">
+                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-200 leading-relaxed">
+                    {Number(targetQty) > 0
+                      ? `✅ 提交後將自動於【${adjustLocation || '倉庫'}-${adjustFloor || '1F'}-${adjustArea || 'A區'}】建立新庫存批次並同步雲端。`
+                      : '⚠️ 此商品目前無庫存批次紀錄，請輸入大於 0 的目標數量以建立新批次。'}
+                  </div>
+
+                  {specOptions.length > 0 && (
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-white/80 block">規格</label>
+                      <select
+                        value={adjustSpec}
+                        onChange={(e) => setAdjustSpec(e.target.value)}
+                        className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 cursor-pointer"
+                      >
+                        <option value="" className="bg-slate-900 text-white">(無特定規格)</option>
+                        {specOptions.map(sp => (
+                          <option key={sp} value={sp} className="bg-slate-900 text-white">{sp}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="text-[11px] font-bold text-white/70 block mb-1">儲位</label>
+                      <input
+                        type="text"
+                        value={adjustLocation}
+                        onChange={(e) => setAdjustLocation(e.target.value)}
+                        className="w-full bg-black/40 border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-white/70 block mb-1">樓層</label>
+                      <input
+                        type="text"
+                        value={adjustFloor}
+                        onChange={(e) => setAdjustFloor(e.target.value)}
+                        className="w-full bg-black/40 border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-white/70 block mb-1">區域</label>
+                      <input
+                        type="text"
+                        value={adjustArea}
+                        onChange={(e) => setAdjustArea(e.target.value)}
+                        className="w-full bg-black/40 border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                  </div>
+
+                  {adjustGroup.product.has_expiry && (
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-white/70 block">有效日期 (選填)</label>
+                      <input
+                        type="date"
+                        value={adjustExpiry}
+                        onChange={(e) => setAdjustExpiry(e.target.value)}
+                        className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Target Quantity Input */}
             <div className="space-y-2">
@@ -786,6 +900,12 @@ export default function Products() {
                 min={0}
                 className="w-full"
               />
+
+              {adjustGroup.stockEntries && adjustGroup.stockEntries.length > 0 && Number(targetQty) === 0 && targetQty !== '' && (
+                <p className="text-[11px] text-amber-300">
+                  ⚠️ 目標數量設為 0 時，提交後將從本地與雲端一致移除此歸零批次紀錄。
+                </p>
+              )}
 
               {/* Quick adjustment buttons */}
               <div className="flex flex-wrap gap-1.5 pt-1">

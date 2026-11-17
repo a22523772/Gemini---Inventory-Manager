@@ -179,12 +179,25 @@ export default function StockManage() {
       } else if (selectedStock) {
         setCurrentExpiry(selectedStock.expiry_date || '');
         setCurrentSpecification(selectedStock.specification || '');
-        setLocation(selectedStock.location);
-        setFloor(selectedStock.floor);
-        setArea(selectedStock.area);
+        setIsCustomSpecMode(false);
+        setLocation(selectedStock.location || '倉庫');
+        setFloor(selectedStock.floor || '1F');
+        setArea(selectedStock.area || 'A區');
+        if (type === 'adjust') {
+          setQuantity(String(selectedStock.quantity));
+        }
+      } else if (type === 'adjust') {
+        const specs = getProductSpecifications(product.product_id, products, stock);
+        setCurrentExpiry('');
+        setCurrentSpecification(specFilter !== 'ALL' ? specFilter : (specs[0] || ''));
+        setIsCustomSpecMode(false);
+        setLocation('倉庫');
+        setFloor('1F');
+        setArea('A區');
+        setQuantity('0');
       }
     }
-  }, [product?.product_id, selectedStock?.stock_id, type, stock, products]);
+  }, [product?.product_id, selectedStock?.stock_id, type, specFilter]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -205,9 +218,21 @@ export default function StockManage() {
       return;
     }
 
+    if (type === 'adjust' && operator !== 'admin') {
+      showToast('❌ 僅管理員（admin）能進行庫存盤點與調整！');
+      setIsSubmitting(false);
+      return;
+    }
+
     const parsedQty = Number(quantity);
     if (isNaN(parsedQty) || (type !== 'adjust' && parsedQty <= 0) || (type === 'adjust' && parsedQty < 0)) {
         showToast('❌ 請輸入正確的庫存數量！');
+        setIsSubmitting(false);
+        return;
+    }
+
+    if (type === 'adjust' && !selectedStock && parsedQty === 0) {
+        showToast('❌ 目前無現有庫存批次，若要建立新庫存請輸入大於 0 的數量！');
         setIsSubmitting(false);
         return;
     }
@@ -303,6 +328,9 @@ export default function StockManage() {
       const prevQty = selectedStock ? Number(selectedStock.quantity) || 0 : 0;
       const delta = parsedQty - prevQty;
       const deltaStr = delta >= 0 ? `+${delta}` : `${delta}`;
+      payload.stock_id = selectedStock?.stock_id || undefined;
+      payload.name = product.name;
+      payload.product_name = product.name;
       payload.delta = delta;
       payload.final_quantity = parsedQty;
       payload.note = `[${deltaStr}=${parsedQty}] ${note.trim() || '盤點校正'}`.trim();
@@ -473,6 +501,13 @@ export default function StockManage() {
           )}
         </div>
 
+        {type === 'adjust' && operator !== 'admin' && (
+          <div className="p-3 bg-rose-500/15 border border-rose-500/30 rounded-xl text-xs text-rose-300 font-bold flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>目前為一般操作員權限，僅管理員（admin）可執行庫存盤點與調整。</span>
+          </div>
+        )}
+
         {(type === 'stock_out' || type === 'adjust') && (
           <div className="space-y-3">
             {getSpecOptions.length > 0 && (
@@ -512,6 +547,10 @@ export default function StockManage() {
                   ))}
                 </select>
               </div>
+            ) : type === 'adjust' ? (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/25 rounded-xl text-xs text-amber-200 leading-relaxed font-medium">
+                ⚠️ 目前無現有庫存批次；輸入大於 0 的目標數量送出後，將依下方規格與儲位自動建立新庫存批次並同步雲端。
+              </div>
             ) : (
               <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-300 text-center font-medium">
                 此規格無符合的現有庫存批次
@@ -520,11 +559,11 @@ export default function StockManage() {
           </div>
         )}
 
-        {type === 'stock_in' && (
+        {(type === 'stock_in' || type === 'adjust') && (
           <div className="animate-in fade-in slide-in-from-top-2 p-3 border border-[var(--color-accent-blue)]/30 bg-[var(--color-accent-blue)]/5 rounded-xl">
             <div className="flex items-center justify-between mb-1">
               <label className="block text-sm font-bold text-[var(--color-accent-blue)] uppercase tracking-wider text-[10px]">
-                商品規格 (固定選單)
+                {type === 'adjust' ? '商品規格 (選填/修改)' : '商品規格 (固定選單)'}
               </label>
               {getSpecOptions.length > 0 && (
                 <button
@@ -597,13 +636,20 @@ export default function StockManage() {
         )}
 
         <div>
-          <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">數量</label>
+          <label className="block text-sm font-bold text-[var(--color-text-dim)] uppercase tracking-wider text-[10px] mb-1">
+            {type === 'adjust' ? '調整後目標庫存數量' : '數量'}
+          </label>
           <QuantityInput
             min={type === 'adjust' ? 0 : 1}
             value={quantity}
             onChange={(val) => setQuantity(val)}
             className="!bg-white/5 !border-white/10"
           />
+          {type === 'adjust' && selectedStock && Number(quantity) === 0 && quantity !== '' && (
+            <p className="text-[11px] text-amber-300 mt-1.5">
+              ⚠️ 目標數量設為 0 時，提交後將從本地與雲端一致移除此歸零批次。
+            </p>
+          )}
         </div>
 
         <div className="grid grid-cols-3 gap-2 sm:gap-3">

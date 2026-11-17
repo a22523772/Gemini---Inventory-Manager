@@ -17,7 +17,7 @@ export { parseToDate, getTxTimestamp, normalizeDateToYMD, formatTxDate };
 
 export default function Transactions() {
   const { 
-    transactions, products, vendors, transactionsPageState, 
+    transactions, products, vendors, purchaseOrders, transactionsPageState, 
     setTransactionsPageState, deleteTransaction, deleteTransactionGroup, 
     editTransaction, fetchRemoteData, gasApiUrl, isLoading: storeIsLoading,
     refreshTransactions
@@ -42,6 +42,29 @@ export default function Transactions() {
   const [selectedTxForEdit, setSelectedTxForEdit] = useState<any | null>(null);
   const [txToDelete, setTxToDelete] = useState<any | null>(null);
   const [groupToDelete, setGroupToDelete] = useState<{ groupId: string; group: any[] } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  const getLinkedPoIdsForTxs = (txList: any[]): string[] => {
+    const ids = new Set<string>();
+    txList.forEach(tx => {
+      if (!tx || !isStockInType(tx.type)) return;
+      if (tx.po_id && String(tx.po_id).trim()) {
+        ids.add(String(tx.po_id).trim());
+        return;
+      }
+      purchaseOrders.forEach(po => {
+        if (
+          (tx.transaction_id && (tx.transaction_id === po.po_id || tx.transaction_id.startsWith(po.po_id))) ||
+          (tx.batch_id && tx.batch_id === po.po_id) ||
+          (tx.note && (tx.note.includes(`[採購單: ${po.po_id}]`) || tx.note.includes(`採購單號: ${po.po_id}`) || tx.note.includes(po.po_id)))
+        ) {
+          ids.add(po.po_id);
+        }
+      });
+    });
+    return Array.from(ids);
+  };
 
   // Edit form states
   const [editQty, setEditQty] = useState('');
@@ -1315,28 +1338,34 @@ export default function Transactions() {
           <form 
             onSubmit={async (e) => {
               e.preventDefault();
-              const dominantSep = getDominantDateSeparator(transactions);
-              const fields: any = {
-                quantity: Number(editQty),
-                location: editLocation,
-                floor: editFloor,
-                area: editArea,
-                specification: editSpec,
-                date: formatConsistentTxDate(editDate, dominantSep),
-                note: editNote,
-                operator: editOperator,
-              };
-              if (editCost !== '') {
-                fields.cost_price = Number(editCost);
+              if (isSavingEdit) return;
+              setIsSavingEdit(true);
+              try {
+                const dominantSep = getDominantDateSeparator(transactions);
+                const fields: any = {
+                  quantity: Number(editQty),
+                  location: editLocation,
+                  floor: editFloor,
+                  area: editArea,
+                  specification: editSpec,
+                  date: formatConsistentTxDate(editDate, dominantSep),
+                  note: editNote,
+                  operator: editOperator,
+                };
+                if (editCost !== '') {
+                  fields.cost_price = Number(editCost);
+                }
+                if (editPrice !== '') {
+                  fields.price = Number(editPrice);
+                }
+                if (editVendor) {
+                  fields.vendor_id = editVendor;
+                }
+                await editTransaction(selectedTxForEdit.id || selectedTxForEdit.transaction_id, fields);
+                setSelectedTxForEdit(null);
+              } finally {
+                setIsSavingEdit(false);
               }
-              if (editPrice !== '') {
-                fields.price = Number(editPrice);
-              }
-              if (editVendor) {
-                fields.vendor_id = editVendor;
-              }
-              await editTransaction(selectedTxForEdit.id || selectedTxForEdit.transaction_id, fields);
-              setSelectedTxForEdit(null);
             }}
             className="glass-panel border border-white/10 rounded-2xl w-full max-w-sm p-5 max-h-[85vh] overflow-y-auto space-y-3.5 shadow-2xl"
           >
@@ -1346,8 +1375,9 @@ export default function Transactions() {
               </h2>
               <button 
                 type="button"
+                disabled={isSavingEdit}
                 onClick={() => setSelectedTxForEdit(null)}
-                className="p-1 px-[7px] rounded-lg bg-white/5 hover:bg-white/10 text-[var(--color-text-dim)] cursor-pointer"
+                className="p-1 px-[7px] rounded-lg bg-white/5 hover:bg-white/10 text-[var(--color-text-dim)] cursor-pointer disabled:opacity-50"
               >
                 ✕
               </button>
@@ -1363,9 +1393,11 @@ export default function Transactions() {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">異動數量</label>
+                  <label className="block text-[10px] font-bold text-[var(--color-text-dim)] uppercase mb-0.5">
+                    {isAdjustType(selectedTxForEdit.type) ? '調整後最終庫存' : '異動數量'}
+                  </label>
                   <QuantityInput
-                    min={1}
+                    min={isAdjustType(selectedTxForEdit.type) ? 0 : 1}
                     value={editQty}
                     onChange={(val) => setEditQty(val)}
                     className="!bg-[#1e293b]"
@@ -1488,16 +1520,18 @@ export default function Transactions() {
             <div className="flex justify-end gap-2 pt-3 border-t border-white/10">
               <button
                 type="button"
+                disabled={isSavingEdit}
                 onClick={() => setSelectedTxForEdit(null)}
-                className="px-3 py-2 bg-white/5 hover:bg-white/10 text-[var(--color-text-dim)] rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="px-3 py-2 bg-white/5 hover:bg-white/10 text-[var(--color-text-dim)] rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
               >
                 取消
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 bg-[var(--color-accent-blue)] text-[#0f172a] rounded-xl text-xs font-black transition-all hover:brightness-110 active:scale-95 cursor-pointer"
+                disabled={isSavingEdit}
+                className="px-4 py-2 bg-[var(--color-accent-blue)] text-[#0f172a] rounded-xl text-xs font-black transition-all hover:brightness-110 active:scale-95 cursor-pointer disabled:opacity-50"
               >
-                儲存變更
+                {isSavingEdit ? '儲存中...' : '儲存變更'}
               </button>
             </div>
           </form>
@@ -1505,95 +1539,138 @@ export default function Transactions() {
       )}
 
       {/* 單筆刪除確認 Modal */}
-      {txToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-          <div className="glass-panel border border-red-500/30 rounded-2xl w-full max-w-sm p-5 space-y-4 shadow-2xl">
-            <div className="flex items-center gap-3 text-red-400">
-              <Trash2 className="w-6 h-6 shrink-0" />
-              <h2 className="text-base font-bold text-white">確認刪除此筆交易紀錄？</h2>
-            </div>
-            
-            <div className="text-xs text-slate-300 bg-white/5 p-3 rounded-xl border border-white/5 space-y-1.5">
-              <p><span className="text-slate-400">商品名稱：</span><span className="text-white font-bold">{getTxProductName(txToDelete)}</span></p>
-              <p><span className="text-slate-400">異動類型：</span><span className="text-white">{getTypeLabel(txToDelete.type)} ({txToDelete.quantity} 件)</span></p>
-              <p><span className="text-slate-400">異動時間：</span><span className="text-white font-mono">{formatTxDate(txToDelete.date)}</span></p>
-              {txToDelete.online_order_id && (
-                <p><span className="text-slate-400">網路訂單：</span><span className="text-sky-300 font-mono">#{txToDelete.online_order_id}</span></p>
+      {txToDelete && (() => {
+        const linkedPoIds = getLinkedPoIdsForTxs([txToDelete]);
+        const qtyDisplay = isAdjustType(txToDelete.type)
+          ? formatAdjustQuantity(txToDelete).display
+          : `${txToDelete.quantity} 件`;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+            <div className="glass-panel border border-red-500/30 rounded-2xl w-full max-w-sm p-5 space-y-4 shadow-2xl">
+              <div className="flex items-center gap-3 text-red-400">
+                <Trash2 className="w-6 h-6 shrink-0" />
+                <h2 className="text-base font-bold text-white">確認刪除此筆交易紀錄？</h2>
+              </div>
+              
+              <div className="text-xs text-slate-300 bg-white/5 p-3 rounded-xl border border-white/5 space-y-1.5">
+                <p><span className="text-slate-400">商品名稱：</span><span className="text-white font-bold">{getTxProductName(txToDelete)}</span></p>
+                <p><span className="text-slate-400">異動類型：</span><span className="text-white">{getTypeLabel(txToDelete.type)} ({qtyDisplay})</span></p>
+                <p><span className="text-slate-400">異動時間：</span><span className="text-white font-mono">{formatTxDate(txToDelete.date)}</span></p>
+                {txToDelete.online_order_id && (
+                  <p><span className="text-slate-400">網路訂單：</span><span className="text-sky-300 font-mono">#{txToDelete.online_order_id}</span></p>
+                )}
+              </div>
+
+              <p className="text-[11px] text-amber-300/90 leading-relaxed bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
+                ⚠️ 提示：刪除此筆紀錄將會自動反向校正目前庫存量（進貨紀錄刪除會扣減庫存，出貨紀錄刪除會回補庫存，盤點調整刪除會反向抵銷異動量）。
+              </p>
+
+              {linkedPoIds.length > 0 && (
+                <p className="text-[11px] text-sky-300 leading-relaxed bg-sky-500/10 p-2.5 rounded-xl border border-sky-500/20">
+                  📦 連動通知：此進貨紀錄關聯採購單 ({linkedPoIds.join(', ')})，刪除後系統將同步重算採購單已到貨數量與狀態。
+                </p>
               )}
-            </div>
 
-            <p className="text-[11px] text-amber-300/90 leading-relaxed bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
-              ⚠️ 提示：刪除此筆紀錄將會自動反向校正目前庫存量（進貨紀錄刪除會扣減庫存，出貨紀錄刪除會回補庫存）。
-            </p>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                onClick={() => setTxToDelete(null)}
-                className="px-3 py-2 bg-white/5 hover:bg-white/10 text-slate-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
-              >
-                取消
-              </button>
-              <button
-                onClick={async () => {
-                  await deleteTransaction(txToDelete.id || txToDelete.transaction_id);
-                  setTxToDelete(null);
-                }}
-                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-black transition-all active:scale-95 cursor-pointer shadow-lg shadow-red-600/30"
-              >
-                確認刪除
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 整批/整張訂單刪除確認 Modal */}
-      {groupToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-          <div className="glass-panel border border-red-500/30 rounded-2xl w-full max-w-sm p-5 space-y-4 shadow-2xl">
-            <div className="flex items-center gap-3 text-red-400">
-              <Trash2 className="w-6 h-6 shrink-0" />
-              <h2 className="text-base font-bold text-white">確認刪除整張訂單紀錄？</h2>
-            </div>
-            
-            <div className="text-xs text-slate-300 bg-white/5 p-3 rounded-xl border border-white/5 space-y-2 max-h-48 overflow-y-auto">
-              <p className="text-sky-300 font-bold">訂單/群組編號: #{groupToDelete.groupId}</p>
-              <p className="text-slate-400">包含以下 {groupToDelete.group.length} 個品項出貨明細：</p>
-              <div className="space-y-1 pt-1 border-t border-white/5">
-                {groupToDelete.group.map((item, idx) => (
-                  <div key={idx} className="flex justify-between text-[11px] text-white/90">
-                    <span className="truncate max-w-[180px]">{getTxProductName(item)}</span>
-                    <span className="font-mono font-bold text-rose-400">x{item.quantity}</span>
-                  </div>
-                ))}
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => setTxToDelete(null)}
+                  className="px-3 py-2 bg-white/5 hover:bg-white/10 text-slate-300 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={async () => {
+                    if (isDeleting) return;
+                    setIsDeleting(true);
+                    try {
+                      await deleteTransaction(txToDelete.id || txToDelete.transaction_id);
+                      setTxToDelete(null);
+                    } finally {
+                      setIsDeleting(false);
+                    }
+                  }}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-black transition-all active:scale-95 cursor-pointer shadow-lg shadow-red-600/30 disabled:opacity-50"
+                >
+                  {isDeleting ? '刪除中...' : '確認刪除'}
+                </button>
               </div>
             </div>
+          </div>
+        );
+      })()}
 
-            <p className="text-[11px] text-amber-300/90 leading-relaxed bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
-              ⚠️ 提示：刪除整批出貨紀錄將會自動回補所有品項的庫存量。
-            </p>
+      {/* 整批/整張訂單刪除確認 Modal */}
+      {groupToDelete && (() => {
+        const linkedPoIds = getLinkedPoIdsForTxs(groupToDelete.group);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+            <div className="glass-panel border border-red-500/30 rounded-2xl w-full max-w-sm p-5 space-y-4 shadow-2xl">
+              <div className="flex items-center gap-3 text-red-400">
+                <Trash2 className="w-6 h-6 shrink-0" />
+                <h2 className="text-base font-bold text-white">確認刪除整批交易紀錄？</h2>
+              </div>
+              
+              <div className="text-xs text-slate-300 bg-white/5 p-3 rounded-xl border border-white/5 space-y-2 max-h-48 overflow-y-auto">
+                <p className="text-sky-300 font-bold">單據/群組編號: #{groupToDelete.groupId}</p>
+                <p className="text-slate-400">包含以下 {groupToDelete.group.length} 個品項異動明細：</p>
+                <div className="space-y-1 pt-1 border-t border-white/5">
+                  {groupToDelete.group.map((item, idx) => (
+                    <div key={idx} className="flex justify-between text-[11px] text-white/90">
+                      <span className="truncate max-w-[180px]">{getTxProductName(item)}</span>
+                      <span className="font-mono font-bold text-rose-400">
+                        {isAdjustType(item.type) ? formatAdjustQuantity(item).display : `x${item.quantity}`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
 
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                onClick={() => setGroupToDelete(null)}
-                className="px-3 py-2 bg-white/5 hover:bg-white/10 text-slate-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
-              >
-                取消
-              </button>
-              <button
-                onClick={async () => {
-                  const targetIds = groupToDelete.group.map(t => t.id || t.transaction_id).filter(Boolean);
-                  await deleteTransactionGroup(targetIds.length > 0 ? targetIds : groupToDelete.groupId);
-                  setGroupToDelete(null);
-                }}
-                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-black transition-all active:scale-95 cursor-pointer shadow-lg shadow-red-600/30"
-              >
-                確認刪除整張訂單
-              </button>
+              <p className="text-[11px] text-amber-300/90 leading-relaxed bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
+                ⚠️ 提示：刪除整批交易紀錄將會自動反向校正所有品項的對應庫存量。
+              </p>
+
+              {linkedPoIds.length > 0 && (
+                <p className="text-[11px] text-sky-300 leading-relaxed bg-sky-500/10 p-2.5 rounded-xl border border-sky-500/20">
+                  📦 連動通知：此批進貨紀錄關聯採購單 ({linkedPoIds.join(', ')})，刪除後系統將同步重算採購單已到貨數量與狀態。
+                </p>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => setGroupToDelete(null)}
+                  className="px-3 py-2 bg-white/5 hover:bg-white/10 text-slate-300 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={async () => {
+                    if (isDeleting) return;
+                    setIsDeleting(true);
+                    try {
+                      const targetIds = groupToDelete.group.map(t => t.id || t.transaction_id).filter(Boolean);
+                      await deleteTransactionGroup(targetIds.length > 0 ? targetIds : groupToDelete.groupId);
+                      setGroupToDelete(null);
+                    } finally {
+                      setIsDeleting(false);
+                    }
+                  }}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-black transition-all active:scale-95 cursor-pointer shadow-lg shadow-red-600/30 disabled:opacity-50"
+                >
+                  {isDeleting ? '刪除中...' : '確認刪除整批紀錄'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

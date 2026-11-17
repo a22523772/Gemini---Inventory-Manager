@@ -832,6 +832,48 @@ const sanitizeSinglePOForCloud = (po: PurchaseOrder, products: Product[]): Purch
 const sanitizePurchaseOrdersForCloud = (purchaseOrders: PurchaseOrder[], products: Product[]): PurchaseOrder[] =>
   (purchaseOrders || []).map(po => sanitizeSinglePOForCloud(po, products));
 
+const sanitizeStockForCloud = (stockList: Stock[], products: Product[]): Stock[] => {
+  const prodNameMap = new Map((products || []).map(p => [String(p.product_id || '').toLowerCase().trim(), p.name]));
+  return (stockList || [])
+    .filter(s => Number(s.quantity) !== 0)
+    .map(s => {
+      const cleanPid = String(s.product_id || '').toLowerCase().trim();
+      const resolvedName = (s.name || (cleanPid ? prodNameMap.get(cleanPid) : '') || s.product_id || '').trim();
+      return {
+        ...s,
+        name: resolvedName,
+        quantity: Number(s.quantity) || 0,
+        location: (s.location || '').trim() || '倉庫',
+        floor: (s.floor || '').trim() || '1F',
+        area: (s.area || '').trim() || 'A區',
+        expiry_date: s.expiry_date || '',
+        specification: s.specification || ''
+      };
+    });
+};
+
+const sanitizeTransactionsForCloud = (transactions: Transaction[], products: Product[]): Transaction[] => {
+  const prodCostMap = new Map((products || []).map(p => [p.product_id, Number(p.cost_price) || 0]));
+  const prodNameMap = new Map((products || []).map(p => [String(p.product_id || '').toLowerCase().trim(), p.name]));
+  return (transactions || []).map(t => {
+    let cp = Number(t.cost_price);
+    if (isNaN(cp) || cp === 0) {
+      cp = (t.product_id && prodCostMap.has(t.product_id)) ? (prodCostMap.get(t.product_id) || 0) : 0;
+    }
+    const cleanPid = String(t.product_id || '').toLowerCase().trim();
+    const resolvedName = (t.name || t.product_name || (cleanPid ? prodNameMap.get(cleanPid) : '') || t.product_id || '').trim();
+    return {
+      ...t,
+      name: resolvedName,
+      product_name: resolvedName,
+      date: formatConsistentTxDate(t.date),
+      cost_price: cp,
+      price: Number(t.price) || 0,
+      quantity: Number(t.quantity) || 0
+    };
+  });
+};
+
 const isRemotePOStaleComparedToLocal = (localPO: PurchaseOrder, remotePO: any): boolean => {
   if (!localPO || !remotePO) return false;
   const norm = (v: any) => String(v ?? '').trim();
@@ -1259,9 +1301,27 @@ export const findMatchingStockIndex = (stockList: Stock[], tx: Transaction, prod
     if (idx !== -1) return idx;
   }
 
-  // 2. Exact match: product_id + location + floor + area + spec (case-insensitive for product_id)
+  // 2. Exact match: product_id + location + floor + area + spec (+ expiry priority)
+  const targetExpiry = normalizeDateToYMD(tx.expiry_date) || String(tx.expiry_date || '').trim();
+  const isExpiryMatch = (sExpiry?: string) => {
+    const cleanS = normalizeDateToYMD(sExpiry) || String(sExpiry || '').trim();
+    return cleanS === targetExpiry;
+  };
+
   if (cleanTargetPid) {
     if (targetLoc) {
+      if (targetExpiry) {
+        const exactWithExpIdx = stockList.findIndex(s =>
+          (s.product_id || '').trim().toLowerCase() === cleanTargetPid &&
+          (s.location || '').trim() === targetLoc &&
+          (s.floor || '').trim() === targetFloor &&
+          (s.area || '').trim() === targetArea &&
+          isSpecificationMatch(s.specification, targetSpec) &&
+          isExpiryMatch(s.expiry_date)
+        );
+        if (exactWithExpIdx !== -1) return exactWithExpIdx;
+      }
+
       const exactIdx = stockList.findIndex(s =>
         (s.product_id || '').trim().toLowerCase() === cleanTargetPid &&
         (s.location || '').trim() === targetLoc &&
@@ -1280,8 +1340,17 @@ export const findMatchingStockIndex = (stockList: Stock[], tx: Transaction, prod
       if (locSpecIdx !== -1) return locSpecIdx;
     }
 
-    // 3. Match by product_id + spec (any location)
+    // 3. Match by product_id + spec (any location, prioritize expiry if provided)
     if (targetSpec) {
+      if (targetExpiry) {
+        const specExpIdx = stockList.findIndex(s =>
+          (s.product_id || '').trim().toLowerCase() === cleanTargetPid &&
+          isSpecificationMatch(s.specification, targetSpec) &&
+          isExpiryMatch(s.expiry_date)
+        );
+        if (specExpIdx !== -1) return specExpIdx;
+      }
+
       const specMatchIdx = stockList.findIndex(s =>
         (s.product_id || '').trim().toLowerCase() === cleanTargetPid &&
         isSpecificationMatch(s.specification, targetSpec)
@@ -1291,6 +1360,14 @@ export const findMatchingStockIndex = (stockList: Stock[], tx: Transaction, prod
 
     // 4. If targetSpec is blank/empty/generic, prefer empty specification or any existing stock row of this product
     if (!targetSpec) {
+      if (targetExpiry) {
+        const expMatchIdx = stockList.findIndex(s =>
+          (s.product_id || '').trim().toLowerCase() === cleanTargetPid &&
+          isExpiryMatch(s.expiry_date)
+        );
+        if (expMatchIdx !== -1) return expMatchIdx;
+      }
+
       const emptySpecIdx = stockList.findIndex(s =>
         (s.product_id || '').trim().toLowerCase() === cleanTargetPid &&
         !String(s.specification || '').trim()
@@ -1381,6 +1458,9 @@ export const revertTransactionStockEffect = async (
     // 盤點調整被刪除：反向抵銷 delta
     const adj = formatAdjustQuantity(tx);
     const delta = adj.delta; // e.g. +2 or -3
+    if (delta === 0) {
+      return updatedStock;
+    }
     const idx = findMatchingStockIndex(updatedStock, tx, productsList);
     if (idx !== -1) {
       const newQty = Number(updatedStock[idx].quantity || 0) - delta;
@@ -1403,14 +1483,16 @@ export const revertTransactionStockEffect = async (
       let resolvedSpec = (tx.specification || '').trim();
 
       const matchedProd = productsList ? (
-        (resolvedPid ? productsList.find(p => p.product_id === resolvedPid) : null) ||
-        (resolvedName ? productsList.find(p => p.name === resolvedName || p.product_id === resolvedName) : null)
+        (resolvedPid ? productsList.find(p => p.product_id === resolvedPid || p.product_id.toLowerCase() === resolvedPid.toLowerCase()) : null) ||
+        (resolvedName ? productsList.find(p => p.name === resolvedName || p.name.toLowerCase() === resolvedName.toLowerCase() || p.product_id === resolvedName) : null)
       ) : null;
 
       if (matchedProd) {
-        if (!resolvedPid) resolvedPid = matchedProd.product_id;
-        if (!resolvedName) resolvedName = matchedProd.name;
-        if (!resolvedSpec && matchedProd.specification) resolvedSpec = matchedProd.specification;
+        resolvedPid = matchedProd.product_id;
+        resolvedName = matchedProd.name;
+        if (!resolvedSpec && matchedProd.specification) {
+          resolvedSpec = resolveStandardProductSpecification(resolvedSpec, resolvedPid, productsList, currentStock);
+        }
       }
 
       const newS: Stock = {
@@ -1530,27 +1612,41 @@ export const applyTransactionStockEffect = async (
     }
   } else if (isAdjustType(newTx.type)) {
     const idx = findMatchingStockIndex(updatedStock, newTx, productsList);
+    const targetAdjustQty = Math.max(0, Number(newTx.quantity) || 0);
     if (idx !== -1) {
-      updatedStock[idx] = {
-        ...updatedStock[idx],
-        quantity: qty,
-        last_update: new Date().toISOString()
-      };
-      await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
-    } else {
+      if (targetAdjustQty <= 0) {
+        const removedStockId = updatedStock[idx].stock_id;
+        updatedStock.splice(idx, 1);
+        await dbStock.removeItem(removedStockId);
+      } else {
+        updatedStock[idx] = {
+          ...updatedStock[idx],
+          quantity: targetAdjustQty,
+          location: (newTx.location || '').trim() || updatedStock[idx].location,
+          floor: (newTx.floor || '').trim() || updatedStock[idx].floor,
+          area: (newTx.area || '').trim() || updatedStock[idx].area,
+          expiry_date: newTx.expiry_date !== undefined ? (newTx.expiry_date || '') : (updatedStock[idx].expiry_date || ''),
+          specification: newTx.specification !== undefined ? (newTx.specification || '') : (updatedStock[idx].specification || ''),
+          last_update: new Date().toISOString()
+        };
+        await dbStock.setItem(updatedStock[idx].stock_id, updatedStock[idx]);
+      }
+    } else if (targetAdjustQty > 0) {
       let resolvedPid = (newTx.product_id || '').trim();
       let resolvedName = (newTx.product_name || (newTx as any).name || '').trim();
       let resolvedSpec = (newTx.specification || '').trim();
 
       const matchedProd = productsList ? (
-        (resolvedPid ? productsList.find(p => p.product_id === resolvedPid) : null) ||
-        (resolvedName ? productsList.find(p => p.name === resolvedName || p.product_id === resolvedName) : null)
+        (resolvedPid ? productsList.find(p => p.product_id === resolvedPid || p.product_id.toLowerCase() === resolvedPid.toLowerCase()) : null) ||
+        (resolvedName ? productsList.find(p => p.name === resolvedName || p.name.toLowerCase() === resolvedName.toLowerCase() || p.product_id === resolvedName) : null)
       ) : null;
 
       if (matchedProd) {
-        if (!resolvedPid) resolvedPid = matchedProd.product_id;
-        if (!resolvedName) resolvedName = matchedProd.name;
-        if (!resolvedSpec && matchedProd.specification) resolvedSpec = matchedProd.specification;
+        resolvedPid = matchedProd.product_id;
+        resolvedName = matchedProd.name;
+        if (!resolvedSpec && matchedProd.specification) {
+          resolvedSpec = resolveStandardProductSpecification(resolvedSpec, resolvedPid, productsList, currentStock);
+        }
       }
 
       const newS: Stock = {
@@ -1560,7 +1656,7 @@ export const applyTransactionStockEffect = async (
         location: (newTx.location || '').trim() || '倉庫',
         floor: (newTx.floor || '').trim() || '1F',
         area: (newTx.area || '').trim() || 'A區',
-        quantity: qty,
+        quantity: targetAdjustQty,
         expiry_date: newTx.expiry_date || '',
         specification: resolvedSpec,
         last_update: new Date().toISOString()
@@ -1978,7 +2074,13 @@ export const useStore = create<AppState>((set, get) => ({
         const chunk = sKeys.slice(i, i + batchP);
         const items = await Promise.all(chunk.map(k => dbStock.getItem<Stock>(k)));
         for (const item of items) {
-          if (item) sList.push(item);
+          if (item) {
+            if (Number(item.quantity) === 0) {
+              await dbStock.removeItem(item.stock_id);
+            } else {
+              sList.push(item);
+            }
+          }
         }
       }
 
@@ -2147,6 +2249,7 @@ export const useStore = create<AppState>((set, get) => ({
             floor: updatedPayload.floor,
             area: updatedPayload.area,
             specification: updatedPayload.specification || '',
+            expiry_date: updatedPayload.expiry_date || '',
             cost_price: Number(updatedPayload.cost_price) || 0,
             price: Number(updatedPayload.price) || 0,
             vendor_id: updatedPayload.vendor_id || '',
@@ -2373,6 +2476,7 @@ export const useStore = create<AppState>((set, get) => ({
             floor: updatedPayload.floor,
             area: updatedPayload.area,
             specification: updatedPayload.specification || '',
+            expiry_date: updatedPayload.expiry_date || '',
             cost_price: updatedPayload.cost_price !== undefined ? Number(updatedPayload.cost_price) : ((product?.cost_price ? Number(product.cost_price) * Number(updatedPayload.quantity) : 0)),
             price: updatedPayload.price !== undefined ? Number(updatedPayload.price) : (product?.cost_price || 0),
             vendor_id: product?.vendor_id || '',
@@ -2397,33 +2501,80 @@ export const useStore = create<AppState>((set, get) => ({
         set({ stock: updatedStock, transactions: updatedTx });
     } else if (action === 'adjustStock') {
         const { stock, transactions } = get();
-        const existingIdx = stock.findIndex(s => s.stock_id === updatedPayload.stock_id);
+        const targetLoc = (updatedPayload.location || '').trim() || '倉庫';
+        const targetFloor = (updatedPayload.floor || '').trim() || '1F';
+        const targetArea = (updatedPayload.area || '').trim() || 'A區';
+        const targetExpiry = updatedPayload.expiry_date || '';
+        const targetSpec = updatedPayload.specification || '';
+        const targetQty = Math.max(0, Number(updatedPayload.quantity) || 0);
+
+        let existingIdx = updatedPayload.stock_id
+          ? stock.findIndex(s => s.stock_id === updatedPayload.stock_id)
+          : -1;
+        if (existingIdx === -1 && updatedPayload.product_id) {
+          existingIdx = stock.findIndex(s =>
+            String(s.product_id || '').trim().toLowerCase() === cleanPid &&
+            (s.location || '').trim() === targetLoc &&
+            (s.floor || '').trim() === targetFloor &&
+            (s.area || '').trim() === targetArea &&
+            (s.expiry_date || '') === targetExpiry &&
+            (s.specification || '') === targetSpec
+          );
+        }
 
         let updatedStock = [...stock];
-        let originalStockId = updatedPayload.stock_id;
+        let originalStockId = updatedPayload.stock_id || '';
         if (existingIdx !== -1) {
             originalStockId = updatedStock[existingIdx].stock_id;
-            updatedStock[existingIdx] = {
-                ...updatedStock[existingIdx],
-                quantity: Number(updatedPayload.quantity),
-                last_update: new Date().toISOString()
-            };
-            await dbStock.setItem(updatedStock[existingIdx].stock_id, updatedStock[existingIdx]);
-        } else {
+            if (targetQty <= 0) {
+                // Local state aligns with cloud GAS: remove zeroed batch row
+                updatedStock.splice(existingIdx, 1);
+                await dbStock.removeItem(originalStockId);
+            } else {
+                updatedStock[existingIdx] = {
+                    ...updatedStock[existingIdx],
+                    name: resolvedName || updatedStock[existingIdx].name,
+                    location: updatedPayload.location !== undefined ? targetLoc : updatedStock[existingIdx].location,
+                    floor: updatedPayload.floor !== undefined ? targetFloor : updatedStock[existingIdx].floor,
+                    area: updatedPayload.area !== undefined ? targetArea : updatedStock[existingIdx].area,
+                    expiry_date: updatedPayload.expiry_date !== undefined ? targetExpiry : (updatedStock[existingIdx].expiry_date || ''),
+                    specification: updatedPayload.specification !== undefined ? targetSpec : (updatedStock[existingIdx].specification || ''),
+                    quantity: targetQty,
+                    last_update: new Date().toISOString()
+                };
+                await dbStock.setItem(originalStockId, updatedStock[existingIdx]);
+            }
+        } else if (targetQty > 0) {
+            const generatedStockId = originalStockId || `STK_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
             const newS: Stock = {
-                stock_id: updatedPayload.stock_id || `STK_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,
+                stock_id: generatedStockId,
                 product_id: updatedPayload.product_id,
-                location: updatedPayload.location || '倉庫',
-                floor: updatedPayload.floor || '1F',
-                area: updatedPayload.area || 'A區',
-                quantity: Number(updatedPayload.quantity),
-                specification: updatedPayload.specification || '',
+                name: resolvedName,
+                location: targetLoc,
+                floor: targetFloor,
+                area: targetArea,
+                quantity: targetQty,
+                expiry_date: targetExpiry,
+                specification: targetSpec,
                 last_update: new Date().toISOString()
             };
             originalStockId = newS.stock_id;
             updatedStock.push(newS);
             await dbStock.setItem(newS.stock_id, newS);
         }
+
+        // Ensure queued payload carries the exact stock_id, location, expiry, spec & resolved name
+        item.payload = {
+          ...item.payload,
+          stock_id: originalStockId,
+          location: targetLoc,
+          floor: targetFloor,
+          area: targetArea,
+          expiry_date: targetExpiry,
+          specification: targetSpec,
+          quantity: targetQty
+        };
+        await dbSyncQueue.setItem(item.id, item);
 
         const newTx: Transaction = {
             id: targetUniqueId,
@@ -2435,13 +2586,14 @@ export const useStore = create<AppState>((set, get) => ({
             product_name: resolvedName,
             name: resolvedName,
             type: updatedPayload.type || 'adjust',
-            quantity: Number(updatedPayload.quantity),
+            quantity: targetQty,
             delta: updatedPayload.delta,
-            final_quantity: updatedPayload.final_quantity,
-            location: updatedPayload.location,
-            floor: updatedPayload.floor,
-            area: updatedPayload.area,
-            specification: updatedPayload.specification || '',
+            final_quantity: updatedPayload.final_quantity ?? targetQty,
+            location: targetLoc,
+            floor: targetFloor,
+            area: targetArea,
+            specification: targetSpec,
+            expiry_date: targetExpiry,
             cost_price: product?.cost_price || 0,
             price: Number(updatedPayload.price) || 0,
             vendor_id: product?.vendor_id || '',
@@ -2658,6 +2810,43 @@ export const useStore = create<AppState>((set, get) => ({
           continue;
         }
 
+        // Cloud full-sheet overwrite repair tasks (queued when direct cloud overwrite fails)
+        if (item.action === 'overwriteTransactions' || item.action === 'overwriteStock' || item.action === 'overwritePurchaseOrders') {
+          let bodyPayload: any;
+          if (item.action === 'overwriteTransactions') {
+            bodyPayload = sanitizeTransactionsForCloud(get().transactions, get().products);
+          } else if (item.action === 'overwriteStock') {
+            bodyPayload = sanitizeStockForCloud(get().stock, get().products);
+          } else {
+            bodyPayload = sanitizePurchaseOrdersForCloud(get().purchaseOrders, get().products);
+          }
+
+          const ovRes = await fetch(buildGasActionUrl(gasApiUrl, item.action), {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(bodyPayload)
+          });
+
+          if (ovRes.ok) {
+            const ovText = await ovRes.text();
+            let ovJson: any = null;
+            try {
+              ovJson = JSON.parse(ovText);
+            } catch {}
+            if (ovJson && ovJson.success === true) {
+              await dbSyncQueue.removeItem(item.id);
+              set((state) => ({ syncQueue: state.syncQueue.filter(q => q.id !== item.id) }));
+            } else {
+              set({ error: `同步失敗： ${item.action} (${ovJson?.error || '伺服器未回傳成功確認'})` });
+              hasError = true;
+            }
+          } else {
+            set({ error: `同步失敗： ${item.action} (HTTP ${ovRes.status})` });
+            hasError = true;
+          }
+          continue;
+        }
+
         // Standard actions (stockIn, editProduct, etc.)
         const res = await fetch(buildGasActionUrl(gasApiUrl, item.action), {
           method: 'POST',
@@ -2842,8 +3031,9 @@ export const useStore = create<AppState>((set, get) => ({
       }
 
       // Stock
-      const rS = await fetch(`${cleanUrl}?action=getStock`);
-      if (rS.ok) {
+      const hasPendingOverwriteStock = (get().syncQueue || []).some(q => q.action === 'overwriteStock');
+      const rS = hasPendingOverwriteStock ? null : await fetch(`${cleanUrl}?action=getStock`);
+      if (rS && rS.ok) {
         const dS = await rS.json();
         let validS: Stock[] = (dS || []).map((item: any) => normalizeKeys(item))
           .filter((s: any) => s && (s.stock_id || s.product_id))
@@ -2855,10 +3045,10 @@ export const useStore = create<AppState>((set, get) => ({
               product_id: s.product_id ? String(s.product_id).trim() : '',
               quantity: Number(s.quantity) || 0
             };
-          });
+          })
+          .filter((s: Stock) => Number(s.quantity) !== 0);
 
-        // Safeguard: Protect against remote overwriting local deductions
-        // If there are pending stockOut actions in syncQueue, apply them to validS
+        // Safeguard: Protect against remote overwriting local deductions or pending adjustments
         const currentQueue = get().syncQueue || [];
         const pendingStockOuts = currentQueue.filter(q => q.action === 'stockOut' && q.payload);
 
@@ -2896,6 +3086,44 @@ export const useStore = create<AppState>((set, get) => ({
                 }
               }
             }
+          }
+        }
+
+        const pendingAdjusts = currentQueue.filter(q => q.action === 'adjustStock' && q.payload);
+        for (const item of pendingAdjusts) {
+          const p = item.payload;
+          const targetQty = Math.max(0, Number(p.quantity) || 0);
+          const sId = p.stock_id ? String(p.stock_id).trim() : '';
+          const pId = p.product_id ? String(p.product_id).trim().toLowerCase() : '';
+          const idx = sId
+            ? validS.findIndex(s => s.stock_id === sId)
+            : validS.findIndex(s =>
+                String(s.product_id || '').trim().toLowerCase() === pId &&
+                (s.location || '').trim() === ((p.location || '').trim() || '倉庫') &&
+                (s.floor || '').trim() === ((p.floor || '').trim() || '1F') &&
+                (s.area || '').trim() === ((p.area || '').trim() || 'A區') &&
+                (s.expiry_date || '') === (p.expiry_date || '') &&
+                (s.specification || '') === (p.specification || '')
+              );
+          if (idx !== -1) {
+            if (targetQty <= 0) {
+              validS.splice(idx, 1);
+            } else {
+              validS[idx] = { ...validS[idx], quantity: targetQty };
+            }
+          } else if (targetQty > 0 && pId) {
+            validS.push({
+              stock_id: sId || `STK_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+              product_id: p.product_id,
+              name: p.name || p.product_name || '',
+              location: p.location || '倉庫',
+              floor: p.floor || '1F',
+              area: p.area || 'A區',
+              quantity: targetQty,
+              expiry_date: p.expiry_date || '',
+              specification: p.specification || '',
+              last_update: new Date().toISOString()
+            });
           }
         }
 
@@ -2937,8 +3165,9 @@ export const useStore = create<AppState>((set, get) => ({
 
       // Transactions
       let validT: any[] = [];
-      const rT = await fetch(`${cleanUrl}?action=getTransactions`);
-      if (rT.ok) {
+      const hasPendingOverwriteTx = (get().syncQueue || []).some(q => q.action === 'overwriteTransactions');
+      const rT = hasPendingOverwriteTx ? null : await fetch(`${cleanUrl}?action=getTransactions`);
+      if (rT && rT.ok) {
         const dT = await rT.json();
         const currentProds = get().products;
         const prodCostMap = new Map<string, number>();
@@ -3311,6 +3540,10 @@ export const useStore = create<AppState>((set, get) => ({
       showToast("ℹ️ 尚未設定 Google Apps Script 網址");
       return false;
     }
+    if ((get().syncQueue || []).some(q => q.action === 'overwriteStock')) {
+      showToast('⚠️ 尚有未同步的庫存覆寫修復任務，請先點擊同步完成後再重新整理');
+      return false;
+    }
     set({ isLoading: true });
     try {
       const cleanUrl = gasApiUrl.trim();
@@ -3327,7 +3560,8 @@ export const useStore = create<AppState>((set, get) => ({
             product_id: s.product_id ? String(s.product_id).trim() : '',
             quantity: Number(s.quantity) || 0
           };
-        });
+        })
+        .filter((s: Stock) => Number(s.quantity) !== 0);
 
       const currentQueue = get().syncQueue || [];
       const pendingStockOuts = currentQueue.filter(q => q.action === 'stockOut' && q.payload);
@@ -3365,6 +3599,44 @@ export const useStore = create<AppState>((set, get) => ({
               }
             }
           }
+        }
+      }
+
+      const pendingAdjusts = currentQueue.filter(q => q.action === 'adjustStock' && q.payload);
+      for (const item of pendingAdjusts) {
+        const p = item.payload;
+        const targetQty = Math.max(0, Number(p.quantity) || 0);
+        const sId = p.stock_id ? String(p.stock_id).trim() : '';
+        const pId = p.product_id ? String(p.product_id).trim().toLowerCase() : '';
+        const idx = sId
+          ? validS.findIndex(s => s.stock_id === sId)
+          : validS.findIndex(s =>
+              String(s.product_id || '').trim().toLowerCase() === pId &&
+              (s.location || '').trim() === ((p.location || '').trim() || '倉庫') &&
+              (s.floor || '').trim() === ((p.floor || '').trim() || '1F') &&
+              (s.area || '').trim() === ((p.area || '').trim() || 'A區') &&
+              (s.expiry_date || '') === (p.expiry_date || '') &&
+              (s.specification || '') === (p.specification || '')
+            );
+        if (idx !== -1) {
+          if (targetQty <= 0) {
+            validS.splice(idx, 1);
+          } else {
+            validS[idx] = { ...validS[idx], quantity: targetQty };
+          }
+        } else if (targetQty > 0 && pId) {
+          validS.push({
+            stock_id: sId || `STK_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            product_id: p.product_id,
+            name: p.name || p.product_name || '',
+            location: p.location || '倉庫',
+            floor: p.floor || '1F',
+            area: p.area || 'A區',
+            quantity: targetQty,
+            expiry_date: p.expiry_date || '',
+            specification: p.specification || '',
+            last_update: new Date().toISOString()
+          });
         }
       }
 
@@ -3428,6 +3700,10 @@ export const useStore = create<AppState>((set, get) => ({
     const { gasApiUrl, showToast, products } = get();
     if (!gasApiUrl || !gasApiUrl.trim().startsWith('http')) {
       showToast("ℹ️ 尚未設定 Google Apps Script 網址");
+      return false;
+    }
+    if ((get().syncQueue || []).some(q => q.action === 'overwriteTransactions')) {
+      showToast('⚠️ 尚有未同步的交易紀錄覆寫修復任務，請先點擊同步完成後再重新整理');
       return false;
     }
     set({ isLoading: true });
@@ -4008,19 +4284,24 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   overwriteCloudStock: async () => {
-    const { gasApiUrl, stock } = get();
+    const { gasApiUrl, stock, products } = get();
     if (!gasApiUrl) return false;
     set({ isLoading: true, error: null });
     try {
-      const res = await fetch(`${gasApiUrl}?action=overwriteStock`, {
+      const sanitizedStock = sanitizeStockForCloud(stock, products);
+      const res = await fetch(buildGasActionUrl(gasApiUrl, 'overwriteStock'), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(stock)
+        body: JSON.stringify(sanitizedStock)
       });
       if (res.ok) {
-        const d = await res.json();
-        if (d.success) {
-          get().showToast(`✅ 庫存工作表已同步修復！共覆載了 ${stock.length} 筆庫存紀錄。`);
+        const text = await res.text();
+        let d: any = null;
+        try {
+          d = JSON.parse(text);
+        } catch {}
+        if (d && d.success === true) {
+          get().showToast(`✅ 庫存工作表已同步修復！共覆載了 ${sanitizedStock.length} 筆庫存紀錄。`);
           return true;
         }
       }
@@ -4038,38 +4319,20 @@ export const useStore = create<AppState>((set, get) => ({
     if (!gasApiUrl) return false;
     set({ isLoading: true, error: null });
     try {
-      const prodCostMap = new Map(products.map(p => [p.product_id, Number(p.cost_price) || 0]));
-      const prodNameMap = new Map(products.map(p => [String(p.product_id || '').toLowerCase().trim(), p.name]));
-      const sanitized = transactions.map(t => {
-        let cp = Number(t.cost_price);
-        if (isNaN(cp) || cp === 0) {
-          if (t.product_id && prodCostMap.has(t.product_id)) {
-            cp = prodCostMap.get(t.product_id) || 0;
-          } else {
-            cp = 0;
-          }
-        }
-        const cleanPid = String(t.product_id || '').toLowerCase().trim();
-        const resolvedName = (t.name || t.product_name || (cleanPid ? prodNameMap.get(cleanPid) : '') || t.product_id || '').trim();
-        return {
-          ...t,
-          name: resolvedName,
-          product_name: resolvedName,
-          date: formatConsistentTxDate(t.date),
-          cost_price: cp,
-          price: Number(t.price) || 0,
-          quantity: Number(t.quantity) || 0
-        };
-      });
+      const sanitized = sanitizeTransactionsForCloud(transactions, products);
 
-      const res = await fetch(`${gasApiUrl}?action=overwriteTransactions`, {
+      const res = await fetch(buildGasActionUrl(gasApiUrl, 'overwriteTransactions'), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(sanitized)
       });
       if (res.ok) {
-        const d = await res.json();
-        if (d.success) {
+        const text = await res.text();
+        let d: any = null;
+        try {
+          d = JSON.parse(text);
+        } catch {}
+        if (d && d.success === true) {
           get().showToast(`✅ 進出貨紀錄工作表已補齊！共覆載了 ${transactions.length} 筆紀錄。`);
           return true;
         }
@@ -4084,31 +4347,66 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   deleteTransaction: async (targetId: string) => {
-    const { stock, transactions, products, syncQueue } = get();
-    // Match by item unique ID first, or fall back to transaction_id
+    const { stock, transactions, products, syncQueue, purchaseOrders } = get();
     const tx = transactions.find(t => t.id === targetId) || transactions.find(t => t.transaction_id === targetId);
     if (!tx) return;
 
-    // Purge any pending in-flight stockOut or transaction sync items for this deleted record
-    const targetTxId = tx.transaction_id;
-    const targetRowId = tx.id;
-    const targetOrderId = tx.online_order_id;
-    const cleanQueue = syncQueue.filter(q => {
-      const p = q.payload;
-      if (!p) return true;
-      if (targetRowId && p.id === targetRowId) return false;
-      if (targetTxId && (p.transaction_id === targetTxId || p.id === targetTxId)) return false;
-      if (targetOrderId && (p.online_order_id === targetOrderId || p.order_id === targetOrderId)) return false;
-      return true;
-    });
+    const targetIdSet = new Set<string>();
+    if (tx.id) targetIdSet.add(String(tx.id));
+    if (tx.transaction_id) targetIdSet.add(String(tx.transaction_id));
+    if (tx.online_order_id) targetIdSet.add(String(tx.online_order_id));
 
-    if (cleanQueue.length !== syncQueue.length) {
-      set({ syncQueue: cleanQueue });
-      for (const q of syncQueue) {
-        if (!cleanQueue.includes(q)) {
-          await dbSyncQueue.removeItem(q.id);
-        }
+    // Purge or split pending queue items (including nested batchStockIn / batchShipment items)
+    const nextQueue: SyncItem[] = [];
+    for (const q of syncQueue) {
+      const p = q.payload;
+      if (!p) {
+        nextQueue.push(q);
+        continue;
       }
+
+      if ((q.action === 'batchStockIn' || q.action === 'batchShipment') && Array.isArray(p.items)) {
+        const remainingItems = p.items.filter((itm: any) => {
+          if (itm.id && targetIdSet.has(String(itm.id))) return false;
+          if (itm.transaction_id && targetIdSet.has(String(itm.transaction_id))) return false;
+          if (
+            String(itm.product_id || '').trim() === String(tx.product_id || '').trim() &&
+            String(itm.specification || '').trim() === String(tx.specification || '').trim() &&
+            Number(itm.quantity || 0) === Number(tx.quantity || 0) &&
+            (p.batch_tx_id === tx.transaction_id || p.batch_tx_id === tx.batch_tx_id || p.po_id === tx.po_id || p.order_id === tx.online_order_id)
+          ) {
+            return false;
+          }
+          return true;
+        });
+
+        if (remainingItems.length === 0) {
+          await dbSyncQueue.removeItem(q.id);
+          continue;
+        } else if (remainingItems.length !== p.items.length) {
+          const updatedItem: SyncItem = { ...q, payload: { ...p, items: remainingItems } };
+          await dbSyncQueue.setItem(q.id, updatedItem);
+          nextQueue.push(updatedItem);
+          continue;
+        }
+        nextQueue.push(q);
+        continue;
+      }
+
+      if (
+        (p.id && targetIdSet.has(String(p.id))) ||
+        (p.transaction_id && targetIdSet.has(String(p.transaction_id))) ||
+        (p.online_order_id && targetIdSet.has(String(p.online_order_id))) ||
+        (p.order_id && targetIdSet.has(String(p.order_id)))
+      ) {
+        await dbSyncQueue.removeItem(q.id);
+        continue;
+      }
+      nextQueue.push(q);
+    }
+
+    if (nextQueue.length !== syncQueue.length || nextQueue.some((nq, idx) => nq !== syncQueue[idx])) {
+      set({ syncQueue: nextQueue });
     }
 
     const updatedStock = await revertTransactionStockEffect(stock, tx, products);
@@ -4131,25 +4429,137 @@ export const useStore = create<AppState>((set, get) => ({
     }
 
     set({ stock: updatedStock, transactions: updatedTx });
-    get().showToast('✅ 已成功刪除該品項交易紀錄，並已還原對應庫存！');
 
-    // Sync to cloud spreadsheet if configured
+    // Reconcile linked Purchase Orders if deleted transaction was a stock_in linked to a PO
+    let updatedPoCount = 0;
+    const posToSync: PurchaseOrder[] = [];
+    if (isStockInType(tx.type) && purchaseOrders.length > 0) {
+      const deletedQty = Math.abs(Number(tx.quantity) || 0);
+      const nextPOs = purchaseOrders.map(po => {
+        const isLinked =
+          tx.po_id === po.po_id ||
+          (tx.transaction_id && (tx.transaction_id === po.po_id || tx.transaction_id.startsWith(po.po_id))) ||
+          (tx.batch_id && tx.batch_id === po.po_id) ||
+          (tx.note && (tx.note.includes(`[採購單: ${po.po_id}]`) || tx.note.includes(`採購單號: ${po.po_id}`) || tx.note.includes(po.po_id)));
+
+        if (!isLinked || deletedQty <= 0) return po;
+
+        let remainingToSubtract = deletedQty;
+        const nextItems = (po.items || []).map(it => {
+          if (remainingToSubtract <= 0) return it;
+          const matchPid = it.product_id === tx.product_id ||
+            (Boolean(tx.product_name) && Boolean(it.name || it.product_name) && (tx.product_name || '').trim() === (it.name || it.product_name || '').trim());
+          const matchSpec = isSpecificationMatch(it.specification, tx.specification);
+          if (matchPid && matchSpec) {
+            const curRec = Number(it.received_quantity || 0);
+            const sub = Math.min(curRec, remainingToSubtract);
+            remainingToSubtract -= sub;
+            return { ...it, received_quantity: Math.max(0, curRec - sub) };
+          }
+          return it;
+        });
+
+        // Fallback if spec didn't match uniquely
+        if (remainingToSubtract === deletedQty) {
+          for (let i = 0; i < nextItems.length && remainingToSubtract > 0; i++) {
+            const it = nextItems[i];
+            const matchPid = it.product_id === tx.product_id ||
+              (Boolean(tx.product_name) && Boolean(it.name || it.product_name) && (tx.product_name || '').trim() === (it.name || it.product_name || '').trim());
+            if (matchPid) {
+              const curRec = Number(it.received_quantity || 0);
+              const sub = Math.min(curRec, remainingToSubtract);
+              remainingToSubtract -= sub;
+              nextItems[i] = { ...it, received_quantity: Math.max(0, curRec - sub) };
+            }
+          }
+        }
+
+        if (remainingToSubtract === deletedQty) return po;
+
+        const totalOrd = nextItems.reduce((s, it) => s + Number(it.ordered_quantity || 0), 0);
+        const totalRec = nextItems.reduce((s, it) => s + Number(it.received_quantity || 0), 0);
+        let nextStatus = po.status;
+        if (po.status !== 'cancelled') {
+          if (totalRec <= 0) nextStatus = 'pending';
+          else if (totalRec < totalOrd) nextStatus = 'partial';
+          else nextStatus = 'completed';
+        }
+
+        const updatedPo: PurchaseOrder = {
+          ...po,
+          items: nextItems,
+          status: nextStatus,
+          updated_at: new Date().toISOString()
+        };
+        updatedPoCount++;
+        posToSync.push(updatedPo);
+        return updatedPo;
+      });
+
+      if (updatedPoCount > 0) {
+        for (const uPo of posToSync) {
+          recentlyEditedPOs.set(uPo.po_id, { po: uPo, expiresAt: Date.now() + PO_LOCAL_EDIT_PROTECTION_MS });
+          await dbPurchaseOrders.setItem(uPo.po_id, uPo);
+        }
+        set({ purchaseOrders: nextPOs });
+      }
+    }
+
+    get().showToast(
+      updatedPoCount > 0
+        ? `✅ 已刪除交易紀錄、還原庫存並連動重算 ${updatedPoCount} 筆採購單進度！`
+        : '✅ 已成功刪除該品項交易紀錄，並已還原對應庫存！'
+    );
+
+    // Sync to cloud spreadsheet if configured, queueing durable retry tasks on failure
     if (get().gasApiUrl) {
+      let txCloudOk = false;
+      let stkCloudOk = false;
       try {
-        await get().overwriteCloudTransactions();
+        txCloudOk = await get().overwriteCloudTransactions();
       } catch (e) {
         console.error('overwriteCloudTransactions error:', e);
       }
       try {
-        await get().overwriteCloudStock();
+        stkCloudOk = await get().overwriteCloudStock();
       } catch (e) {
         console.error('overwriteCloudStock error:', e);
+      }
+
+      const retryItemsToAdd: SyncItem[] = [];
+      const curQ = get().syncQueue;
+      if (!txCloudOk && !curQ.some(q => q.action === 'overwriteTransactions')) {
+        retryItemsToAdd.push({
+          id: `RETRY_OV_TX_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          action: 'overwriteTransactions',
+          payload: {},
+          timestamp: new Date().toISOString()
+        });
+      }
+      if (!stkCloudOk && !curQ.some(q => q.action === 'overwriteStock')) {
+        retryItemsToAdd.push({
+          id: `RETRY_OV_STK_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          action: 'overwriteStock',
+          payload: {},
+          timestamp: new Date().toISOString()
+        });
+      }
+      for (const rItem of retryItemsToAdd) {
+        await dbSyncQueue.setItem(rItem.id, rItem);
+      }
+      if (retryItemsToAdd.length > 0) {
+        set(state => ({ syncQueue: [...state.syncQueue, ...retryItemsToAdd] }));
+        get().showToast('⚠️ 雲端帳本或庫存寫回失敗，已排入重試佇列（請勿於同步完成前清除佇列）');
+      }
+
+      for (const uPo of posToSync) {
+        await get().enqueueAction('editPurchaseOrder', uPo);
       }
     }
   },
 
   deleteTransactionGroup: async (groupIdOrIds: string | string[]) => {
-    const { stock, transactions, products, syncQueue } = get();
+    const { stock, transactions, products, syncQueue, purchaseOrders } = get();
     let groupTxs: Transaction[] = [];
 
     if (Array.isArray(groupIdOrIds)) {
@@ -4175,7 +4585,7 @@ export const useStore = create<AppState>((set, get) => ({
 
     if (groupTxs.length === 0) return;
 
-    // Purge pending syncQueue actions matching any of these transactions or orders
+    // Purge pending syncQueue actions (including nested batchStockIn / batchShipment items)
     const targetIdSet = new Set<string>();
     groupTxs.forEach(t => {
       if (t.id) targetIdSet.add(String(t.id));
@@ -4185,23 +4595,55 @@ export const useStore = create<AppState>((set, get) => ({
       if (t.batch_tx_id) targetIdSet.add(String(t.batch_tx_id));
     });
 
-    const cleanQueue = syncQueue.filter(q => {
+    const nextQueue: SyncItem[] = [];
+    for (const q of syncQueue) {
       const p = q.payload;
-      if (!p) return true;
-      if (p.id && targetIdSet.has(String(p.id))) return false;
-      if (p.transaction_id && targetIdSet.has(String(p.transaction_id))) return false;
-      if (p.online_order_id && targetIdSet.has(String(p.online_order_id))) return false;
-      if (p.order_id && targetIdSet.has(String(p.order_id))) return false;
-      return true;
-    });
-
-    if (cleanQueue.length !== syncQueue.length) {
-      set({ syncQueue: cleanQueue });
-      for (const q of syncQueue) {
-        if (!cleanQueue.includes(q)) {
-          await dbSyncQueue.removeItem(q.id);
-        }
+      if (!p) {
+        nextQueue.push(q);
+        continue;
       }
+
+      if ((q.action === 'batchStockIn' || q.action === 'batchShipment') && Array.isArray(p.items)) {
+        const batchMatched =
+          (p.batch_tx_id && targetIdSet.has(String(p.batch_tx_id))) ||
+          (p.po_id && targetIdSet.has(String(p.po_id))) ||
+          (p.order_id && targetIdSet.has(String(p.order_id)));
+        if (batchMatched) {
+          await dbSyncQueue.removeItem(q.id);
+          continue;
+        }
+        const remainingItems = p.items.filter((itm: any) => {
+          if (itm.id && targetIdSet.has(String(itm.id))) return false;
+          if (itm.transaction_id && targetIdSet.has(String(itm.transaction_id))) return false;
+          return true;
+        });
+        if (remainingItems.length === 0) {
+          await dbSyncQueue.removeItem(q.id);
+          continue;
+        } else if (remainingItems.length !== p.items.length) {
+          const updatedItem: SyncItem = { ...q, payload: { ...p, items: remainingItems } };
+          await dbSyncQueue.setItem(q.id, updatedItem);
+          nextQueue.push(updatedItem);
+          continue;
+        }
+        nextQueue.push(q);
+        continue;
+      }
+
+      if (
+        (p.id && targetIdSet.has(String(p.id))) ||
+        (p.transaction_id && targetIdSet.has(String(p.transaction_id))) ||
+        (p.online_order_id && targetIdSet.has(String(p.online_order_id))) ||
+        (p.order_id && targetIdSet.has(String(p.order_id)))
+      ) {
+        await dbSyncQueue.removeItem(q.id);
+        continue;
+      }
+      nextQueue.push(q);
+    }
+
+    if (nextQueue.length !== syncQueue.length || nextQueue.some((nq, idx) => nq !== syncQueue[idx])) {
+      set({ syncQueue: nextQueue });
     }
 
     let updatedStock = [...stock];
@@ -4224,18 +4666,132 @@ export const useStore = create<AppState>((set, get) => ({
     );
 
     set({ stock: updatedStock, transactions: updatedTx });
-    get().showToast('✅ 已成功刪除整批交易紀錄，並已還原對應庫存！');
+
+    // Reconcile any POs linked to deleted stock_in transactions
+    const stockInGroupTxs = groupTxs.filter(t => isStockInType(t.type) && Number(t.quantity) > 0);
+    const posToSync: PurchaseOrder[] = [];
+    if (stockInGroupTxs.length > 0 && purchaseOrders.length > 0) {
+      const nextPOs = purchaseOrders.map(po => {
+        const matchedTxs = stockInGroupTxs.filter(tx =>
+          tx.po_id === po.po_id ||
+          (tx.transaction_id && (tx.transaction_id === po.po_id || tx.transaction_id.startsWith(po.po_id))) ||
+          (tx.batch_id && tx.batch_id === po.po_id) ||
+          (tx.note && (tx.note.includes(`[採購單: ${po.po_id}]`) || tx.note.includes(`採購單號: ${po.po_id}`) || tx.note.includes(po.po_id)))
+        );
+        if (matchedTxs.length === 0) return po;
+
+        const nextItems = (po.items || []).map(it => ({ ...it }));
+        let anySubtracted = false;
+
+        for (const tx of matchedTxs) {
+          let remainingToSubtract = Math.abs(Number(tx.quantity) || 0);
+          for (let i = 0; i < nextItems.length && remainingToSubtract > 0; i++) {
+            const it = nextItems[i];
+            const matchPid = it.product_id === tx.product_id ||
+              (Boolean(tx.product_name) && Boolean(it.name || it.product_name) && (tx.product_name || '').trim() === (it.name || it.product_name || '').trim());
+            const matchSpec = isSpecificationMatch(it.specification, tx.specification);
+            if (matchPid && matchSpec) {
+              const curRec = Number(it.received_quantity || 0);
+              const sub = Math.min(curRec, remainingToSubtract);
+              if (sub > 0) anySubtracted = true;
+              remainingToSubtract -= sub;
+              nextItems[i] = { ...it, received_quantity: Math.max(0, curRec - sub) };
+            }
+          }
+          if (remainingToSubtract > 0) {
+            for (let i = 0; i < nextItems.length && remainingToSubtract > 0; i++) {
+              const it = nextItems[i];
+              const matchPid = it.product_id === tx.product_id ||
+                (Boolean(tx.product_name) && Boolean(it.name || it.product_name) && (tx.product_name || '').trim() === (it.name || it.product_name || '').trim());
+              if (matchPid) {
+                const curRec = Number(it.received_quantity || 0);
+                const sub = Math.min(curRec, remainingToSubtract);
+                if (sub > 0) anySubtracted = true;
+                remainingToSubtract -= sub;
+                nextItems[i] = { ...it, received_quantity: Math.max(0, curRec - sub) };
+              }
+            }
+          }
+        }
+
+        if (!anySubtracted) return po;
+
+        const totalOrd = nextItems.reduce((s, it) => s + Number(it.ordered_quantity || 0), 0);
+        const totalRec = nextItems.reduce((s, it) => s + Number(it.received_quantity || 0), 0);
+        let nextStatus = po.status;
+        if (po.status !== 'cancelled') {
+          if (totalRec <= 0) nextStatus = 'pending';
+          else if (totalRec < totalOrd) nextStatus = 'partial';
+          else nextStatus = 'completed';
+        }
+
+        const updatedPo: PurchaseOrder = {
+          ...po,
+          items: nextItems,
+          status: nextStatus,
+          updated_at: new Date().toISOString()
+        };
+        posToSync.push(updatedPo);
+        return updatedPo;
+      });
+
+      if (posToSync.length > 0) {
+        for (const uPo of posToSync) {
+          recentlyEditedPOs.set(uPo.po_id, { po: uPo, expiresAt: Date.now() + PO_LOCAL_EDIT_PROTECTION_MS });
+          await dbPurchaseOrders.setItem(uPo.po_id, uPo);
+        }
+        set({ purchaseOrders: nextPOs });
+      }
+    }
+
+    get().showToast(
+      posToSync.length > 0
+        ? `✅ 已刪除整批交易紀錄、還原庫存並連動重算 ${posToSync.length} 筆採購單！`
+        : '✅ 已成功刪除整批交易紀錄，並已還原對應庫存！'
+    );
 
     if (get().gasApiUrl) {
+      let txCloudOk = false;
+      let stkCloudOk = false;
       try {
-        await get().overwriteCloudTransactions();
+        txCloudOk = await get().overwriteCloudTransactions();
       } catch (e) {
         console.error('overwriteCloudTransactions error:', e);
       }
       try {
-        await get().overwriteCloudStock();
+        stkCloudOk = await get().overwriteCloudStock();
       } catch (e) {
         console.error('overwriteCloudStock error:', e);
+      }
+
+      const retryItemsToAdd: SyncItem[] = [];
+      const curQ = get().syncQueue;
+      if (!txCloudOk && !curQ.some(q => q.action === 'overwriteTransactions')) {
+        retryItemsToAdd.push({
+          id: `RETRY_OV_TX_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          action: 'overwriteTransactions',
+          payload: {},
+          timestamp: new Date().toISOString()
+        });
+      }
+      if (!stkCloudOk && !curQ.some(q => q.action === 'overwriteStock')) {
+        retryItemsToAdd.push({
+          id: `RETRY_OV_STK_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          action: 'overwriteStock',
+          payload: {},
+          timestamp: new Date().toISOString()
+        });
+      }
+      for (const rItem of retryItemsToAdd) {
+        await dbSyncQueue.setItem(rItem.id, rItem);
+      }
+      if (retryItemsToAdd.length > 0) {
+        set(state => ({ syncQueue: [...state.syncQueue, ...retryItemsToAdd] }));
+        get().showToast('⚠️ 雲端帳本或庫存寫回失敗，已排入重試佇列');
+      }
+
+      for (const uPo of posToSync) {
+        await get().enqueueAction('editPurchaseOrder', uPo);
       }
     }
   },
@@ -4253,6 +4809,20 @@ export const useStore = create<AppState>((set, get) => ({
 
     const newTx = { ...oldTx, ...cleanedFields } as Transaction;
 
+    // Keep delta, final_quantity and note consistent when editing an adjust transaction
+    if (isAdjustType(newTx.type)) {
+      const oldAdj = formatAdjustQuantity(oldTx);
+      const baseStockQty = oldAdj.finalQty - oldAdj.delta;
+      const newFinalQty = Math.max(0, Number(newTx.quantity) || 0);
+      const newDelta = newFinalQty - baseStockQty;
+      const deltaStr = newDelta >= 0 ? `+${newDelta}` : `${newDelta}`;
+      const strippedNote = String(newTx.note || '').replace(/^\[[+-]?\d+\s*=\s*\d+\]\s*/, '').trim();
+      newTx.quantity = newFinalQty;
+      newTx.delta = newDelta;
+      newTx.final_quantity = newFinalQty;
+      newTx.note = `[${deltaStr}=${newFinalQty}] ${strippedNote || '盤點校正'}`.trim();
+    }
+
     // We first revert the oldTx stock effect, then apply the newTx stock effect
     let updatedStock = await revertTransactionStockEffect(stock, oldTx, products);
     updatedStock = await applyTransactionStockEffect(updatedStock, newTx, products);
@@ -4265,17 +4835,45 @@ export const useStore = create<AppState>((set, get) => ({
     set({ stock: updatedStock, transactions: updatedTx });
     get().showToast('✅ 紀錄已成功更新，並已對應調整本地庫存！');
 
-    // Sync to cloud spreadsheet if configured
+    // Sync to cloud spreadsheet if configured, queueing retry on failure
     if (get().gasApiUrl) {
+      let txCloudOk = false;
+      let stkCloudOk = false;
       try {
-        await get().overwriteCloudTransactions();
+        txCloudOk = await get().overwriteCloudTransactions();
       } catch (e) {
         console.error('overwriteCloudTransactions error:', e);
       }
       try {
-        await get().overwriteCloudStock();
+        stkCloudOk = await get().overwriteCloudStock();
       } catch (e) {
         console.error('overwriteCloudStock error:', e);
+      }
+
+      const retryItemsToAdd: SyncItem[] = [];
+      const curQ = get().syncQueue;
+      if (!txCloudOk && !curQ.some(q => q.action === 'overwriteTransactions')) {
+        retryItemsToAdd.push({
+          id: `RETRY_OV_TX_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          action: 'overwriteTransactions',
+          payload: {},
+          timestamp: new Date().toISOString()
+        });
+      }
+      if (!stkCloudOk && !curQ.some(q => q.action === 'overwriteStock')) {
+        retryItemsToAdd.push({
+          id: `RETRY_OV_STK_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          action: 'overwriteStock',
+          payload: {},
+          timestamp: new Date().toISOString()
+        });
+      }
+      for (const rItem of retryItemsToAdd) {
+        await dbSyncQueue.setItem(rItem.id, rItem);
+      }
+      if (retryItemsToAdd.length > 0) {
+        set(state => ({ syncQueue: [...state.syncQueue, ...retryItemsToAdd] }));
+        get().showToast('⚠️ 雲端帳本或庫存寫回失敗，已排入重試佇列');
       }
     }
   },

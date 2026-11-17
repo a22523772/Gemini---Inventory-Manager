@@ -521,18 +521,18 @@ export default function SetupGuide() {
                   <div className="flex items-center gap-2">
                     <span className="px-2.5 py-1 rounded-full text-xs font-black bg-amber-400 text-slate-950 flex items-center gap-1.5 shadow-sm">
                       <AlertTriangle className="w-3.5 h-3.5 fill-slate-950 stroke-none" />
-                      腳本更新提醒 (v2.4)
+                      腳本更新提醒 (v2.5)
                     </span>
-                    <span className="text-xs font-bold text-amber-300">2026-10-15 最新版</span>
+                    <span className="text-xs font-bold text-amber-300">2026-11-17 最新版</span>
                   </div>
 
                   <div className="text-xs text-slate-200 leading-relaxed bg-black/40 p-3 rounded-xl border border-white/5 space-y-1.5">
                     <div className="font-bold text-amber-200 flex items-center gap-1.5">
-                      🚀 本次腳本重點升級（採購單入庫極速化與防重）：
+                      🚀 本次腳本重點升級（庫存調整完整性與交易刪除寫回保護）：
                     </div>
                     <ul className="list-disc pl-5 space-y-1 text-slate-300">
-                      <li><strong>新增 <code className="text-sky-300 font-mono">batchStockIn</code> 批次進貨</strong>：採購單多項商品核對完成後，由舊版的多筆逐次發送改為單次批量寫入，等待時間縮減至 1 秒。</li>
-                      <li><strong>交易紀錄冪等防重機制</strong>：入庫時自動檢核商品與單號，防止網路延遲造成交易明細重複寫入。</li>
+                      <li><strong>強化 <code className="text-sky-300 font-mono">adjustStock</code> 庫存調整</strong>：支援無庫存批次時自動建立新批次、調為 0 自動刪除批次、同步更新儲位/效期/規格，並補齊 <code className="text-sky-300 font-mono">delta</code> / <code className="text-sky-300 font-mono">final_quantity</code> 欄位與交易冪等防重。</li>
+                      <li><strong>保護 <code className="text-sky-300 font-mono">overwriteStock</code> / <code className="text-sky-300 font-mono">overwriteTransactions</code></strong>：加入 <code className="text-sky-300 font-mono">LockService</code> 併發鎖定、自動過濾歸零批次並保留 <code className="text-sky-300 font-mono">po_id</code> / <code className="text-sky-300 font-mono">delta</code> / <code className="text-sky-300 font-mono">final_quantity</code> 欄位，確保刪除交易紀錄與採購單回推完整寫回。</li>
                     </ul>
                     <div className="text-[11px] text-amber-300/90 font-medium pt-1 border-t border-white/10 mt-2">
                       📌 <strong>更新步驟</strong>：
@@ -1491,164 +1491,349 @@ function doPost(e) {
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   }
 
-  if(action === 'adjustStock') {
-    var stockSheet = ss.getSheetByName('stock');
-    var transSheet = ss.getSheetByName('transactions');
-    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/M/d  HH:mm:ss");
-    var stockId = data.stock_id || [data.product_id, data.location, data.floor, data.area, data.expiry_date || '', data.specification || ''].join('_').replace(/_+$/, '');
-    
-    if(stockSheet && stockSheet.getLastRow() > 1) {
-      var stockHeaders = stockSheet.getRange(1, 1, 1, stockSheet.getLastColumn()).getValues()[0];
-      var values = stockSheet.getDataRange().getValues();
+  if (action === 'adjustStock') {
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(30000);
+    } catch (e) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: '系統忙碌中，請稍候重試' })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    try {
+      var stockSheet = ss.getSheetByName('stock');
+      if (!stockSheet) stockSheet = ss.insertSheet('stock');
+      var transSheet = ss.getSheetByName('transactions');
+      if (!transSheet) transSheet = ss.insertSheet('transactions');
+      var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy/M/d  HH:mm:ss");
+
+      var targetQty = Number(data.quantity);
+      if (isNaN(targetQty)) targetQty = 0;
+      var targetPid = String(data.product_id || '').trim();
+      var targetLoc = String(data.location || '倉庫').trim();
+      var targetFloor = String(data.floor || '1F').trim();
+      var targetArea = String(data.area || 'A區').trim();
+      var targetExpiry = String(data.expiry_date || '').trim();
+      var targetSpec = String(data.specification || '').trim();
+      var stockId = String(data.stock_id || '').trim() || [targetPid, targetLoc, targetFloor, targetArea, targetExpiry, targetSpec].join('_').replace(/_+$/, '');
+
+      var prodNameMapAdj = getProdNameMap(ss);
+      var cleanAdjPid = targetPid.toLowerCase();
+      var adjProdName = data.name || data.product_name || (cleanAdjPid ? prodNameMapAdj[cleanAdjPid] : '') || '';
+
+      var stockHeaders = [];
+      if (stockSheet.getLastRow() === 0) {
+        stockHeaders = ['stock_id', 'product_id', 'name', 'location', 'floor', 'area', 'quantity', 'expiry_date', 'specification', 'last_update'];
+        stockSheet.appendRow(stockHeaders);
+      } else {
+        stockHeaders = stockSheet.getRange(1, 1, 1, stockSheet.getLastColumn()).getValues()[0];
+        var requiredAdjStockCols = ['name', 'location', 'floor', 'area', 'expiry_date', 'specification', 'last_update'];
+        requiredAdjStockCols.forEach(function(col) {
+          if (stockHeaders.indexOf(col) === -1) {
+            stockHeaders.push(col);
+            stockSheet.getRange(1, stockHeaders.length).setValue(col);
+          }
+        });
+      }
+
       var idIdx = stockHeaders.indexOf('stock_id');
+      var pidIdx = stockHeaders.indexOf('product_id');
+      var nameIdx = stockHeaders.indexOf('name');
+      var locIdx = stockHeaders.indexOf('location');
+      var floorIdx = stockHeaders.indexOf('floor');
+      var areaIdx = stockHeaders.indexOf('area');
+      var expiryIdx = stockHeaders.indexOf('expiry_date');
+      var specIdx = stockHeaders.indexOf('specification');
       var qtyIdx = stockHeaders.indexOf('quantity');
       var updateIdx = stockHeaders.indexOf('last_update');
 
-      for (var i = 1; i < values.length; i++) {
-         var matchById = (idIdx !== -1 && values[i][idIdx] == stockId);
-         var matchByAttrs = (
-           values[i][stockHeaders.indexOf('product_id')] == data.product_id &&
-           values[i][stockHeaders.indexOf('location')] == data.location &&
-           values[i][stockHeaders.indexOf('floor')] == data.floor &&
-           values[i][stockHeaders.indexOf('area')] == data.area &&
-           String(values[i][stockHeaders.indexOf('expiry_date')] || '') == String(data.expiry_date || '') &&
-           String(values[i][stockHeaders.indexOf('specification')] || '') == String(data.specification || '')
-         );
+      var foundAdjRow = -1;
+      if (stockSheet.getLastRow() > 1) {
+        var values = stockSheet.getDataRange().getValues();
+        for (var i = 1; i < values.length; i++) {
+          var rowStockId = idIdx !== -1 ? String(values[i][idIdx] || '').trim() : '';
+          var matchById = (idIdx !== -1 && stockId !== '' && rowStockId === stockId);
+          var matchByAttrs = (
+            pidIdx !== -1 &&
+            String(values[i][pidIdx] || '').trim().toLowerCase() === cleanAdjPid &&
+            (locIdx === -1 || String(values[i][locIdx] || '').trim() === targetLoc) &&
+            (floorIdx === -1 || String(values[i][floorIdx] || '').trim() === targetFloor) &&
+            (areaIdx === -1 || String(values[i][areaIdx] || '').trim() === targetArea) &&
+            (expiryIdx === -1 || String(values[i][expiryIdx] || '').trim() === targetExpiry) &&
+            (specIdx === -1 || String(values[i][specIdx] || '').trim() === targetSpec)
+          );
 
-         if (matchById || matchByAttrs) {
-            if (Number(data.quantity) <= 0) {
-               stockSheet.deleteRow(i + 1);
-            } else {
-               stockSheet.getRange(i+1, qtyIdx + 1).setValue(Number(data.quantity));
-               if (updateIdx !== -1) stockSheet.getRange(i+1, updateIdx + 1).setValue(now);
-            }
+          if (matchById || matchByAttrs) {
+            foundAdjRow = i;
             break;
-         }
-      }
-    }
-    
-    var transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
-    var tAdjNameIdx = transHeaders.indexOf('name');
-    if (tAdjNameIdx === -1) {
-      for (var th = 0; th < transHeaders.length; th++) {
-        var thStr = String(transHeaders[th] || '').trim().toLowerCase();
-        if (thStr === 'product_name' || thStr === '商品名稱' || thStr === '品名') {
-          transSheet.getRange(1, th + 1).setValue('name');
-          transHeaders[th] = 'name';
-          tAdjNameIdx = th;
-          break;
+          }
         }
       }
-      if (tAdjNameIdx === -1) {
-        transHeaders.push('name');
-        transSheet.getRange(1, transHeaders.length).setValue('name');
-      }
-    }
-    data.transaction_id = data.transaction_id || Utilities.getUuid();
-    data.type = 'adjust';
-    data.date = data.date || now;
-    data.cost_price = (data.cost_price !== undefined && data.cost_price !== null && data.cost_price !== '') ? Number(data.cost_price) || 0 : 0;
-    data.price = (data.price !== undefined && data.price !== null && data.price !== '') ? Number(data.price) || 0 : 0;
-    data.vendor_id = data.vendor_id || '';
-    
-    var prodNameMapAdj = getProdNameMap(ss);
-    var cleanAdjPid = String(data.product_id || '').trim().toLowerCase();
-    var trRow = [];
-    for (var k = 0; k < transHeaders.length; k++) {
-      var kName = transHeaders[k];
-      var val = data[kName];
-      if ((val === undefined || val === '') && (kName === 'name' || kName === 'product_name')) {
-        val = data.name || data.product_name || (cleanAdjPid ? prodNameMapAdj[cleanAdjPid] : '') || '';
-      }
-      trRow.push(val !== undefined ? val : '');
-    }
 
-    // Always append inventory adjustments as an independent ledger record
-    transSheet.appendRow(trRow);
-
-    return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
-  }
-
-  if (action === 'overwriteStock') {
-    var stockSheet = ss.getSheetByName('stock');
-    if (!stockSheet) stockSheet = ss.insertSheet('stock');
-    if (stockSheet.getLastRow() > 0) {
-      stockSheet.clear();
-    }
-    var stockHeaders = ['stock_id', 'product_id', 'name', 'location', 'floor', 'area', 'quantity', 'expiry_date', 'specification', 'last_update'];
-    stockSheet.appendRow(stockHeaders);
-    if (data && data.length > 0) {
-      var rows = [];
-      for (var i = 0; i < data.length; i++) {
-        var item = data[i];
-        var row = [];
-        for (var j = 0; j < stockHeaders.length; j++) {
-          var val = item[stockHeaders[j]];
-          row.push(val !== undefined ? val : '');
+      if (foundAdjRow !== -1) {
+        if (targetQty <= 0) {
+          stockSheet.deleteRow(foundAdjRow + 1);
+        } else {
+          if (qtyIdx !== -1) stockSheet.getRange(foundAdjRow + 1, qtyIdx + 1).setValue(targetQty);
+          if (updateIdx !== -1) stockSheet.getRange(foundAdjRow + 1, updateIdx + 1).setValue(now);
+          if (nameIdx !== -1 && adjProdName) stockSheet.getRange(foundAdjRow + 1, nameIdx + 1).setValue(adjProdName);
+          if (locIdx !== -1) stockSheet.getRange(foundAdjRow + 1, locIdx + 1).setValue(targetLoc);
+          if (floorIdx !== -1) stockSheet.getRange(foundAdjRow + 1, floorIdx + 1).setValue(targetFloor);
+          if (areaIdx !== -1) stockSheet.getRange(foundAdjRow + 1, areaIdx + 1).setValue(targetArea);
+          if (expiryIdx !== -1) {
+            var expCell = stockSheet.getRange(foundAdjRow + 1, expiryIdx + 1);
+            expCell.setNumberFormat('@');
+            expCell.setValue(targetExpiry);
+          }
+          if (specIdx !== -1) stockSheet.getRange(foundAdjRow + 1, specIdx + 1).setValue(targetSpec);
         }
-        rows.push(row);
+      } else if (targetQty > 0) {
+        var newStockRow = [];
+        for (var m = 0; m < stockHeaders.length; m++) {
+          var sColKey = stockHeaders[m];
+          if (sColKey === 'stock_id') newStockRow.push(stockId);
+          else if (sColKey === 'product_id') newStockRow.push(targetPid);
+          else if (sColKey === 'name') newStockRow.push(adjProdName);
+          else if (sColKey === 'location') newStockRow.push(targetLoc);
+          else if (sColKey === 'floor') newStockRow.push(targetFloor);
+          else if (sColKey === 'area') newStockRow.push(targetArea);
+          else if (sColKey === 'quantity') newStockRow.push(targetQty);
+          else if (sColKey === 'expiry_date') newStockRow.push(targetExpiry);
+          else if (sColKey === 'specification') newStockRow.push(targetSpec);
+          else if (sColKey === 'last_update') newStockRow.push(now);
+          else newStockRow.push(data[sColKey] !== undefined ? data[sColKey] : '');
+        }
+        stockSheet.appendRow(newStockRow);
       }
-      stockSheet.getRange(2, 1, rows.length, stockHeaders.length).setValues(rows);
-    }
-    return ContentService.createTextOutput(JSON.stringify({success:true, count: data.length})).setMimeType(ContentService.MimeType.JSON);
-  }
 
-  if (action === 'overwriteTransactions') {
-    var transSheet = ss.getSheetByName('transactions');
-    if (!transSheet) transSheet = ss.insertSheet('transactions');
-    var transHeaders = ['transaction_id', 'online_order_id', 'platform', 'product_id', 'name', 'type', 'quantity', 'price', 'location', 'floor', 'area', 'specification', 'cost_price', 'vendor_id', 'date', 'note', 'operator'];
-    if (transSheet.getLastRow() > 0) {
-      var existingTH = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
-      if (existingTH && existingTH.length > 0 && String(existingTH[0]).trim()) {
-        transHeaders = existingTH;
-        if (transHeaders.indexOf('name') === -1) {
-          var foundAlias = false;
+      var transHeaders = [];
+      if (transSheet.getLastRow() === 0) {
+        transHeaders = ['transaction_id', 'online_order_id', 'platform', 'product_id', 'name', 'type', 'quantity', 'delta', 'final_quantity', 'price', 'location', 'floor', 'area', 'expiry_date', 'specification', 'cost_price', 'vendor_id', 'po_id', 'date', 'note', 'operator'];
+        transSheet.appendRow(transHeaders);
+      } else {
+        transHeaders = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+        var tAdjNameIdx = transHeaders.indexOf('name');
+        if (tAdjNameIdx === -1) {
           for (var th = 0; th < transHeaders.length; th++) {
             var thStr = String(transHeaders[th] || '').trim().toLowerCase();
             if (thStr === 'product_name' || thStr === '商品名稱' || thStr === '品名') {
+              transSheet.getRange(1, th + 1).setValue('name');
               transHeaders[th] = 'name';
-              foundAlias = true;
+              tAdjNameIdx = th;
               break;
             }
           }
-          if (!foundAlias) transHeaders.push('name');
+          if (tAdjNameIdx === -1) {
+            transHeaders.push('name');
+            transSheet.getRange(1, transHeaders.length).setValue('name');
+          }
+        }
+        var requiredAdjTransCols = ['delta', 'final_quantity', 'expiry_date', 'specification', 'location', 'floor', 'area'];
+        requiredAdjTransCols.forEach(function(col) {
+          if (transHeaders.indexOf(col) === -1) {
+            transHeaders.push(col);
+            transSheet.getRange(1, transHeaders.length).setValue(col);
+          }
+        });
+      }
+
+      data.transaction_id = String(data.transaction_id || '').trim() || Utilities.getUuid();
+      data.type = 'adjust';
+      data.date = data.date || now;
+      data.location = targetLoc;
+      data.floor = targetFloor;
+      data.area = targetArea;
+      data.expiry_date = targetExpiry;
+      data.specification = targetSpec;
+      if (data.final_quantity === undefined || data.final_quantity === null || data.final_quantity === '') {
+        data.final_quantity = targetQty;
+      } else {
+        data.final_quantity = Number(data.final_quantity) || 0;
+      }
+      if (data.delta !== undefined && data.delta !== null && data.delta !== '') {
+        data.delta = Number(data.delta) || 0;
+      }
+      data.cost_price = (data.cost_price !== undefined && data.cost_price !== null && data.cost_price !== '') ? Number(data.cost_price) || 0 : 0;
+      data.price = (data.price !== undefined && data.price !== null && data.price !== '') ? Number(data.price) || 0 : 0;
+      data.vendor_id = data.vendor_id || '';
+
+      // Idempotency check by transaction_id
+      var isDuplicateAdjTx = false;
+      var adjTxIdIdx = transHeaders.indexOf('transaction_id');
+      if (adjTxIdIdx !== -1 && transSheet.getLastRow() > 1) {
+        var existingAdjIds = transSheet.getRange(2, adjTxIdIdx + 1, transSheet.getLastRow() - 1, 1).getValues();
+        for (var ai = 0; ai < existingAdjIds.length; ai++) {
+          if (String(existingAdjIds[ai][0] || '').trim() === data.transaction_id) {
+            isDuplicateAdjTx = true;
+            break;
+          }
         }
       }
-      transSheet.clear();
-      transSheet.clearFormats();
-    }
-    transSheet.appendRow(transHeaders);
-    if (data && data.length > 0) {
-      var prodNameMapOverwrite = getProdNameMap(ss);
-      var rows = [];
-      for (var i = 0; i < data.length; i++) {
-        var item = data[i];
-        var cleanTxPid = String(item.product_id || '').trim().toLowerCase();
-        var row = [];
-        for (var j = 0; j < transHeaders.length; j++) {
-          var k = transHeaders[j];
-          var val = item[k];
-          if ((val === undefined || val === '') && (k === 'name' || k === 'product_name')) {
-            val = item.name || item.product_name || (cleanTxPid ? prodNameMapOverwrite[cleanTxPid] : '') || '';
+
+      if (!isDuplicateAdjTx) {
+        var trRow = [];
+        for (var k = 0; k < transHeaders.length; k++) {
+          var kName = transHeaders[k];
+          var val = data[kName];
+          if ((val === undefined || val === '') && (kName === 'name' || kName === 'product_name')) {
+            val = adjProdName;
           }
-          if (k === 'cost_price' || k === 'price' || k === 'quantity') {
-            val = (val !== undefined && val !== null && val !== '') ? Number(val) || 0 : 0;
-          }
-          row.push(val !== undefined ? val : '');
+          trRow.push(val !== undefined ? val : '');
         }
-        rows.push(row);
+        transSheet.appendRow(trRow);
       }
-      transSheet.getRange(2, 1, rows.length, transHeaders.length).setValues(rows);
-      var costPriceCol = transHeaders.indexOf('cost_price') + 1;
-      var priceCol = transHeaders.indexOf('price') + 1;
-      var qtyCol = transHeaders.indexOf('quantity') + 1;
-      var dateCol = transHeaders.indexOf('date') + 1;
-      if (costPriceCol > 0) transSheet.getRange(2, costPriceCol, rows.length, 1).setNumberFormat('0.##');
-      if (priceCol > 0) transSheet.getRange(2, priceCol, rows.length, 1).setNumberFormat('0.##');
-      if (qtyCol > 0) transSheet.getRange(2, qtyCol, rows.length, 1).setNumberFormat('0');
-      if (dateCol > 0) transSheet.getRange(2, dateCol, rows.length, 1).setNumberFormat('@');
+
+      return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
+    } catch (err) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: err && err.message ? err.message : String(err) })).setMimeType(ContentService.MimeType.JSON);
+    } finally {
+      lock.releaseLock();
     }
-    return ContentService.createTextOutput(JSON.stringify({success:true, count: data.length})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'overwriteStock') {
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(30000);
+    } catch (e) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: '系統忙碌中，請稍候重試' })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    try {
+      var stockSheet = ss.getSheetByName('stock');
+      if (!stockSheet) stockSheet = ss.insertSheet('stock');
+      if (stockSheet.getLastRow() > 0) {
+        stockSheet.clear();
+        stockSheet.clearFormats();
+      }
+      var stockHeaders = ['stock_id', 'product_id', 'name', 'location', 'floor', 'area', 'quantity', 'expiry_date', 'specification', 'last_update'];
+      stockSheet.appendRow(stockHeaders);
+      var prodNameMapStockOv = getProdNameMap(ss);
+      var writtenCount = 0;
+      if (data && data.length > 0) {
+        var rows = [];
+        for (var i = 0; i < data.length; i++) {
+          var item = data[i];
+          var itemQty = Number(item.quantity);
+          if (isNaN(itemQty) || itemQty <= 0) continue;
+          var cleanStockPid = String(item.product_id || '').trim().toLowerCase();
+          var row = [];
+          for (var j = 0; j < stockHeaders.length; j++) {
+            var hKey = stockHeaders[j];
+            var val = item[hKey];
+            if ((val === undefined || val === '') && hKey === 'name') {
+              val = item.name || item.product_name || (cleanStockPid ? prodNameMapStockOv[cleanStockPid] : '') || '';
+            }
+            if (hKey === 'quantity') {
+              val = itemQty;
+            }
+            row.push(val !== undefined ? val : '');
+          }
+          rows.push(row);
+        }
+        writtenCount = rows.length;
+        if (rows.length > 0) {
+          stockSheet.getRange(2, 1, rows.length, stockHeaders.length).setValues(rows);
+          stockSheet.getRange(2, 1, rows.length, 2).setNumberFormat('@');
+          stockSheet.getRange(2, 7, rows.length, 1).setNumberFormat('0');
+          stockSheet.getRange(2, 8, rows.length, 1).setNumberFormat('@');
+          stockSheet.getRange(2, 10, rows.length, 1).setNumberFormat('@');
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, count: writtenCount })).setMimeType(ContentService.MimeType.JSON);
+    } catch (err) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: err && err.message ? err.message : String(err) })).setMimeType(ContentService.MimeType.JSON);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
+  if (action === 'overwriteTransactions') {
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(30000);
+    } catch (e) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: '系統忙碌中，請稍候重試' })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    try {
+      var transSheet = ss.getSheetByName('transactions');
+      if (!transSheet) transSheet = ss.insertSheet('transactions');
+      var transHeaders = ['transaction_id', 'online_order_id', 'platform', 'product_id', 'name', 'type', 'quantity', 'delta', 'final_quantity', 'price', 'location', 'floor', 'area', 'expiry_date', 'specification', 'cost_price', 'vendor_id', 'po_id', 'date', 'note', 'operator'];
+      if (transSheet.getLastRow() > 0) {
+        var existingTH = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
+        if (existingTH && existingTH.length > 0 && String(existingTH[0]).trim()) {
+          transHeaders = existingTH;
+          if (transHeaders.indexOf('name') === -1) {
+            var foundAlias = false;
+            for (var th = 0; th < transHeaders.length; th++) {
+              var thStr = String(transHeaders[th] || '').trim().toLowerCase();
+              if (thStr === 'product_name' || thStr === '商品名稱' || thStr === '品名') {
+                transHeaders[th] = 'name';
+                foundAlias = true;
+                break;
+              }
+            }
+            if (!foundAlias) transHeaders.push('name');
+          }
+          var ensureTransCols = ['delta', 'final_quantity', 'expiry_date', 'po_id'];
+          ensureTransCols.forEach(function(col) {
+            if (transHeaders.indexOf(col) === -1) {
+              transHeaders.push(col);
+            }
+          });
+        }
+        transSheet.clear();
+        transSheet.clearFormats();
+      }
+      transSheet.appendRow(transHeaders);
+      if (data && data.length > 0) {
+        var prodNameMapOverwrite = getProdNameMap(ss);
+        var rows = [];
+        for (var i = 0; i < data.length; i++) {
+          var item = data[i];
+          var cleanTxPid = String(item.product_id || '').trim().toLowerCase();
+          var row = [];
+          for (var j = 0; j < transHeaders.length; j++) {
+            var k = transHeaders[j];
+            var val = item[k];
+            if ((val === undefined || val === '') && (k === 'name' || k === 'product_name')) {
+              val = item.name || item.product_name || (cleanTxPid ? prodNameMapOverwrite[cleanTxPid] : '') || '';
+            }
+            if (k === 'cost_price' || k === 'price' || k === 'quantity') {
+              val = (val !== undefined && val !== null && val !== '') ? Number(val) || 0 : 0;
+            } else if (k === 'delta' || k === 'final_quantity') {
+              val = (val !== undefined && val !== null && val !== '') ? Number(val) || 0 : '';
+            }
+            row.push(val !== undefined ? val : '');
+          }
+          rows.push(row);
+        }
+        transSheet.getRange(2, 1, rows.length, transHeaders.length).setValues(rows);
+        var txIdCol = transHeaders.indexOf('transaction_id') + 1;
+        var poIdCol = transHeaders.indexOf('po_id') + 1;
+        var costPriceCol = transHeaders.indexOf('cost_price') + 1;
+        var priceCol = transHeaders.indexOf('price') + 1;
+        var qtyCol = transHeaders.indexOf('quantity') + 1;
+        var deltaCol = transHeaders.indexOf('delta') + 1;
+        var finalQtyCol = transHeaders.indexOf('final_quantity') + 1;
+        var dateCol = transHeaders.indexOf('date') + 1;
+        var expiryCol = transHeaders.indexOf('expiry_date') + 1;
+        if (txIdCol > 0) transSheet.getRange(2, txIdCol, rows.length, 1).setNumberFormat('@');
+        if (poIdCol > 0) transSheet.getRange(2, poIdCol, rows.length, 1).setNumberFormat('@');
+        if (costPriceCol > 0) transSheet.getRange(2, costPriceCol, rows.length, 1).setNumberFormat('0.##');
+        if (priceCol > 0) transSheet.getRange(2, priceCol, rows.length, 1).setNumberFormat('0.##');
+        if (qtyCol > 0) transSheet.getRange(2, qtyCol, rows.length, 1).setNumberFormat('0');
+        if (deltaCol > 0) transSheet.getRange(2, deltaCol, rows.length, 1).setNumberFormat('0');
+        if (finalQtyCol > 0) transSheet.getRange(2, finalQtyCol, rows.length, 1).setNumberFormat('0');
+        if (dateCol > 0) transSheet.getRange(2, dateCol, rows.length, 1).setNumberFormat('@');
+        if (expiryCol > 0) transSheet.getRange(2, expiryCol, rows.length, 1).setNumberFormat('@');
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, count: data.length })).setMimeType(ContentService.MimeType.JSON);
+    } catch (err) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: err && err.message ? err.message : String(err) })).setMimeType(ContentService.MimeType.JSON);
+    } finally {
+      lock.releaseLock();
+    }
   }
 
   if (action === 'updateOnlineOrder') {

@@ -35,6 +35,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
     stock, 
     vendors, 
     purchaseOrders,
+    operator,
     toggleOutOfStock, 
     showToast 
   } = useStore();
@@ -621,8 +622,8 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
 
                       <button
                         onClick={() => onOpenAdjustModal({ product: item.product, stockEntries: item.stock_entries })}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs border font-mono shrink-0 transition-all active:scale-95 cursor-pointer ${stockBadgeColor}`}
-                        title="點擊直接快速調整庫存"
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs border font-mono shrink-0 transition-all active:scale-95 cursor-pointer ${stockBadgeColor} ${operator !== 'admin' || item.is_paused ? 'opacity-60' : ''}`}
+                        title={operator !== 'admin' ? '僅管理員（admin）可調整庫存' : item.is_paused ? '商品暫停供應中' : '點擊直接快速調整庫存'}
                       >
                         <span className="font-black">{stockText}</span>
                         <Pencil className="w-3 h-3 opacity-60" />
@@ -700,7 +701,8 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                       <div className="flex items-center gap-1.5 shrink-0">
                         <button
                           onClick={() => onOpenAdjustModal({ product: item.product, stockEntries: item.stock_entries })}
-                          className="px-2.5 py-1 bg-white/5 hover:bg-white/15 text-sky-300 border border-white/10 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors"
+                          className={`px-2.5 py-1 bg-white/5 hover:bg-white/15 text-sky-300 border border-white/10 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer ${operator !== 'admin' || item.is_paused ? 'opacity-45' : ''}`}
+                          title={operator !== 'admin' ? '僅管理員（admin）可調整庫存' : item.is_paused ? '商品暫停供應中' : '快速盤點庫存'}
                         >
                           <Sliders className="w-3 h-3" />
                           <span>盤點</span>
@@ -837,8 +839,8 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                       <td className="p-3 text-right font-mono">
                         <button
                           onClick={() => onOpenAdjustModal({ product: item.product, stockEntries: item.stock_entries })}
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs border font-mono transition-all hover:scale-105 active:scale-95 cursor-pointer ${stockBadgeColor}`}
-                          title="點擊直接快速調整庫存"
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs border font-mono transition-all hover:scale-105 active:scale-95 cursor-pointer ${stockBadgeColor} ${operator !== 'admin' || item.is_paused ? 'opacity-60' : ''}`}
+                          title={operator !== 'admin' ? '僅管理員（admin）可調整庫存' : item.is_paused ? '商品暫停供應中' : '點擊直接快速調整庫存'}
                         >
                           <span className="text-sm font-black">{stockText}</span>
                           <Pencil className="w-3 h-3 opacity-60 ml-0.5" />
@@ -942,8 +944,8 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
                         <div className="flex items-center justify-center gap-1.5">
                           <button
                             onClick={() => onOpenAdjustModal({ product: item.product, stockEntries: item.stock_entries })}
-                            className="px-2 py-1 bg-white/5 hover:bg-white/15 text-sky-300 border border-white/10 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors"
-                            title="快速盤點庫存"
+                            className={`px-2 py-1 bg-white/5 hover:bg-white/15 text-sky-300 border border-white/10 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer ${operator !== 'admin' || item.is_paused ? 'opacity-45' : ''}`}
+                            title={operator !== 'admin' ? '僅管理員（admin）可調整庫存' : item.is_paused ? '商品暫停供應中' : '快速盤點庫存'}
                           >
                             <Sliders className="w-3 h-3" />
                             <span>盤點</span>
