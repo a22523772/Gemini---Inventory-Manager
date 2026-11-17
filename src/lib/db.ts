@@ -35,6 +35,8 @@ export type PurchaseOrder = {
   items: PurchaseOrderItem[];
   created_at?: string;
   updated_at?: string;
+  manual_edited_at?: string;
+  manual_override?: boolean;
 };
 
 export type OnlineOrder = {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { PurchaseOrder, PurchaseOrderItem, Product, Vendor } from '../lib/db';
 import { 
   X, Check, Plus, Trash2, Calendar, Building2, 
@@ -35,30 +35,44 @@ export default function EditPurchaseOrderModal({
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [items, setItems] = useState<PurchaseOrderItem[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const initializedKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (po) {
-      setVendorId(po.vendor_id || '');
-      setVendorName(po.vendor_name || po.vendor_id || '');
-      setOrderDate(po.order_date || '');
-      setExpectedDate(po.expected_date || '');
-      setStatus(po.status || 'pending');
-      setNote(po.note || '');
-      setInvoiceNumber(po.invoice_number || '');
-      const resolved = getResolvedPoItems(po, transactions || []);
-      setItems(resolved.map(it => {
-        const cleanPid = String(it.product_id || '').trim().toLowerCase();
-        const prod = products.find(p => String(p.product_id || '').trim().toLowerCase() === cleanPid);
-        const resolvedName = (it.name || (it as any).product_name || prod?.name || it.product_id || '').trim();
-        return {
-          ...it,
-          name: resolvedName,
-          product_name: resolvedName,
-          received_quantity: it.effective_received_quantity
-        };
-      }));
+    if (!isOpen || !po) {
+      initializedKeyRef.current = null;
+      setFormError(null);
+      return;
     }
-  }, [po, transactions]);
+
+    const initKey = `${po.po_id}__${po.updated_at || ''}`;
+    if (initializedKeyRef.current === initKey) {
+      return;
+    }
+    initializedKeyRef.current = initKey;
+    setFormError(null);
+
+    setVendorId(po.vendor_id || '');
+    setVendorName(po.vendor_name || po.vendor_id || '');
+    setOrderDate(po.order_date || '');
+    setExpectedDate(po.expected_date || '');
+    setStatus(po.status || 'pending');
+    setNote(po.note || '');
+    setInvoiceNumber(po.invoice_number || '');
+    const resolved = getResolvedPoItems(po, transactions || []);
+    setItems(resolved.map(it => {
+      const cleanPid = String(it.product_id || '').trim().toLowerCase();
+      const prod = products.find(p => String(p.product_id || '').trim().toLowerCase() === cleanPid);
+      const resolvedName = (it.name || (it as any).product_name || prod?.name || it.product_id || '').trim();
+      return {
+        ...it,
+        name: resolvedName,
+        product_name: resolvedName,
+        received_quantity: it.effective_received_quantity,
+        note: ''
+      };
+    }));
+  }, [isOpen, po, transactions, products]);
 
   if (!isOpen || !po) return null;
 
@@ -136,8 +150,9 @@ export default function EditPurchaseOrderModal({
   };
 
   const handleSubmit = async () => {
+    setFormError(null);
     if (items.length === 0) {
-      alert('採購單至少需要一項商品！');
+      setFormError('採購單至少需要一項商品！');
       return;
     }
 
@@ -151,7 +166,7 @@ export default function EditPurchaseOrderModal({
 
     if (missingSpecItem) {
       const catalogProd = products.find(p => p.product_id === missingSpecItem.product_id || (p.name && p.name.trim() === (missingSpecItem.name || missingSpecItem.product_name || '').trim()));
-      alert(`⚠️ 商品「${missingSpecItem.name || missingSpecItem.product_name}」在系統建檔中有設定規格（${catalogProd?.specification}），但目前採購品項規格欄位為空！\n\n為避免在途庫存對齊異常，請填寫規格後再儲存。`);
+      setFormError(`商品「${missingSpecItem.name || missingSpecItem.product_name}」在系統建檔中有設定規格（${catalogProd?.specification}），請填寫規格後再儲存。`);
       return;
     }
 
@@ -180,7 +195,7 @@ export default function EditPurchaseOrderModal({
       });
       onClose();
     } catch (err: any) {
-      alert(`儲存失敗: ${err.message || err}`);
+      setFormError(`儲存失敗: ${err.message || err}`);
     } finally {
       setIsSaving(false);
     }
@@ -227,6 +242,20 @@ export default function EditPurchaseOrderModal({
 
         {/* Content Body */}
         <div className="p-4 sm:p-6 overflow-y-auto space-y-5 flex-1 custom-scrollbar">
+          {formError && (
+            <div className="bg-red-500/15 border border-red-500/30 text-red-200 rounded-xl p-3 text-xs font-bold flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+              <span className="flex-1">{formError}</span>
+              <button
+                type="button"
+                onClick={() => setFormError(null)}
+                className="text-red-300 hover:text-white"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* Quick Action Banner */}
           <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs text-indigo-300 flex items-center gap-2">

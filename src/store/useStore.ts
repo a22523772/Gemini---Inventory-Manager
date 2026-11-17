@@ -785,11 +785,111 @@ export const analyzeOnlineOrdersDuplication = (
   };
 };
 
-export const mergeAndProtectPurchaseOrders = (remotePOs: any[], currentLocalPOs: PurchaseOrder[]): PurchaseOrder[] => {
+const PO_LOCAL_EDIT_PROTECTION_MS = 60_000;
+const recentlyEditedPOs = new Map<string, { po: PurchaseOrder; expiresAt: number; fallbackTriggered?: boolean }>();
+const recentlyDeletedPOIds = new Map<string, number>();
+
+const buildGasActionUrl = (baseUrl: string, action: string): string => {
+  const cleanUrl = (baseUrl || '').trim().replace(/\/+$/, '');
+  const sep = cleanUrl.includes('?') ? '&' : '?';
+  return `${cleanUrl}${sep}action=${action}`;
+};
+
+const parseIsoTimestamp = (value?: string): number => {
+  if (!value) return 0;
+  const t = Date.parse(String(value).trim());
+  return Number.isNaN(t) ? 0 : t;
+};
+
+const stripInvoiceTagFromNote = (note: string): string =>
+  (note || '').replace(/\[(?:單據|發票|單據號|發票號)[:：]\s*[^\]]+\]/g, '').trim();
+
+const sanitizeSinglePOForCloud = (po: PurchaseOrder, products: Product[]): PurchaseOrder => {
+  const prodNameMap = new Map((products || []).map(p => [String(p.product_id || '').toLowerCase().trim(), p.name]));
+  const poNoteClean = (po.note || '').trim();
+  const poNoteStripped = stripInvoiceTagFromNote(poNoteClean);
+  return {
+    ...po,
+    items: (po.items || []).map(it => {
+      const cleanPid = String(it.product_id || '').toLowerCase().trim();
+      const resolvedName = (it.name || (it as any).product_name || (cleanPid ? prodNameMap.get(cleanPid) : '') || it.product_id || '').trim();
+      const rawItemNote = String(it.note || '').trim();
+      const isRedundantNote =
+        !rawItemNote ||
+        rawItemNote === poNoteClean ||
+        rawItemNote === poNoteStripped ||
+        /^\[(?:單據|發票|單據號|發票號)[:：]\s*[^\]]+\]$/.test(rawItemNote);
+      return {
+        ...it,
+        name: resolvedName,
+        product_name: resolvedName,
+        note: isRedundantNote ? '' : rawItemNote
+      };
+    })
+  };
+};
+
+const sanitizePurchaseOrdersForCloud = (purchaseOrders: PurchaseOrder[], products: Product[]): PurchaseOrder[] =>
+  (purchaseOrders || []).map(po => sanitizeSinglePOForCloud(po, products));
+
+const isRemotePOStaleComparedToLocal = (localPO: PurchaseOrder, remotePO: any): boolean => {
+  if (!localPO || !remotePO) return false;
+  const norm = (v: any) => String(v ?? '').trim();
+  if (norm(localPO.vendor_name) !== norm(remotePO.vendor_name)) return true;
+  if (norm(localPO.status) !== norm(remotePO.status)) return true;
+  if (norm(localPO.order_date) !== norm(remotePO.order_date)) return true;
+  if (norm(localPO.expected_date) !== norm(remotePO.expected_date)) return true;
+  if (norm(localPO.note) !== norm(remotePO.note)) return true;
+  if (norm(localPO.invoice_number) !== norm(remotePO.invoice_number)) return true;
+  if (norm(localPO.invoice_image_url) !== norm(remotePO.invoice_image_url)) return true;
+
+  const localItems = Array.isArray(localPO.items) ? localPO.items : [];
+  const remoteItems = Array.isArray(remotePO.items) ? remotePO.items : [];
+  if (localItems.length !== remoteItems.length) return true;
+  for (let i = 0; i < localItems.length; i++) {
+    const li = localItems[i];
+    const ri = remoteItems[i];
+    if (!ri) return true;
+    if (norm(li.product_id) !== norm(ri.product_id)) return true;
+    if (norm(li.specification) !== norm(ri.specification)) return true;
+    if (Number(li.ordered_quantity || 0) !== Number(ri.ordered_quantity || 0)) return true;
+    if (Number(li.received_quantity || 0) !== Number(ri.received_quantity || 0)) return true;
+    if (Number(li.cost_price || 0) !== Number(ri.cost_price || 0)) return true;
+  }
+  return false;
+};
+
+export const mergeAndProtectPurchaseOrders = (
+  remotePOs: any[],
+  currentLocalPOs: PurchaseOrder[],
+  pendingSyncQueue?: SyncItem[]
+): PurchaseOrder[] => {
+  const nowMs = Date.now();
+  for (const [k, v] of recentlyEditedPOs.entries()) {
+    if (v.expiresAt <= nowMs) recentlyEditedPOs.delete(k);
+  }
+  for (const [k, exp] of recentlyDeletedPOIds.entries()) {
+    if (exp <= nowMs) recentlyDeletedPOIds.delete(k);
+  }
+
+  const queue = pendingSyncQueue ?? (useStore.getState ? (useStore.getState().syncQueue || []) : []);
+  const pendingEditedMap = new Map<string, PurchaseOrder>();
+  const pendingDeletedSet = new Set<string>();
+  queue.forEach(q => {
+    if ((q.action === 'addPurchaseOrder' || q.action === 'editPurchaseOrder') && q.payload?.po_id) {
+      pendingEditedMap.set(String(q.payload.po_id).trim(), q.payload as PurchaseOrder);
+      pendingDeletedSet.delete(String(q.payload.po_id).trim());
+    } else if (q.action === 'deletePurchaseOrder' && q.payload?.po_id) {
+      const delId = String(q.payload.po_id).trim();
+      pendingDeletedSet.add(delId);
+      pendingEditedMap.delete(delId);
+    }
+  });
+
   const localPOMap = new Map<string, PurchaseOrder>();
   (currentLocalPOs || []).forEach(p => {
     if (p && p.po_id) {
-      localPOMap.set(p.po_id, p);
+      localPOMap.set(String(p.po_id).trim(), p);
     }
   });
 
@@ -801,9 +901,40 @@ export const mergeAndProtectPurchaseOrders = (remotePOs: any[], currentLocalPOs:
     }
   });
 
-  const processedList: PurchaseOrder[] = (remotePOs || []).map((remote: any) => {
+  const processedList: PurchaseOrder[] = [];
+
+  (remotePOs || []).forEach((remote: any) => {
     const poId = String(remote.po_id || '').trim();
+    if (!poId) return;
+
+    // 1. Protect pending deletes & recently deleted POs from resurrecting
+    const recentDelExp = recentlyDeletedPOIds.get(poId);
+    if (pendingDeletedSet.has(poId) || (recentDelExp && recentDelExp > nowMs)) {
+      return;
+    }
+
+    // 2. Protect unsynced local edits sitting in syncQueue
+    if (pendingEditedMap.has(poId)) {
+      processedList.push(pendingEditedMap.get(poId)!);
+      return;
+    }
+
+    // 3. Protect recently edited POs within protection window
+    const recentEdit = recentlyEditedPOs.get(poId);
+    if (recentEdit && recentEdit.expiresAt > nowMs) {
+      processedList.push(recentEdit.po);
+      return;
+    }
+
     const local = localPOMap.get(poId);
+    const localUpdatedMs = Math.max(parseIsoTimestamp(local?.updated_at), parseIsoTimestamp(local?.manual_edited_at));
+    const remoteUpdatedMs = Math.max(parseIsoTimestamp(remote?.updated_at), parseIsoTimestamp(remote?.manual_edited_at));
+
+    // 4. Timestamp protection: if local timestamp is strictly newer than remote, keep local
+    if (local && remoteUpdatedMs > 0 && localUpdatedMs > remoteUpdatedMs) {
+      processedList.push(local);
+      return;
+    }
 
     // Extract invoice_number from various possible fields in Sheets
     let invoiceNumber = String(
@@ -836,10 +967,10 @@ export const mergeAndProtectPurchaseOrders = (remotePOs: any[], currentLocalPOs:
     }
 
     // Build normalized note with invoice number tag
-    let finalNote = remote.note || (local ? local.note : '') || '';
+    let finalNote = remote.note !== undefined ? String(remote.note || '') : ((local ? local.note : '') || '');
     if (invoiceNumber) {
       if (!finalNote.includes(`[單據: ${invoiceNumber}]`) && !finalNote.includes(`[發票: ${invoiceNumber}]`)) {
-        const cleanNote = finalNote.replace(/\[(?:單據|發票|單據號|發票號)[:：]\s*[^\]]+\]/g, '').trim();
+        const cleanNote = stripInvoiceTagFromNote(finalNote);
         finalNote = cleanNote ? `[單據: ${invoiceNumber}] ${cleanNote}` : `[單據: ${invoiceNumber}]`;
       }
     }
@@ -862,6 +993,9 @@ export const mergeAndProtectPurchaseOrders = (remotePOs: any[], currentLocalPOs:
         '未命名商品'
       ).trim();
 
+      const rawItemNote = String(it.note || '').trim();
+      const cleanItemNote = (rawItemNote === finalNote.trim() || rawItemNote === String(remote.note || '').trim()) ? '' : rawItemNote;
+
       return {
         product_id: pid,
         name: resolvedName,
@@ -870,32 +1004,50 @@ export const mergeAndProtectPurchaseOrders = (remotePOs: any[], currentLocalPOs:
         ordered_quantity: Number(it.ordered_quantity !== undefined ? it.ordered_quantity : (it.quantity || 1)) || 0,
         received_quantity: Number(it.received_quantity !== undefined ? it.received_quantity : (localItem?.received_quantity || 0)) || 0,
         cost_price: Number(it.cost_price !== undefined ? it.cost_price : (localItem?.cost_price || 0)) || 0,
-        note: it.note || ''
+        note: cleanItemNote
       };
     });
 
-    return {
+    const remoteManualOverride =
+      remote.manual_override === true ||
+      String(remote.manual_override || '').trim().toUpperCase() === 'TRUE';
+    const remoteManualEditedAt = remote.manual_edited_at ? String(remote.manual_edited_at).trim() : undefined;
+
+    const mergedPO: PurchaseOrder = {
       po_id: poId,
       vendor_id: String(remote.vendor_id || (local ? local.vendor_id : '') || '').trim(),
       vendor_name: String(remote.vendor_name || (local ? local.vendor_name : '') || '').trim(),
       status: (remote.status || (local ? local.status : 'pending')) as PurchaseOrder['status'],
       order_date: String(remote.order_date || (local ? local.order_date : '') || '').trim(),
-      expected_date: String(remote.expected_date || (local ? local.expected_date : '') || '').trim(),
+      expected_date: String(remote.expected_date !== undefined ? (remote.expected_date || '') : (local ? (local.expected_date || '') : '')).trim(),
       note: finalNote,
       operator: String(remote.operator || (local ? local.operator : '') || '').trim(),
       invoice_number: invoiceNumber,
       invoice_image_url: invoiceImageUrl,
       items: items.length > 0 ? items : (local ? local.items : []),
       created_at: remote.created_at || (local ? local.created_at : undefined),
-      updated_at: remote.updated_at || (local ? local.updated_at : undefined)
+      updated_at: remote.updated_at || (local ? local.updated_at : undefined),
+      manual_edited_at: remoteManualEditedAt || (local ? local.manual_edited_at : undefined),
+      manual_override: remoteManualOverride || (remote.manual_override === undefined && Boolean(local?.manual_override))
     };
+
+    processedList.push(mergedPO);
   });
 
-  // Also preserve any local POs that might not yet be in remote (e.g. offline created)
+  // Also preserve any local POs that might not yet be in remote (e.g. offline created or pending edit)
   const remotePoIds = new Set(processedList.map(p => p.po_id));
+  pendingEditedMap.forEach((pendingPO, poId) => {
+    if (!remotePoIds.has(poId) && !pendingDeletedSet.has(poId)) {
+      processedList.push(pendingPO);
+      remotePoIds.add(poId);
+    }
+  });
   (currentLocalPOs || []).forEach(localPO => {
-    if (localPO && localPO.po_id && !remotePoIds.has(localPO.po_id)) {
-      processedList.push(localPO);
+    if (localPO && localPO.po_id && !remotePoIds.has(localPO.po_id) && !pendingDeletedSet.has(localPO.po_id)) {
+      const recentDelExp = recentlyDeletedPOIds.get(localPO.po_id);
+      if (!recentDelExp || recentDelExp <= nowMs) {
+        processedList.push(localPO);
+      }
     }
   });
 
@@ -1497,10 +1649,12 @@ export const getResolvedPoItems = (
     }
   });
 
+  const isManualPriority = Boolean(po.manual_override || po.manual_edited_at);
+
   return po.items.map((it, idx) => {
     const fromTx = txReceivedByIndex.get(idx) || 0;
     const stored = Number(it.received_quantity || 0);
-    const effective = Math.max(stored, fromTx);
+    const effective = isManualPriority ? stored : Math.max(stored, fromTx);
     const ordered = Number(it.ordered_quantity || 0);
     const remaining = Math.max(0, ordered - effective);
     const resolvedName = (it.name || (it as any).product_name || it.product_id || '').trim();
@@ -1527,9 +1681,10 @@ export const reconcilePurchaseOrdersWithTransactions = (
 
     const totalOrdered = resolved.reduce((s, it) => s + Number(it.ordered_quantity || 0), 0);
     const totalReceived = resolved.reduce((s, it) => s + Number(it.effective_received_quantity || 0), 0);
+    const isManualPriority = Boolean(po.manual_override || po.manual_edited_at);
 
     let status = po.status;
-    if (status !== 'completed' && status !== 'cancelled') {
+    if (!isManualPriority && status !== 'completed' && status !== 'cancelled') {
       if (totalReceived >= totalOrdered && totalOrdered > 0) {
         status = 'completed';
       } else if (totalReceived > 0) {
@@ -1578,7 +1733,7 @@ interface AppState {
   refreshTransactions: () => Promise<boolean>;
   refreshVendors: () => Promise<boolean>;
   addPurchaseOrder: (po: Omit<PurchaseOrder, 'created_at' | 'updated_at'>) => Promise<void>;
-  updatePurchaseOrder: (poId: string, updated: Partial<PurchaseOrder>, options?: { skipOverwriteTransactions?: boolean }) => Promise<void>;
+  updatePurchaseOrder: (poId: string, updated: Partial<PurchaseOrder>, options?: { skipOverwriteTransactions?: boolean; isAutoStockIn?: boolean }) => Promise<void>;
   deletePurchaseOrder: (poId: string) => Promise<void>;
   uploadInvoiceImage: (base64Data: string, fileName?: string) => Promise<{ success: boolean; url?: string; viewUrl?: string; fileId?: string; error?: string }>;
   batchStockInFromInvoice: (params: {
@@ -2319,10 +2474,18 @@ export const useStore = create<AppState>((set, get) => ({
         } else {
           updatedPOs = [po, ...currentPOs];
         }
+        if (po.po_id) {
+          recentlyDeletedPOIds.delete(po.po_id);
+          recentlyEditedPOs.set(po.po_id, { po, expiresAt: Date.now() + PO_LOCAL_EDIT_PROTECTION_MS });
+        }
         await dbPurchaseOrders.setItem(po.po_id, po);
         set({ purchaseOrders: updatedPOs });
     } else if (action === 'deletePurchaseOrder') {
         const poId = updatedPayload.po_id;
+        if (poId) {
+          recentlyEditedPOs.delete(poId);
+          recentlyDeletedPOIds.set(poId, Date.now() + PO_LOCAL_EDIT_PROTECTION_MS);
+        }
         const currentPOs = get().purchaseOrders;
         const updatedPOs = currentPOs.filter(p => p.po_id !== poId);
         await dbPurchaseOrders.removeItem(poId);
@@ -2417,8 +2580,86 @@ export const useStore = create<AppState>((set, get) => ({
           }
         }
 
-        // Standard actions (stockIn, editPurchaseOrder, etc.)
-        const res = await fetch(`${gasApiUrl}?action=${item.action}`, {
+        // Purchase Order actions with strict JSON verification + overwritePurchaseOrders fallback
+        if (item.action === 'editPurchaseOrder' || item.action === 'addPurchaseOrder' || item.action === 'deletePurchaseOrder') {
+          let poSyncSuccess = false;
+          let poErrorMsg = '';
+
+          try {
+            const payloadToSend = item.action === 'deletePurchaseOrder'
+              ? item.payload
+              : sanitizeSinglePOForCloud(item.payload as PurchaseOrder, get().products);
+            const res = await fetch(buildGasActionUrl(gasApiUrl, item.action), {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify(payloadToSend)
+            });
+
+            if (res.ok) {
+              const resText = await res.text();
+              try {
+                const resJson = JSON.parse(resText);
+                if (resJson && resJson.success === true) {
+                  poSyncSuccess = true;
+                } else {
+                  poErrorMsg = resJson?.error || '伺服器未回傳成功確認';
+                }
+              } catch {
+                poErrorMsg = '採購單同步回應非 JSON 格式';
+              }
+            } else {
+              poErrorMsg = `HTTP ${res.status}`;
+            }
+          } catch (poErr: any) {
+            poErrorMsg = poErr?.message || '網路請求異常';
+          }
+
+          if (!poSyncSuccess) {
+            console.warn(`${item.action} failed or returned non-JSON, falling back to overwritePurchaseOrders:`, poErrorMsg);
+            try {
+              const sanitizedList = sanitizePurchaseOrdersForCloud(get().purchaseOrders, get().products);
+              const fbRes = await fetch(buildGasActionUrl(gasApiUrl, 'overwritePurchaseOrders'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify(sanitizedList)
+              });
+              if (fbRes.ok) {
+                const fbText = await fbRes.text();
+                try {
+                  const fbJson = JSON.parse(fbText);
+                  if (fbJson && fbJson.success === true) {
+                    poSyncSuccess = true;
+                    const targetPoId = item.payload?.po_id;
+                    if (targetPoId && recentlyEditedPOs.has(targetPoId)) {
+                      const entry = recentlyEditedPOs.get(targetPoId)!;
+                      entry.fallbackTriggered = true;
+                    }
+                  } else {
+                    poErrorMsg = fbJson?.error || poErrorMsg;
+                  }
+                } catch {
+                  poErrorMsg = '備援整表同步回應非 JSON 格式';
+                }
+              } else {
+                poErrorMsg = `備援寫入 HTTP ${fbRes.status}`;
+              }
+            } catch (fbErr: any) {
+              poErrorMsg = fbErr?.message || poErrorMsg;
+            }
+          }
+
+          if (poSyncSuccess) {
+            await dbSyncQueue.removeItem(item.id);
+            set((state) => ({ syncQueue: state.syncQueue.filter(q => q.id !== item.id) }));
+          } else {
+            set({ error: `同步失敗： ${item.action} (${poErrorMsg})` });
+            hasError = true;
+          }
+          continue;
+        }
+
+        // Standard actions (stockIn, editProduct, etc.)
+        const res = await fetch(buildGasActionUrl(gasApiUrl, item.action), {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify(item.payload)
@@ -2833,12 +3074,33 @@ export const useStore = create<AppState>((set, get) => ({
 
       // Purchase Orders
       try {
-        const rPO = await fetch(`${cleanUrl}?action=getPurchaseOrders`);
+        const rPO = await fetch(buildUrl('getPurchaseOrders'));
         if (rPO.ok) {
           const dPO = await rPO.json();
           if (Array.isArray(dPO)) {
+            // If a recently edited PO was returned stale from GAS (e.g. sheet header mismatch in single-row editPurchaseOrder),
+            // auto-trigger overwritePurchaseOrders once in background so the sheet heals automatically.
+            if (get().syncQueue.length === 0) {
+              const nowMs = Date.now();
+              let needsOverwriteRepair = false;
+              for (const [poId, entry] of recentlyEditedPOs.entries()) {
+                if (entry.expiresAt > nowMs && !entry.fallbackTriggered) {
+                  const remoteMatch = dPO.find((r: any) => String(r?.po_id || '').trim() === poId);
+                  if (!remoteMatch || isRemotePOStaleComparedToLocal(entry.po, remoteMatch)) {
+                    entry.fallbackTriggered = true;
+                    needsOverwriteRepair = true;
+                  }
+                }
+              }
+              if (needsOverwriteRepair) {
+                get().overwriteCloudPurchaseOrders().catch(err =>
+                  console.warn('Auto overwritePurchaseOrders fallback failed:', err)
+                );
+              }
+            }
+
             const currentPOs = get().purchaseOrders;
-            const mergedPOs = mergeAndProtectPurchaseOrders(dPO, currentPOs);
+            const mergedPOs = mergeAndProtectPurchaseOrders(dPO, currentPOs, get().syncQueue);
             const currentTxs = (validT && validT.length > 0) ? validT : (get().transactions || []);
             const reconciledPOs = reconcilePurchaseOrdersWithTransactions(mergedPOs, currentTxs);
             await dbPurchaseOrders.clear();
@@ -3123,19 +3385,18 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   refreshPurchaseOrders: async () => {
-    const { gasApiUrl, showToast, purchaseOrders, transactions } = get();
+    const { gasApiUrl, showToast, purchaseOrders, transactions, syncQueue } = get();
     if (!gasApiUrl || !gasApiUrl.trim().startsWith('http')) {
       showToast("ℹ️ 尚未設定 Google Apps Script 網址");
       return false;
     }
     set({ isLoading: true });
     try {
-      const cleanUrl = gasApiUrl.trim();
-      const res = await fetch(`${cleanUrl}?action=getPurchaseOrders`);
+      const res = await fetch(buildGasActionUrl(gasApiUrl, 'getPurchaseOrders'));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data)) {
-        const mergedPOs = mergeAndProtectPurchaseOrders(data, purchaseOrders);
+        const mergedPOs = mergeAndProtectPurchaseOrders(data, purchaseOrders, syncQueue);
         const reconciledPOs = reconcilePurchaseOrdersWithTransactions(mergedPOs, transactions || []);
         await dbPurchaseOrders.clear();
         for (const po of reconciledPOs) {
@@ -4020,27 +4281,27 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   fetchPurchaseOrders: async () => {
-    const { gasApiUrl, showToast, purchaseOrders } = get();
+    const { gasApiUrl, showToast, purchaseOrders, transactions, syncQueue } = get();
     if (!gasApiUrl || !gasApiUrl.trim() || !gasApiUrl.trim().startsWith('http')) {
       showToast("ℹ️ 尚未設定 Google Apps Script 網址，目前使用本機離線資料");
       return;
     }
     set({ isLoading: true });
     try {
-      const cleanUrl = gasApiUrl.trim();
-      const res = await fetch(`${cleanUrl}?action=getPurchaseOrders`);
+      const res = await fetch(buildGasActionUrl(gasApiUrl, 'getPurchaseOrders'));
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          const mergedPOs = mergeAndProtectPurchaseOrders(data, purchaseOrders);
+          const mergedPOs = mergeAndProtectPurchaseOrders(data, purchaseOrders, syncQueue);
+          const reconciledPOs = reconcilePurchaseOrdersWithTransactions(mergedPOs, transactions || []);
           await dbPurchaseOrders.clear();
-          for (const po of mergedPOs) {
+          for (const po of reconciledPOs) {
             if (po && po.po_id) {
               await dbPurchaseOrders.setItem(po.po_id, po);
             }
           }
-          set({ purchaseOrders: mergedPOs });
-          showToast(`✨ 成功同步 ${mergedPOs.length} 筆採購訂貨單！`);
+          set({ purchaseOrders: reconciledPOs });
+          showToast(`✨ 成功同步 ${reconciledPOs.length} 筆採購訂貨單！`);
         }
       } else {
         throw new Error(`雲端回應狀態碼: ${res.status}`);
@@ -4058,7 +4319,7 @@ export const useStore = create<AppState>((set, get) => ({
     const invNum = (poData.invoice_number || '').trim();
     let note = poData.note || '';
     if (invNum && !note.includes(`[單據: ${invNum}]`) && !note.includes(`[發票: ${invNum}]`)) {
-      const cleanNote = note.replace(/\[(?:單據|發票|單據號|發票號)[:：]\s*[^\]]+\]/g, '').trim();
+      const cleanNote = stripInvoiceTagFromNote(note);
       note = cleanNote ? `[單據: ${invNum}] ${cleanNote}` : `[單據: ${invNum}]`;
     }
 
@@ -4070,6 +4331,7 @@ export const useStore = create<AppState>((set, get) => ({
       created_at: now,
       updated_at: now
     };
+    recentlyEditedPOs.set(po.po_id, { po, expiresAt: Date.now() + PO_LOCAL_EDIT_PROTECTION_MS });
     await dbPurchaseOrders.setItem(po.po_id, po);
     set((state) => ({ purchaseOrders: [po, ...state.purchaseOrders] }));
     await get().enqueueAction('addPurchaseOrder', po);
@@ -4081,20 +4343,54 @@ export const useStore = create<AppState>((set, get) => ({
     const target = currentPOs.find(p => p.po_id === poId);
     if (!target) return;
 
+    const nowIso = new Date().toISOString();
     const invNum = updated.invoice_number !== undefined ? (updated.invoice_number || '').trim() : (target.invoice_number || '').trim();
-    let note = updated.note !== undefined ? updated.note : (target.note || '');
-    if (invNum && !note.includes(`[單據: ${invNum}]`) && !note.includes(`[發票: ${invNum}]`)) {
-      const cleanNote = note.replace(/\[(?:單據|發票|單據號|發票號)[:：]\s*[^\]]+\]/g, '').trim();
-      note = cleanNote ? `[單據: ${invNum}] ${cleanNote}` : `[單據: ${invNum}]`;
+    let note = updated.note !== undefined ? String(updated.note || '') : String(target.note || '');
+
+    if (invNum) {
+      if (!note.includes(`[單據: ${invNum}]`) && !note.includes(`[發票: ${invNum}]`)) {
+        const cleanNote = stripInvoiceTagFromNote(note);
+        note = cleanNote ? `[單據: ${invNum}] ${cleanNote}` : `[單據: ${invNum}]`;
+      }
+    } else if (updated.invoice_number !== undefined) {
+      // User explicitly cleared invoice_number: remove stale [單據: ...] tags so it doesn't resurrect
+      note = stripInvoiceTagFromNote(note);
     }
 
+    const rawItems = updated.items !== undefined ? updated.items : target.items;
+    const oldNoteClean = String(target.note || '').trim();
+    const newNoteClean = note.trim();
+    const cleanedItems = (rawItems || []).map(it => {
+      const rawItemNote = String(it.note || '').trim();
+      const isStaleItemNote =
+        !rawItemNote ||
+        rawItemNote === oldNoteClean ||
+        rawItemNote === newNoteClean ||
+        /^\[(?:單據|發票|單據號|發票號)[:：]\s*[^\]]+\]$/.test(rawItemNote);
+      return {
+        ...it,
+        note: isStaleItemNote ? '' : rawItemNote
+      };
+    });
+
+    const isManualEdit = !options?.isAutoStockIn;
     const merged: PurchaseOrder = {
       ...target,
       ...updated,
       invoice_number: invNum,
       note,
-      updated_at: new Date().toISOString()
+      items: cleanedItems,
+      updated_at: nowIso,
+      ...(isManualEdit
+        ? { manual_edited_at: nowIso, manual_override: true }
+        : {
+            manual_edited_at: target.manual_edited_at,
+            manual_override: target.manual_override
+          })
     };
+
+    recentlyDeletedPOIds.delete(poId);
+    recentlyEditedPOs.set(poId, { po: merged, expiresAt: Date.now() + PO_LOCAL_EDIT_PROTECTION_MS });
 
     await dbPurchaseOrders.setItem(poId, merged);
     set((state) => ({
@@ -4154,27 +4450,19 @@ export const useStore = create<AppState>((set, get) => ({
     if (!gasApiUrl) return false;
     set({ isLoading: true, error: null });
     try {
-      const prodNameMap = new Map(products.map(p => [String(p.product_id || '').toLowerCase().trim(), p.name]));
-      const sanitized = purchaseOrders.map(po => ({
-        ...po,
-        items: (po.items || []).map(it => {
-          const cleanPid = String(it.product_id || '').toLowerCase().trim();
-          const resolvedName = (it.name || (it as any).product_name || (cleanPid ? prodNameMap.get(cleanPid) : '') || it.product_id || '').trim();
-          return {
-            ...it,
-            name: resolvedName,
-            product_name: resolvedName
-          };
-        })
-      }));
-      const res = await fetch(`${gasApiUrl}?action=overwritePurchaseOrders`, {
+      const sanitized = sanitizePurchaseOrdersForCloud(purchaseOrders, products);
+      const res = await fetch(buildGasActionUrl(gasApiUrl, 'overwritePurchaseOrders'), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(sanitized)
       });
       if (res.ok) {
-        const d = await res.json();
-        if (d.success) {
+        const resText = await res.text();
+        let d: any = null;
+        try {
+          d = JSON.parse(resText);
+        } catch {}
+        if (d && d.success === true) {
           get().showToast(`✅ 採購訂單工作表已同步更新！共覆載了 ${purchaseOrders.length} 筆採購單。`);
           return true;
         }
@@ -4336,9 +4624,11 @@ export const useStore = create<AppState>((set, get) => ({
         let allFullyReceived = true;
         let anyReceived = false;
 
+        const resolvedCurrentItems = getResolvedPoItems(po, get().transactions || []);
         const updatedItems = (po.items || []).map((poItem, pIdx) => {
           const deliveredQty = deliveredByIndex.get(pIdx) || 0;
-          const currentReceived = (poItem.received_quantity || 0) + deliveredQty;
+          const baseReceived = resolvedCurrentItems[pIdx]?.effective_received_quantity ?? (poItem.received_quantity || 0);
+          const currentReceived = baseReceived + deliveredQty;
           
           if (currentReceived > 0) anyReceived = true;
           if (currentReceived < poItem.ordered_quantity) allFullyReceived = false;
@@ -4361,7 +4651,7 @@ export const useStore = create<AppState>((set, get) => ({
           items: updatedItems,
           invoice_image_url: invoice_image_url || po.invoice_image_url,
           ...(invoice_number ? { invoice_number } : {})
-        }, { skipOverwriteTransactions: true });
+        }, { skipOverwriteTransactions: true, isAutoStockIn: true });
       }
     }
 
@@ -4369,16 +4659,17 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   completeAndStockInAllRemainingPO: async (poId: string) => {
-    const { purchaseOrders, products, batchStockInFromInvoice, updatePurchaseOrder, showToast } = get();
+    const { purchaseOrders, products, transactions, batchStockInFromInvoice, updatePurchaseOrder, showToast } = get();
     const po = purchaseOrders.find(p => p.po_id === poId);
     if (!po) {
       showToast('⚠️ 找不到指定的採購訂單');
       return;
     }
 
+    const resolvedItems = getResolvedPoItems(po, transactions || []);
     const itemsToStockIn: any[] = [];
-    (po.items || []).forEach(it => {
-      const remaining = Math.max(0, Number(it.ordered_quantity || 0) - Number(it.received_quantity || 0));
+    resolvedItems.forEach(it => {
+      const remaining = Math.max(0, Number(it.ordered_quantity || 0) - Number(it.effective_received_quantity || 0));
       // Only stock in items that have a positive remaining quantity!
       if (remaining > 0) {
         const cleanPid = String(it.product_id || '').trim().toLowerCase();
@@ -4411,7 +4702,7 @@ export const useStore = create<AppState>((set, get) => ({
 
     if (itemsToStockIn.length === 0) {
       // All items were already fully received! Directly complete PO without adding duplicate inventory.
-      await updatePurchaseOrder(po.po_id, { status: 'completed' }, { skipOverwriteTransactions: true });
+      await updatePurchaseOrder(po.po_id, { status: 'completed' }, { skipOverwriteTransactions: true, isAutoStockIn: true });
       showToast(`✅ 採購單 ${po.po_id} 所有品項先前已全數到貨，已直接標記為結案！`);
       return;
     }

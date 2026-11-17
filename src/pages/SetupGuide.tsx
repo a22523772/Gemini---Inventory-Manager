@@ -577,6 +577,30 @@ export default function SetupGuide() {
   return map;
 }
 
+function normalizePoHeader(h) {
+  var key = String(h || '').trim().toLowerCase();
+  if (key === 'po_id' || key === '採購單號' || key === '採購單id') return 'po_id';
+  if (key === 'vendor_id' || key === '廠商編號' || key === '廠商id') return 'vendor_id';
+  if (key === 'vendor_name' || key === '廠商名稱' || key === '廠商') return 'vendor_name';
+  if (key === 'product_id' || key === '商品編號' || key === '商品代碼' || key === '商品id') return 'product_id';
+  if (key === 'name' || key === 'product_name' || key === '商品名稱' || key === '品名') return 'name';
+  if (key === 'specification' || key === '規格') return 'specification';
+  if (key === 'ordered_quantity' || key === 'order_quantity' || key === 'quantity' || key === '訂購數量' || key === '採購數量') return 'ordered_quantity';
+  if (key === 'received_quantity' || key === 'delivered_quantity' || key === '已到貨數量' || key === '已到貨' || key === '已收數量') return 'received_quantity';
+  if (key === 'cost_price' || key === '進價' || key === '成本' || key === '約定進價') return 'cost_price';
+  if (key === 'status' || key === '狀態') return 'status';
+  if (key === 'order_date' || key === '下單日期') return 'order_date';
+  if (key === 'expected_date' || key === '預計到貨日') return 'expected_date';
+  if (key === 'note' || key === '備註') return 'note';
+  if (key === 'operator' || key === '操作人員') return 'operator';
+  if (key === 'invoice_number' || key === '發票號碼' || key === '單據號' || key === '發票號' || key === '單號' || key === '發票號/單據號') return 'invoice_number';
+  if (key === 'invoice_image_url' || key === '單據照片' || key === '發票照片') return 'invoice_image_url';
+  if (key === 'updated_at' || key === '更新時間') return 'updated_at';
+  if (key === 'manual_edited_at') return 'manual_edited_at';
+  if (key === 'manual_override') return 'manual_override';
+  return String(h || '').trim();
+}
+
 function doPost(e) {
   var action = e.parameter.action;
   var data = JSON.parse(e.postData.contents);
@@ -2004,122 +2028,48 @@ function doPost(e) {
   }
 
   if (action === 'addPurchaseOrder' || action === 'savePurchaseOrders' || action === 'editPurchaseOrder') {
-    var poSheet = ss.getSheetByName('purchase_orders');
-    if (!poSheet) {
-      poSheet = ss.insertSheet('purchase_orders');
-      poSheet.appendRow(['po_id', 'vendor_id', 'vendor_name', 'product_id', 'specification', 'name', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_number', 'invoice_image_url']);
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(15000);
+    } catch (e) {
+      return ContentService.createTextOutput(JSON.stringify({success: false, error: '系統忙碌中，請稍候重試'})).setMimeType(ContentService.MimeType.JSON);
     }
-    var headers = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
-    if (headers.indexOf('invoice_number') === -1) {
-      headers.push('invoice_number');
-      poSheet.getRange(1, headers.length).setValue('invoice_number');
-    }
-    if (headers.indexOf('invoice_image_url') === -1) {
-      headers.push('invoice_image_url');
-      poSheet.getRange(1, headers.length).setValue('invoice_image_url');
-    }
-    var poNameColIdx = headers.indexOf('name');
-    if (poNameColIdx === -1) {
-      for (var ph = 0; ph < headers.length; ph++) {
-        var phStr = String(headers[ph] || '').trim().toLowerCase();
-        if (phStr === 'product_name' || phStr === '商品名稱' || phStr === '品名') {
-          poSheet.getRange(1, ph + 1).setValue('name');
-          headers[ph] = 'name';
-          poNameColIdx = ph;
-          break;
+    try {
+      var poSheet = ss.getSheetByName('purchase_orders');
+      if (!poSheet) {
+        poSheet = ss.insertSheet('purchase_orders');
+        poSheet.appendRow(['po_id', 'vendor_id', 'vendor_name', 'product_id', 'specification', 'name', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_number', 'invoice_image_url', 'updated_at', 'manual_edited_at', 'manual_override']);
+      }
+      var headers = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
+      var normHeaders = [];
+      for (var nh = 0; nh < headers.length; nh++) {
+        normHeaders.push(normalizePoHeader(headers[nh]));
+      }
+      var requiredPoCols = ['invoice_number', 'invoice_image_url', 'name', 'updated_at', 'manual_edited_at', 'manual_override'];
+      for (var rc = 0; rc < requiredPoCols.length; rc++) {
+        var reqCol = requiredPoCols[rc];
+        if (normHeaders.indexOf(reqCol) === -1) {
+          headers.push(reqCol);
+          normHeaders.push(reqCol);
+          poSheet.getRange(1, headers.length).setValue(reqCol);
         }
       }
-      if (poNameColIdx === -1) {
-        headers.push('name');
-        poSheet.getRange(1, headers.length).setValue('name');
-      }
-    }
-    var poIdIdx = headers.indexOf('po_id');
-    
-    var poList = Array.isArray(data) ? data : [data];
-    var prodNameMapPO = getProdNameMap(ss);
-    for (var p = 0; p < poList.length; p++) {
-      var po = poList[p];
-      if (poSheet.getLastRow() > 1 && poIdIdx !== -1) {
-        var values = poSheet.getDataRange().getValues();
-        for (var r = values.length - 1; r >= 1; r--) {
-          if (String(values[r][poIdIdx]).trim() === String(po.po_id).trim()) {
-            poSheet.deleteRow(r + 1);
-          }
-        }
-      }
-      
-      var items = po.items || [{
-        product_id: po.product_id || '',
-        name: po.name || po.product_name || '',
-        specification: po.specification || '',
-        ordered_quantity: po.ordered_quantity || po.quantity || 1,
-        received_quantity: po.received_quantity || 0,
-        cost_price: po.cost_price || 0,
-        note: po.item_note || ''
-      }];
-      
-      for (var it = 0; it < items.length; it++) {
-        var item = items[it];
-        var cleanPoPid = String(item.product_id || '').trim().toLowerCase();
-        var row = [];
-        for (var h = 0; h < headers.length; h++) {
-          var colName = headers[h];
-          var val = '';
-          if (colName === 'po_id') val = po.po_id;
-          else if (colName === 'vendor_id') val = po.vendor_id || '';
-          else if (colName === 'vendor_name') val = po.vendor_name || '';
-          else if (colName === 'product_id') val = item.product_id || '';
-          else if (colName === 'name') val = item.name || item.product_name || (cleanPoPid ? prodNameMapPO[cleanPoPid] : '') || '';
-          else if (colName === 'specification') val = item.specification || '';
-          else if (colName === 'ordered_quantity') val = Number(item.ordered_quantity) || 0;
-          else if (colName === 'received_quantity') val = Number(item.received_quantity) || 0;
-          else if (colName === 'cost_price') val = Number(item.cost_price) || 0;
-          else if (colName === 'status') val = po.status || 'pending';
-          else if (colName === 'order_date') val = po.order_date || '';
-          else if (colName === 'expected_date') val = po.expected_date || '';
-          else if (colName === 'note') val = item.note || po.note || '';
-          else if (colName === 'operator') val = po.operator || '';
-          else if (colName === 'invoice_number' || colName === '發票號碼' || colName === '單據號' || colName === '發票號' || colName === '單號') val = po.invoice_number || '';
-          else if (colName === 'invoice_image_url') val = po.invoice_image_url || '';
-          row.push(val);
-        }
-        poSheet.appendRow(row);
-      }
-    }
-    return ContentService.createTextOutput(JSON.stringify({success: true})).setMimeType(ContentService.MimeType.JSON);
-  }
+      var poIdIdx = normHeaders.indexOf('po_id');
 
-  if (action === 'overwritePurchaseOrders') {
-    var poSheet = ss.getSheetByName('purchase_orders');
-    if (!poSheet) poSheet = ss.insertSheet('purchase_orders');
-    var poHeaders = ['po_id', 'vendor_id', 'vendor_name', 'product_id', 'specification', 'name', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_number', 'invoice_image_url'];
-    if (poSheet.getLastRow() > 0) {
-      var existingPOH = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
-      if (existingPOH && existingPOH.length > 0 && String(existingPOH[0]).trim()) {
-        poHeaders = existingPOH;
-        if (poHeaders.indexOf('name') === -1) {
-          var foundPoAlias = false;
-          for (var ph = 0; ph < poHeaders.length; ph++) {
-            var phStr = String(poHeaders[ph] || '').trim().toLowerCase();
-            if (phStr === 'product_name' || phStr === '商品名稱' || phStr === '品名') {
-              poHeaders[ph] = 'name';
-              foundPoAlias = true;
-              break;
+      var poList = Array.isArray(data) ? data : [data];
+      var prodNameMapPO = getProdNameMap(ss);
+      for (var p = 0; p < poList.length; p++) {
+        var po = poList[p];
+        var targetPoId = String(po.po_id || '').trim();
+        if (poSheet.getLastRow() > 1 && poIdIdx !== -1 && targetPoId) {
+          var values = poSheet.getDataRange().getDisplayValues();
+          for (var r = values.length - 1; r >= 1; r--) {
+            if (String(values[r][poIdIdx] || '').trim() === targetPoId) {
+              poSheet.deleteRow(r + 1);
             }
           }
-          if (!foundPoAlias) poHeaders.push('name');
         }
-      }
-      poSheet.clear();
-      poSheet.clearFormats();
-    }
-    poSheet.appendRow(poHeaders);
-    if (data && data.length > 0) {
-      var prodNameMapPOOverwrite = getProdNameMap(ss);
-      var rows = [];
-      for (var p = 0; p < data.length; p++) {
-        var po = data[p];
+
         var items = po.items && po.items.length > 0 ? po.items : [{
           product_id: po.product_id || '',
           name: po.name || po.product_name || '',
@@ -2127,20 +2077,21 @@ function doPost(e) {
           ordered_quantity: po.ordered_quantity || po.quantity || 1,
           received_quantity: po.received_quantity || 0,
           cost_price: po.cost_price || 0,
-          note: po.item_note || ''
+          note: ''
         }];
+
         for (var it = 0; it < items.length; it++) {
           var item = items[it];
-          var cleanPoItPid = String(item.product_id || '').trim().toLowerCase();
+          var cleanPoPid = String(item.product_id || '').trim().toLowerCase();
           var row = [];
-          for (var h = 0; h < poHeaders.length; h++) {
-            var colName = poHeaders[h];
+          for (var h = 0; h < normHeaders.length; h++) {
+            var colName = normHeaders[h];
             var val = '';
-            if (colName === 'po_id') val = po.po_id;
+            if (colName === 'po_id') val = targetPoId;
             else if (colName === 'vendor_id') val = po.vendor_id || '';
             else if (colName === 'vendor_name') val = po.vendor_name || '';
             else if (colName === 'product_id') val = item.product_id || '';
-            else if (colName === 'name') val = item.name || item.product_name || (cleanPoItPid ? prodNameMapPOOverwrite[cleanPoItPid] : '') || '';
+            else if (colName === 'name') val = item.name || item.product_name || (cleanPoPid ? prodNameMapPO[cleanPoPid] : '') || '';
             else if (colName === 'specification') val = item.specification || '';
             else if (colName === 'ordered_quantity') val = Number(item.ordered_quantity) || 0;
             else if (colName === 'received_quantity') val = Number(item.received_quantity) || 0;
@@ -2148,37 +2099,152 @@ function doPost(e) {
             else if (colName === 'status') val = po.status || 'pending';
             else if (colName === 'order_date') val = po.order_date || '';
             else if (colName === 'expected_date') val = po.expected_date || '';
-            else if (colName === 'note') val = item.note || po.note || '';
+            else if (colName === 'note') val = po.note !== undefined ? String(po.note || '') : (item.note || '');
             else if (colName === 'operator') val = po.operator || '';
-            else if (colName === 'invoice_number' || colName === '發票號碼' || colName === '單據號' || colName === '發票號' || colName === '單號') val = po.invoice_number || '';
+            else if (colName === 'invoice_number') val = po.invoice_number || '';
             else if (colName === 'invoice_image_url') val = po.invoice_image_url || '';
+            else if (colName === 'updated_at') val = po.updated_at || new Date().toISOString();
+            else if (colName === 'manual_edited_at') val = po.manual_edited_at || '';
+            else if (colName === 'manual_override') val = po.manual_override === true ? 'TRUE' : (po.manual_override === false ? 'FALSE' : '');
             row.push(val);
           }
-          rows.push(row);
+          poSheet.appendRow(row);
         }
       }
-      if (rows.length > 0) {
-        poSheet.getRange(2, 1, rows.length, poHeaders.length).setValues(rows);
-      }
+      return ContentService.createTextOutput(JSON.stringify({success: true})).setMimeType(ContentService.MimeType.JSON);
+    } catch (err) {
+      return ContentService.createTextOutput(JSON.stringify({success: false, error: err.toString()})).setMimeType(ContentService.MimeType.JSON);
+    } finally {
+      lock.releaseLock();
     }
-    return ContentService.createTextOutput(JSON.stringify({success:true, count: data.length})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'overwritePurchaseOrders') {
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(15000);
+    } catch (e) {
+      return ContentService.createTextOutput(JSON.stringify({success: false, error: '系統忙碌中，請稍候重試'})).setMimeType(ContentService.MimeType.JSON);
+    }
+    try {
+      var poSheet = ss.getSheetByName('purchase_orders');
+      if (!poSheet) poSheet = ss.insertSheet('purchase_orders');
+      var poHeaders = ['po_id', 'vendor_id', 'vendor_name', 'product_id', 'specification', 'name', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_number', 'invoice_image_url', 'updated_at', 'manual_edited_at', 'manual_override'];
+      if (poSheet.getLastRow() > 0) {
+        var existingPOH = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
+        if (existingPOH && existingPOH.length > 0 && String(existingPOH[0]).trim()) {
+          poHeaders = existingPOH;
+          var existingNorm = [];
+          for (var ehi = 0; ehi < poHeaders.length; ehi++) {
+            existingNorm.push(normalizePoHeader(poHeaders[ehi]));
+          }
+          var reqOverwriteCols = ['name', 'invoice_number', 'invoice_image_url', 'updated_at', 'manual_edited_at', 'manual_override'];
+          for (var roc = 0; roc < reqOverwriteCols.length; roc++) {
+            if (existingNorm.indexOf(reqOverwriteCols[roc]) === -1) {
+              poHeaders.push(reqOverwriteCols[roc]);
+              existingNorm.push(reqOverwriteCols[roc]);
+            }
+          }
+        }
+        poSheet.clear();
+        poSheet.clearFormats();
+      }
+      poSheet.appendRow(poHeaders);
+      var poNormHeaders = [];
+      for (var pnh = 0; pnh < poHeaders.length; pnh++) {
+        poNormHeaders.push(normalizePoHeader(poHeaders[pnh]));
+      }
+      if (data && data.length > 0) {
+        var prodNameMapPOOverwrite = getProdNameMap(ss);
+        var rows = [];
+        for (var p = 0; p < data.length; p++) {
+          var po = data[p];
+          var items = po.items && po.items.length > 0 ? po.items : [{
+            product_id: po.product_id || '',
+            name: po.name || po.product_name || '',
+            specification: po.specification || '',
+            ordered_quantity: po.ordered_quantity || po.quantity || 1,
+            received_quantity: po.received_quantity || 0,
+            cost_price: po.cost_price || 0,
+            note: ''
+          }];
+          for (var it = 0; it < items.length; it++) {
+            var item = items[it];
+            var cleanPoItPid = String(item.product_id || '').trim().toLowerCase();
+            var row = [];
+            for (var h = 0; h < poNormHeaders.length; h++) {
+              var colName = poNormHeaders[h];
+              var val = '';
+              if (colName === 'po_id') val = po.po_id;
+              else if (colName === 'vendor_id') val = po.vendor_id || '';
+              else if (colName === 'vendor_name') val = po.vendor_name || '';
+              else if (colName === 'product_id') val = item.product_id || '';
+              else if (colName === 'name') val = item.name || item.product_name || (cleanPoItPid ? prodNameMapPOOverwrite[cleanPoItPid] : '') || '';
+              else if (colName === 'specification') val = item.specification || '';
+              else if (colName === 'ordered_quantity') val = Number(item.ordered_quantity) || 0;
+              else if (colName === 'received_quantity') val = Number(item.received_quantity) || 0;
+              else if (colName === 'cost_price') val = Number(item.cost_price) || 0;
+              else if (colName === 'status') val = po.status || 'pending';
+              else if (colName === 'order_date') val = po.order_date || '';
+              else if (colName === 'expected_date') val = po.expected_date || '';
+              else if (colName === 'note') val = po.note !== undefined ? String(po.note || '') : (item.note || '');
+              else if (colName === 'operator') val = po.operator || '';
+              else if (colName === 'invoice_number') val = po.invoice_number || '';
+              else if (colName === 'invoice_image_url') val = po.invoice_image_url || '';
+              else if (colName === 'updated_at') val = po.updated_at || new Date().toISOString();
+              else if (colName === 'manual_edited_at') val = po.manual_edited_at || '';
+              else if (colName === 'manual_override') val = po.manual_override === true ? 'TRUE' : (po.manual_override === false ? 'FALSE' : '');
+              row.push(val);
+            }
+            rows.push(row);
+          }
+        }
+        if (rows.length > 0) {
+          poSheet.getRange(2, 1, rows.length, poHeaders.length).setValues(rows);
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({success:true, count: data ? data.length : 0})).setMimeType(ContentService.MimeType.JSON);
+    } catch (err) {
+      return ContentService.createTextOutput(JSON.stringify({success: false, error: err.toString()})).setMimeType(ContentService.MimeType.JSON);
+    } finally {
+      lock.releaseLock();
+    }
   }
 
   if (action === 'deletePurchaseOrder') {
-    var poSheet = ss.getSheetByName('purchase_orders');
-    if (poSheet && poSheet.getLastRow() > 1) {
-      var headers = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
-      var poIdIdx = headers.indexOf('po_id');
-      if (poIdIdx !== -1) {
-        var values = poSheet.getDataRange().getValues();
-        for (var r = values.length - 1; r >= 1; r--) {
-          if (String(values[r][poIdIdx]).trim() === String(data.po_id).trim()) {
-            poSheet.deleteRow(r + 1);
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(15000);
+    } catch (e) {
+      return ContentService.createTextOutput(JSON.stringify({success: false, error: '系統忙碌中，請稍候重試'})).setMimeType(ContentService.MimeType.JSON);
+    }
+    try {
+      var poSheet = ss.getSheetByName('purchase_orders');
+      if (poSheet && poSheet.getLastRow() > 1) {
+        var headers = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
+        var poIdIdx = -1;
+        for (var hi = 0; hi < headers.length; hi++) {
+          if (normalizePoHeader(headers[hi]) === 'po_id') {
+            poIdIdx = hi;
+            break;
+          }
+        }
+        if (poIdIdx !== -1) {
+          var values = poSheet.getDataRange().getDisplayValues();
+          var targetDelId = String(data.po_id || '').trim();
+          for (var r = values.length - 1; r >= 1; r--) {
+            if (String(values[r][poIdIdx] || '').trim() === targetDelId) {
+              poSheet.deleteRow(r + 1);
+            }
           }
         }
       }
+      return ContentService.createTextOutput(JSON.stringify({success: true})).setMimeType(ContentService.MimeType.JSON);
+    } catch (err) {
+      return ContentService.createTextOutput(JSON.stringify({success: false, error: err.toString()})).setMimeType(ContentService.MimeType.JSON);
+    } finally {
+      lock.releaseLock();
     }
-    return ContentService.createTextOutput(JSON.stringify({success: true})).setMimeType(ContentService.MimeType.JSON);
   }
 
   if (action === 'uploadInvoiceImage') {
@@ -2214,6 +2280,8 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({success: false, error: err.toString()})).setMimeType(ContentService.MimeType.JSON);
     }
   }
+
+  return ContentService.createTextOutput(JSON.stringify({success: false, error: 'Unknown action: ' + (action || '')})).setMimeType(ContentService.MimeType.JSON);
 }
 
 function doGet(e) {
@@ -2296,7 +2364,11 @@ function doGet(e) {
     if (poSheet && poSheet.getLastRow() > 1) {
       var poData = poSheet.getDataRange().getDisplayValues();
       if (poData.length >= 2) {
-        var poKeys = poData[0];
+        var poRawKeys = poData[0];
+        var poKeys = [];
+        for (var pkIdx = 0; pkIdx < poRawKeys.length; pkIdx++) {
+          poKeys.push(normalizePoHeader(poRawKeys[pkIdx]));
+        }
         var prodNameMapGetPO = getProdNameMap(ss);
         var poMap = {};
         for (var poi = 1; poi < poData.length; poi++) {
@@ -2309,8 +2381,8 @@ function doGet(e) {
             }
             poObj[poKeys[poj]] = poval;
           }
-          var poid = poObj.po_id || ('PO_ROW_' + poi);
-          var invNum = poObj.invoice_number || poObj['發票號碼'] || poObj['單據號'] || poObj['發票號'] || poObj['單號'] || '';
+          var poid = String(poObj.po_id || ('PO_ROW_' + poi)).trim();
+          var invNum = poObj.invoice_number || '';
           if (!invNum && poObj.note) {
             var m = String(poObj.note).match(/\[(?:單據|發票|單據號|發票號)[:：]\s*([^\]]+)\]/);
             if (m && m[1]) invNum = m[1].trim();
@@ -2328,6 +2400,9 @@ function doGet(e) {
               operator: poObj.operator || '',
               invoice_number: invNum,
               invoice_image_url: poObj.invoice_image_url || '',
+              updated_at: poObj.updated_at || '',
+              manual_edited_at: poObj.manual_edited_at || '',
+              manual_override: String(poObj.manual_override || '').trim().toUpperCase() === 'TRUE',
               items: []
             };
           } else if (!poMap[poid].invoice_number && invNum) {
@@ -2345,7 +2420,7 @@ function doGet(e) {
             ordered_quantity: Number(poObj.ordered_quantity) || 0,
             received_quantity: Number(poObj.received_quantity) || 0,
             cost_price: Number(poObj.cost_price) || 0,
-            note: poObj.note || ''
+            note: ''
           });
         }
         for (var pk in poMap) {
@@ -2495,7 +2570,11 @@ function doGet(e) {
     var dataRange = sheet.getDataRange();
     var data = dataRange.getDisplayValues();
     if (data.length < 2) return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
-    var keys = data[0];
+    var rawKeys = data[0];
+    var keys = [];
+    for (var rk = 0; rk < rawKeys.length; rk++) {
+      keys.push(normalizePoHeader(rawKeys[rk]));
+    }
     var prodNameMapGetPO = getProdNameMap(ss);
     var poMap = {};
     for (var i = 1; i < data.length; i++) {
@@ -2508,8 +2587,8 @@ function doGet(e) {
         }
         obj[keys[j]] = val;
       }
-      var poid = obj.po_id || ('PO_ROW_' + i);
-      var invNum = obj.invoice_number || obj['發票號碼'] || obj['單據號'] || obj['發票號'] || obj['單號'] || obj['發票號/單據號'] || '';
+      var poid = String(obj.po_id || ('PO_ROW_' + i)).trim();
+      var invNum = obj.invoice_number || '';
       if (!invNum && obj.note) {
         var m = String(obj.note).match(/\[(?:單據|發票|單據號|發票號)[:：]\s*([^\]]+)\]/);
         if (m && m[1]) invNum = m[1].trim();
@@ -2527,6 +2606,9 @@ function doGet(e) {
           operator: obj.operator || '',
           invoice_number: invNum,
           invoice_image_url: obj.invoice_image_url || '',
+          updated_at: obj.updated_at || '',
+          manual_edited_at: obj.manual_edited_at || '',
+          manual_override: String(obj.manual_override || '').trim().toUpperCase() === 'TRUE',
           items: []
         };
       } else if (!poMap[poid].invoice_number && invNum) {
@@ -2544,7 +2626,7 @@ function doGet(e) {
         ordered_quantity: Number(obj.ordered_quantity) || 0,
         received_quantity: Number(obj.received_quantity) || 0,
         cost_price: Number(obj.cost_price) || 0,
-        note: obj.note || ''
+        note: ''
       });
     }
     var result = Object.values(poMap);

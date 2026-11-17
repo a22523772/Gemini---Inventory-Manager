@@ -265,8 +265,9 @@ export default function Purchases() {
       const totalReceived = resolvedItems.reduce((acc, it) => acc + Number(it.effective_received_quantity || 0), 0);
       const remaining = Math.max(0, totalOrdered - totalReceived);
 
+      const isManualPriority = Boolean(po.manual_override || po.manual_edited_at);
       let effectiveStatus = po.status;
-      if (po.status !== 'completed' && po.status !== 'cancelled') {
+      if (!isManualPriority && po.status !== 'completed' && po.status !== 'cancelled') {
         if (totalReceived > 0 && remaining > 0) {
           effectiveStatus = 'partial';
         } else if (remaining === 0 && totalOrdered > 0) {
@@ -1461,7 +1462,8 @@ export default function Purchases() {
                 const remainingOnOrder = Math.max(0, totalOrdered - totalReceived);
                 const totalCost = resolvedItems.reduce((acc, it) => acc + (Number(it.ordered_quantity || 0) * Number(it.cost_price || 0)), 0);
 
-                const effectiveStatus = (po.status !== 'completed' && po.status !== 'cancelled')
+                const isManualPriority = Boolean(po.manual_override || po.manual_edited_at);
+                const effectiveStatus = (!isManualPriority && po.status !== 'completed' && po.status !== 'cancelled')
                   ? (totalReceived > 0 && remainingOnOrder > 0 ? 'partial' : (remainingOnOrder === 0 && totalOrdered > 0 ? 'completed' : po.status))
                   : po.status;
 
