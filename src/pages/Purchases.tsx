@@ -263,7 +263,7 @@ export default function Purchases() {
       const resolvedItems = getResolvedPoItems(po, transactions || []);
       const totalOrdered = resolvedItems.reduce((acc, it) => acc + Number(it.ordered_quantity || 0), 0);
       const totalReceived = resolvedItems.reduce((acc, it) => acc + Number(it.effective_received_quantity || 0), 0);
-      const remaining = Math.max(0, totalOrdered - totalReceived);
+      const remaining = resolvedItems.reduce((acc, it) => acc + Number(it.remaining_quantity || 0), 0);
 
       const isManualPriority = Boolean(po.manual_override || po.manual_edited_at);
       let effectiveStatus = po.status;
@@ -494,6 +494,7 @@ export default function Purchases() {
     setConfirmInvoiceNumber(data.invoice_number || '');
     setConfirmInvoiceDate(data.invoice_date || format(new Date(), 'yyyy-MM-dd'));
     setConfirmSelectedPOId(matchedPOId);
+    setConfirmIsCloseRemainingPO(false);
     setConfirmItems(parsedItems);
     setConfirmImageUrls(imagePreviewUrls);
     setConfirmActiveImageIndex(0);
@@ -696,9 +697,15 @@ export default function Purchases() {
       return;
     }
 
-    // Validate each item has a product name
-    for (let i = 0; i < confirmItems.length; i++) {
-      const item = confirmItems[i];
+    const positiveItems = confirmItems.filter(it => Number(it.quantity) > 0);
+    if (positiveItems.length === 0 && !(confirmSelectedPOId && confirmIsCloseRemainingPO)) {
+      showToast('⚠️ 所有品項本次到貨數量皆為 0，請至少填寫一項大於 0 的進貨數量（若確認不再補貨請勾選下方結案選項）！');
+      return;
+    }
+
+    // Validate each positive-quantity item has a product name
+    for (let i = 0; i < positiveItems.length; i++) {
+      const item = positiveItems[i];
       const cleanPid = String(item.product_id || '').trim().toLowerCase();
       const p = products.find(prod => String(prod.product_id || '').trim().toLowerCase() === cleanPid);
       const nameCandidate = (
@@ -708,7 +715,7 @@ export default function Purchases() {
         ''
       ).trim();
       if (!nameCandidate) {
-        showToast(`❌ 第 ${i + 1} 列商品缺少「商品名稱」，請填寫品名或選擇對應系統商品！`);
+        showToast(`❌ 有效進貨清單中第 ${i + 1} 列商品缺少「商品名稱」，請填寫品名或選擇對應系統商品！`);
         return;
       }
     }
@@ -738,8 +745,8 @@ export default function Purchases() {
         finalImageUrl = uploadedUrls.join('\n');
       }
 
-      // 2. Format items for stock-in
-      const itemsToStockIn = confirmItems.map(item => {
+      // 2. Format positive-quantity items for stock-in (0-quantity items are skipped and remain on-order)
+      const itemsToStockIn = positiveItems.map(item => {
         const cleanPid = String(item.product_id || '').trim().toLowerCase();
         const p = products.find(prod => String(prod.product_id || '').trim().toLowerCase() === cleanPid);
         const resolvedName = (
@@ -755,7 +762,7 @@ export default function Purchases() {
           product_name: resolvedName,
           name: resolvedName,
           specification: item.specification,
-          quantity: item.quantity,
+          quantity: Number(item.quantity),
           cost_price: item.cost_price,
           vendor_id: confirmVendorId,
           location: item.location,
@@ -777,6 +784,7 @@ export default function Purchases() {
 
       // 4. Reset states & return to list
       setShowConfirmPanel(false);
+      setConfirmIsCloseRemainingPO(false);
       setImageFiles([]);
       setImagePreviewUrls([]);
       setActiveImageIndex(0);
@@ -797,6 +805,7 @@ export default function Purchases() {
     setConfirmInvoiceNumber('');
     setConfirmInvoiceDate(format(new Date(), 'yyyy-MM-dd'));
     setConfirmSelectedPOId(po.po_id);
+    setConfirmIsCloseRemainingPO(false);
     const existingImgs = po.invoice_image_url ? po.invoice_image_url.split('\n').filter(Boolean) : [];
     setConfirmImageUrls(existingImgs);
     setConfirmActiveImageIndex(0);
@@ -1459,7 +1468,7 @@ export default function Purchases() {
                 const resolvedItems = getResolvedPoItems(po, transactions || []);
                 const totalOrdered = resolvedItems.reduce((acc, it) => acc + Number(it.ordered_quantity || 0), 0);
                 const totalReceived = resolvedItems.reduce((acc, it) => acc + Number(it.effective_received_quantity || 0), 0);
-                const remainingOnOrder = Math.max(0, totalOrdered - totalReceived);
+                const remainingOnOrder = resolvedItems.reduce((acc, it) => acc + Number(it.remaining_quantity || 0), 0);
                 const totalCost = resolvedItems.reduce((acc, it) => acc + (Number(it.ordered_quantity || 0) * Number(it.cost_price || 0)), 0);
 
                 const isManualPriority = Boolean(po.manual_override || po.manual_edited_at);
@@ -3079,12 +3088,13 @@ export default function Purchases() {
                           <span>預計到貨: {selectedPO.expected_date}</span>
                         </div>
                         <div className="space-y-1 max-h-32 overflow-y-auto pr-1 custom-scrollbar">
-                          {(selectedPO.items || []).map((item, idx) => {
-                            const remaining = Math.max(0, Number(item.ordered_quantity || 0) - Number(item.received_quantity || 0));
+                          {getResolvedPoItems(selectedPO, transactions || []).map((item, idx) => {
+                            const remaining = Number(item.remaining_quantity || 0);
                             return (
                               <div key={idx} className="flex justify-between items-center text-[11px] bg-black/20 p-1.5 rounded-lg border border-white/5">
                                 <div className="flex-1 truncate pr-2">
                                   <span className="text-white font-bold">{item.name}</span>
+                                  {item.specification && <span className="text-sky-300 ml-1">({item.specification})</span>}
                                   {item.product_id && <span className="text-slate-400 font-mono ml-1">({item.product_id})</span>}
                                 </div>
                                 <div className="shrink-0 font-mono">
@@ -3224,8 +3234,10 @@ export default function Purchases() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5">
-                      {confirmItems.map((item, idx) => (
-                        <tr key={item.temp_id} className="hover:bg-white/[0.02]">
+                      {confirmItems.map((item, idx) => {
+                        const isSkipped = Number(item.quantity) <= 0;
+                        return (
+                        <tr key={item.temp_id} className={cn("transition-colors", isSkipped ? "opacity-55 bg-white/[0.01]" : "hover:bg-white/[0.02]")}>
                           {/* Product Name & Searchable Product Combobox */}
                           <td className="py-2.5 px-3">
                             <div className="space-y-1.5">
@@ -3239,7 +3251,7 @@ export default function Purchases() {
                                     setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, name: val, product_name: val } : it));
                                   }}
                                   className={`w-full bg-[#1e293b] border rounded px-2 py-1 text-xs text-white font-bold placeholder-slate-500 ${
-                                    !(item.name || item.product_name)?.trim() ? 'border-amber-500/80 ring-1 ring-amber-500/50 focus:border-amber-400' : 'border-white/10'
+                                    !isSkipped && !(item.name || item.product_name)?.trim() ? 'border-amber-500/80 ring-1 ring-amber-500/50 focus:border-amber-400' : 'border-white/10'
                                   }`}
                                   placeholder="單據品名 (必填，可手動修改)"
                                 />
@@ -3297,18 +3309,41 @@ export default function Purchases() {
                             />
                           </td>
 
-                          {/* Quantity */}
+                          {/* Quantity (0 = skipped / remain on-order) */}
                           <td className="py-2.5 px-2 text-center">
-                            <input
-                              type="number"
-                              min="1"
-                              value={item.quantity}
-                              onChange={(e) => {
-                                const val = Number(e.target.value) || 1;
-                                setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, quantity: val } : it));
-                              }}
-                              className="w-20 mx-auto bg-[#1e293b] border border-white/10 rounded px-2 py-1 text-xs text-center text-white font-bold"
-                            />
+                            <div className="flex flex-col items-center gap-1">
+                              <div className="flex items-center justify-center gap-1">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={item.quantity}
+                                  onChange={(e) => {
+                                    const raw = Number(e.target.value);
+                                    const val = isNaN(raw) ? 0 : Math.max(0, raw);
+                                    setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, quantity: val } : it));
+                                  }}
+                                  className={cn(
+                                    "w-16 bg-[#1e293b] border rounded px-2 py-1 text-xs text-center font-bold tabular-nums",
+                                    isSkipped ? "border-amber-500/40 text-amber-300" : "border-white/10 text-white"
+                                  )}
+                                />
+                                {!isSkipped && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, quantity: 0 } : it))}
+                                    className="px-1.5 py-1 bg-white/5 hover:bg-amber-500/20 text-slate-400 hover:text-amber-300 border border-white/10 rounded text-[10px] font-bold transition-colors cursor-pointer whitespace-nowrap"
+                                    title="此商品尚未送達，設為 0 並自動略過（維持在途）"
+                                  >
+                                    未到(0)
+                                  </button>
+                                )}
+                              </div>
+                              {isSkipped && (
+                                <span className="text-[10px] font-bold text-amber-300 whitespace-nowrap">
+                                  本次略過 (維持在途)
+                                </span>
+                              )}
+                            </div>
                           </td>
 
                           {/* Cost Price */}
@@ -3321,7 +3356,7 @@ export default function Purchases() {
                                 const val = Number(e.target.value) || 0;
                                 setConfirmItems(prev => prev.map((it, i) => i === idx ? { ...it, cost_price: val } : it));
                               }}
-                              className="w-20 mx-auto bg-[#1e293b] border border-white/10 rounded px-2 py-1 text-xs text-center text-white font-mono font-bold text-amber-300"
+                              className="w-20 mx-auto bg-[#1e293b] border border-white/10 rounded px-2 py-1 text-xs text-center text-white font-mono font-bold text-amber-300 tabular-nums"
                             />
                           </td>
 
@@ -3346,8 +3381,8 @@ export default function Purchases() {
                           </td>
 
                           {/* Subtotal */}
-                          <td className="py-2.5 px-2 text-right font-mono font-bold text-amber-300">
-                            ${(item.quantity * item.cost_price).toLocaleString()}
+                          <td className="py-2.5 px-2 text-right font-mono font-bold text-amber-300 tabular-nums">
+                            ${((Number(item.quantity) || 0) * (Number(item.cost_price) || 0)).toLocaleString()}
                           </td>
 
                           {/* Delete Item */}
@@ -3355,13 +3390,14 @@ export default function Purchases() {
                             <button
                               onClick={() => setConfirmItems(prev => prev.filter((_, i) => i !== idx))}
                               className="text-slate-500 hover:text-red-400 p-1 transition-colors"
-                              title="刪除此項 (若缺貨未到)"
+                              title="從本次確認清單移除此列"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -3396,9 +3432,17 @@ export default function Purchases() {
 
             {/* Panel Footer */}
             <div className="p-4 sm:p-5 bg-white/[0.02] border-t border-white/10 flex flex-col sm:flex-row items-center justify-between gap-3">
-              <div className="text-xs text-slate-400 flex items-center gap-4">
-                <div>進貨總件數：<span className="font-bold text-white">{confirmItems.reduce((acc, it) => acc + Number(it.quantity || 0), 0)} 件</span></div>
-                <div>進貨總金額：<span className="font-mono font-bold text-amber-300 text-sm">${confirmItems.reduce((acc, it) => acc + (it.quantity * it.cost_price), 0).toLocaleString()}</span></div>
+              <div className="text-xs text-slate-400 flex items-center gap-4 flex-wrap">
+                <div>
+                  實際入庫品項：<span className="font-bold text-white tabular-nums">{confirmItems.filter(it => Number(it.quantity) > 0).length} 項</span>
+                  {confirmItems.some(it => Number(it.quantity) <= 0) && (
+                    <span className="text-amber-300 ml-1">
+                      （略過 {confirmItems.filter(it => Number(it.quantity) <= 0).length} 項未到貨）
+                    </span>
+                  )}
+                </div>
+                <div>進貨總件數：<span className="font-bold text-white tabular-nums">{confirmItems.reduce((acc, it) => acc + Math.max(0, Number(it.quantity || 0)), 0)} 件</span></div>
+                <div>進貨總金額：<span className="font-mono font-bold text-amber-300 text-sm tabular-nums">${confirmItems.reduce((acc, it) => acc + (Math.max(0, Number(it.quantity || 0)) * (Number(it.cost_price) || 0)), 0).toLocaleString()}</span></div>
               </div>
 
               <div className="flex items-center gap-3 w-full sm:w-auto">

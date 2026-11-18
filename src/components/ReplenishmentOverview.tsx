@@ -533,20 +533,20 @@ export default function ReplenishmentOverview() {
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-slate-800/80 text-slate-300 border-b border-white/10 font-bold uppercase tracking-wider text-[11px]">
-                      <th className="py-3.5 px-4 w-20 text-center">建議排名</th>
-                      <th className="py-3.5 px-4">商品名稱</th>
-                      <th className="py-3.5 px-4">規格</th>
-                      <th className="py-3.5 px-4">目前庫存 &amp; 各規格數量</th>
-                      <th className="py-3.5 px-4 text-center">
+                      <th className="py-3.5 px-4 w-20 text-center whitespace-nowrap">建議排名</th>
+                      <th className="py-3.5 px-4 min-w-[200px]">商品名稱</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">規格</th>
+                      <th className="py-3.5 px-4 whitespace-nowrap">目前庫存 &amp; 各規格數量</th>
+                      <th className="py-3.5 px-4 text-center whitespace-nowrap">
                         <div className="flex items-center justify-center gap-1">
                           <Truck className="w-3.5 h-3.5 text-amber-400" />
                           <span>總在途採購</span>
                         </div>
                       </th>
-                      <th className="py-3.5 px-4 text-right">進價 (成本)</th>
-                      <th className="py-3.5 px-4 text-center">狀態</th>
-                      <th className="py-3.5 px-4 text-center">近30天銷量 / 總銷量</th>
-                      <th className="py-3.5 px-4 text-center">快速操作</th>
+                      <th className="py-3.5 px-4 text-right whitespace-nowrap">進價 (成本)</th>
+                      <th className="py-3.5 px-4 text-center whitespace-nowrap">狀態</th>
+                      <th className="py-3.5 px-4 text-center whitespace-nowrap">近30天銷量 / 總銷量</th>
+                      <th className="py-3.5 px-4 text-center whitespace-nowrap">快速操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5 font-medium">
@@ -611,10 +611,10 @@ export default function ReplenishmentOverview() {
                             )}
                           </td>
 
-                          {/* 目前庫存 + 展開各規格個別現存與在途數量標籤 */}
-                          <td className="py-3 px-4 align-top">
-                            <div className="flex flex-wrap items-start gap-2">
-                              <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold font-mono tabular-nums text-xs border shrink-0 ${
+                          {/* 目前庫存 + 垂直排列各規格個別現存與在途數量方框 */}
+                          <td className="py-3 px-4 align-top whitespace-nowrap">
+                            <div className="flex flex-col items-start gap-1.5">
+                              <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold font-mono tabular-nums text-xs border shrink-0 whitespace-nowrap ${
                                 item.isOutOfStock
                                   ? 'bg-red-500/20 text-red-300 border-red-500/40 font-black'
                                   : item.isLowStock
@@ -626,11 +626,11 @@ export default function ReplenishmentOverview() {
                               </span>
 
                               {!item.isDefaultSingleSpec && item.specDetails.length > 0 && (
-                                <div className="flex flex-wrap items-center gap-1.5">
+                                <div className="flex flex-col items-start gap-1.5">
                                   {item.specDetails.map((sd, sIdx) => (
                                     <span
                                       key={`${sd.spec}_${sIdx}`}
-                                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] transition-colors ${
+                                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] whitespace-nowrap transition-colors ${
                                         sd.quantity <= 0
                                           ? 'bg-red-500/10 border-red-500/30 text-red-200'
                                           : sd.quantity <= item.alertThreshold
@@ -663,9 +663,9 @@ export default function ReplenishmentOverview() {
                           </td>
 
                           {/* 在途採購量 */}
-                          <td className="py-3 px-4 text-center align-top">
+                          <td className="py-3 px-4 text-center align-top whitespace-nowrap">
                             {(item.onOrderQty || 0) > 0 ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full font-mono tabular-nums text-xs font-bold shadow-sm">
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full font-mono tabular-nums text-xs font-bold shadow-sm whitespace-nowrap">
                                 <Truck className="w-3 h-3 text-amber-400 shrink-0" />
                                 <span>{item.onOrderQty} {p.unit || '個'}</span>
                               </span>
@@ -675,7 +675,7 @@ export default function ReplenishmentOverview() {
                           </td>
 
                           {/* 進價 */}
-                          <td className="py-3 px-4 text-right font-mono tabular-nums font-bold text-emerald-400 text-sm align-top">
+                          <td className="py-3 px-4 text-right font-mono tabular-nums font-bold text-emerald-400 text-sm align-top whitespace-nowrap">
                             {item.costPrice > 0 ? (
                               `$${item.costPrice}`
                             ) : (
@@ -684,29 +684,29 @@ export default function ReplenishmentOverview() {
                           </td>
 
                           {/* 狀態 / 停產顯示 */}
-                          <td className="py-3 px-4 text-center align-top">
+                          <td className="py-3 px-4 text-center align-top whitespace-nowrap">
                             {item.isDiscontinued ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-md text-[11px] font-bold">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-md text-[11px] font-bold whitespace-nowrap">
                                 <PauseCircle className="w-3.5 h-3.5 text-amber-400" />
                                 暫時停產
                               </span>
                             ) : item.isOutOfStock ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-500/20 text-red-300 border border-red-500/40 rounded-md text-[11px] font-bold">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-500/20 text-red-300 border border-red-500/40 rounded-md text-[11px] font-bold whitespace-nowrap">
                                 缺貨
                               </span>
                             ) : item.isLowStock ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-orange-500/20 text-orange-300 border border-orange-500/40 rounded-md text-[11px] font-bold">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-orange-500/20 text-orange-300 border border-orange-500/40 rounded-md text-[11px] font-bold whitespace-nowrap">
                                 庫存偏低
                               </span>
                             ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-md text-[11px] font-bold">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-md text-[11px] font-bold whitespace-nowrap">
                                 正常供應
                               </span>
                             )}
                           </td>
 
                           {/* 銷量依據 (交易紀錄) */}
-                          <td className="py-3 px-4 text-center align-top">
+                          <td className="py-3 px-4 text-center align-top whitespace-nowrap">
                             <div className="font-mono tabular-nums text-xs text-white">
                               30天: <span className="font-bold text-sky-400">{item.sold30d}</span>
                               <span className="text-slate-500 mx-1">/</span>
@@ -718,11 +718,11 @@ export default function ReplenishmentOverview() {
                           </td>
 
                           {/* 快速操作 */}
-                          <td className="py-3 px-4 text-center align-top">
+                          <td className="py-3 px-4 text-center align-top whitespace-nowrap">
                             <div className="flex items-center justify-center gap-1.5">
                               <Link
                                 to={`/manage?type=stock_in&pid=${p.product_id}`}
-                                className="px-2.5 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 rounded-lg text-xs font-bold transition-all hover:scale-105 active:scale-95 flex items-center gap-1"
+                                className="px-2.5 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 rounded-lg text-xs font-bold transition-all hover:scale-105 active:scale-95 flex items-center gap-1 whitespace-nowrap"
                                 title="為此商品進行進貨"
                               >
                                 <PlusCircle className="w-3.5 h-3.5" />
@@ -731,7 +731,7 @@ export default function ReplenishmentOverview() {
 
                               <button
                                 onClick={() => toggleDiscontinued(p.product_id)}
-                                className={`p-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
+                                className={`p-1.5 rounded-lg text-xs font-medium border transition-all cursor-pointer shrink-0 ${
                                   item.isDiscontinued
                                     ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/30'
                                     : 'bg-white/5 hover:bg-white/10 text-slate-400 hover:text-amber-300 border-white/10'

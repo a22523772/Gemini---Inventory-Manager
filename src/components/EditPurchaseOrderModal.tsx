@@ -79,7 +79,7 @@ export default function EditPurchaseOrderModal({
   const totalOrdered = items.reduce((sum, it) => sum + Number(it.ordered_quantity || 0), 0);
   const totalReceived = items.reduce((sum, it) => sum + Number(it.received_quantity || 0), 0);
   const totalCost = items.reduce((sum, it) => sum + (Number(it.ordered_quantity || 0) * Number(it.cost_price || 0)), 0);
-  const remainingOnOrder = Math.max(0, totalOrdered - totalReceived);
+  const remainingOnOrder = items.reduce((sum, it) => sum + Math.max(0, Number(it.ordered_quantity || 0) - Number(it.received_quantity || 0)), 0);
 
   const handleQuickClose = () => {
     setStatus('completed');

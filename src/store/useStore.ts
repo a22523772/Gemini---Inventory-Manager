@@ -2284,10 +2284,11 @@ export const useStore = create<AppState>((set, get) => ({
 
         for (let i = 0; i < rawItems.length; i++) {
           const itm = rawItems[i];
+          const targetQty = Number(itm.quantity);
+          if (isNaN(targetQty) || targetQty <= 0) continue;
           const cleanPid = String(itm.product_id || '').trim().toLowerCase();
           const p = products.find(prod => String(prod.product_id || '').trim().toLowerCase() === cleanPid);
           const resolvedName = (itm.name || itm.product_name || p?.name || itm.product_id || '').trim();
-          const targetQty = Number(itm.quantity) || 1;
           const targetLoc = itm.location || '倉庫';
           const targetFloor = itm.floor || '1F';
           const targetArea = itm.area || 'A區';
@@ -5117,8 +5118,27 @@ export const useStore = create<AppState>((set, get) => ({
 
   batchStockInFromInvoice: async (params) => {
     const { items, po_id, invoice_number, invoice_image_url, is_close_remaining_po } = params;
+    const validItems = (items || []).filter(item => Number(item.quantity) > 0);
     const nowStr = formatConsistentTxDate(new Date(), getDominantDateSeparator(get().transactions));
     const { products, purchaseOrders, enqueueAction, updatePurchaseOrder, showToast } = get();
+
+    // Snapshot pre-stock-in PO resolved baseline BEFORE enqueueAction('batchStockIn') mutates transactions
+    const targetPO = po_id ? purchaseOrders.find(p => p.po_id === po_id) : undefined;
+    const preStockInResolvedItems = targetPO ? getResolvedPoItems(targetPO, get().transactions || []) : [];
+
+    if (validItems.length === 0) {
+      if (targetPO && is_close_remaining_po) {
+        await updatePurchaseOrder(targetPO.po_id, {
+          status: 'completed',
+          invoice_image_url: invoice_image_url || targetPO.invoice_image_url,
+          ...(invoice_number ? { invoice_number } : {})
+        }, { skipOverwriteTransactions: true, isAutoStockIn: true });
+        showToast(`✅ 採購單 ${targetPO.po_id} 已結案（無新增入庫品項）`);
+      } else {
+        showToast('⚠️ 本次無大於 0 的進貨數量，已略過入庫！');
+      }
+      return;
+    }
 
     // If linked to a PO, use PO ID as the transaction_id!
     // If not linked to a PO, generate unified TX_IN_... batch ID
@@ -5126,8 +5146,8 @@ export const useStore = create<AppState>((set, get) => ({
       ? po_id 
       : `TX_IN_${format(new Date(), 'yyyyMMdd_HHmmss')}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
-    // 1. Process all items into inventory via batchStockIn in one single operation
-    const formattedBatchItems = items.map((item, i) => {
+    // 1. Process all positive-quantity items into inventory via batchStockIn in one single operation
+    const formattedBatchItems = validItems.map((item, i) => {
       const cleanPid = String(item.product_id || '').trim().toLowerCase();
       const p = products.find(prod => String(prod.product_id || '').trim().toLowerCase() === cleanPid);
       const resolvedName = (item.product_name || (item as any).name || p?.name || item.product_id || '').trim();
@@ -5142,7 +5162,7 @@ export const useStore = create<AppState>((set, get) => ({
         product_id: item.product_id,
         product_name: resolvedName,
         name: resolvedName,
-        quantity: Number(item.quantity) || 1,
+        quantity: Number(item.quantity),
         location: item.location || '倉庫',
         floor: item.floor || '1F',
         area: item.area || 'A區',
@@ -5164,96 +5184,92 @@ export const useStore = create<AppState>((set, get) => ({
       items: formattedBatchItems
     });
 
-    // 2. If matched with a PO, update received quantities and status
-    if (po_id) {
-      const po = purchaseOrders.find(p => p.po_id === po_id);
-      if (po) {
-        // Track delivered quantities per po item index
-        const deliveredByIndex = new Map<number, number>();
-        const unassignedIncoming = [...items];
+    // 2. If matched with a PO, update received quantities and status using pre-stock-in baseline
+    if (targetPO) {
+      // Track delivered quantities per po item index
+      const deliveredByIndex = new Map<number, number>();
+      const unassignedIncoming = [...validItems];
 
-        // Pass 1: Exact product_id and exact specification match
-        (po.items || []).forEach((poItem, pIdx) => {
-          const poSpec = (poItem.specification || '').trim().toLowerCase();
-          for (let i = unassignedIncoming.length - 1; i >= 0; i--) {
-            const inc = unassignedIncoming[i];
-            const incSpec = (inc.specification || '').trim().toLowerCase();
-            const matchPid = inc.product_id === poItem.product_id || 
-              (Boolean(inc.product_name) && Boolean(poItem.name || poItem.product_name) && (inc.product_name || '').trim() === (poItem.name || poItem.product_name || '').trim());
-            if (matchPid && poSpec === incSpec) {
-              deliveredByIndex.set(pIdx, (deliveredByIndex.get(pIdx) || 0) + Number(inc.quantity || 0));
-              unassignedIncoming.splice(i, 1);
-            }
+      // Pass 1: Exact product_id and exact specification match
+      (targetPO.items || []).forEach((poItem, pIdx) => {
+        const poSpec = (poItem.specification || '').trim().toLowerCase();
+        for (let i = unassignedIncoming.length - 1; i >= 0; i--) {
+          const inc = unassignedIncoming[i];
+          const incSpec = (inc.specification || '').trim().toLowerCase();
+          const matchPid = inc.product_id === poItem.product_id || 
+            (Boolean(inc.product_name) && Boolean(poItem.name || poItem.product_name) && (inc.product_name || '').trim() === (poItem.name || poItem.product_name || '').trim());
+          if (matchPid && poSpec === incSpec) {
+            deliveredByIndex.set(pIdx, (deliveredByIndex.get(pIdx) || 0) + Number(inc.quantity || 0));
+            unassignedIncoming.splice(i, 1);
           }
-        });
-
-        // Pass 2: Inclusive specification match (e.g. poItem has "黑色、白色", incoming has "白色")
-        (po.items || []).forEach((poItem, pIdx) => {
-          for (let i = unassignedIncoming.length - 1; i >= 0; i--) {
-            const inc = unassignedIncoming[i];
-            const matchPid = inc.product_id === poItem.product_id || 
-              (Boolean(inc.product_name) && Boolean(poItem.name || poItem.product_name) && (inc.product_name || '').trim() === (poItem.name || poItem.product_name || '').trim());
-            if (matchPid && isSpecificationMatch(poItem.specification, inc.specification)) {
-              deliveredByIndex.set(pIdx, (deliveredByIndex.get(pIdx) || 0) + Number(inc.quantity || 0));
-              unassignedIncoming.splice(i, 1);
-            }
-          }
-        });
-
-        // Pass 3: If only one item in PO matches product_id
-        (po.items || []).forEach((poItem, pIdx) => {
-          const countWithSamePid = (po.items || []).filter(it => 
-            it.product_id === poItem.product_id || 
-            (Boolean(it.name || it.product_name) && Boolean(poItem.name || poItem.product_name) && (it.name || it.product_name || '').trim() === (poItem.name || poItem.product_name || '').trim())
-          ).length;
-          if (countWithSamePid === 1) {
-            for (let i = unassignedIncoming.length - 1; i >= 0; i--) {
-              const inc = unassignedIncoming[i];
-              const matchPid = inc.product_id === poItem.product_id || 
-                (Boolean(inc.product_name) && Boolean(poItem.name || poItem.product_name) && (inc.product_name || '').trim() === (poItem.name || poItem.product_name || '').trim());
-              if (matchPid) {
-                deliveredByIndex.set(pIdx, (deliveredByIndex.get(pIdx) || 0) + Number(inc.quantity || 0));
-                unassignedIncoming.splice(i, 1);
-              }
-            }
-          }
-        });
-
-        let allFullyReceived = true;
-        let anyReceived = false;
-
-        const resolvedCurrentItems = getResolvedPoItems(po, get().transactions || []);
-        const updatedItems = (po.items || []).map((poItem, pIdx) => {
-          const deliveredQty = deliveredByIndex.get(pIdx) || 0;
-          const baseReceived = resolvedCurrentItems[pIdx]?.effective_received_quantity ?? (poItem.received_quantity || 0);
-          const currentReceived = baseReceived + deliveredQty;
-          
-          if (currentReceived > 0) anyReceived = true;
-          if (currentReceived < poItem.ordered_quantity) allFullyReceived = false;
-
-          return {
-            ...poItem,
-            received_quantity: currentReceived
-          };
-        });
-
-        let newStatus: PurchaseOrder['status'] = po.status;
-        if (is_close_remaining_po || allFullyReceived) {
-          newStatus = 'completed';
-        } else if (anyReceived) {
-          newStatus = 'partial';
         }
+      });
 
-        await updatePurchaseOrder(po.po_id, {
-          status: newStatus,
-          items: updatedItems,
-          invoice_image_url: invoice_image_url || po.invoice_image_url,
-          ...(invoice_number ? { invoice_number } : {})
-        }, { skipOverwriteTransactions: true, isAutoStockIn: true });
+      // Pass 2: Inclusive specification match (e.g. poItem has "黑色、白色", incoming has "白色")
+      (targetPO.items || []).forEach((poItem, pIdx) => {
+        for (let i = unassignedIncoming.length - 1; i >= 0; i--) {
+          const inc = unassignedIncoming[i];
+          const matchPid = inc.product_id === poItem.product_id || 
+            (Boolean(inc.product_name) && Boolean(poItem.name || poItem.product_name) && (inc.product_name || '').trim() === (poItem.name || poItem.product_name || '').trim());
+          if (matchPid && isSpecificationMatch(poItem.specification, inc.specification)) {
+            deliveredByIndex.set(pIdx, (deliveredByIndex.get(pIdx) || 0) + Number(inc.quantity || 0));
+            unassignedIncoming.splice(i, 1);
+          }
+        }
+      });
+
+      // Pass 3: If only one item in PO matches product_id
+      (targetPO.items || []).forEach((poItem, pIdx) => {
+        const countWithSamePid = (targetPO.items || []).filter(it => 
+          it.product_id === poItem.product_id || 
+          (Boolean(it.name || it.product_name) && Boolean(poItem.name || poItem.product_name) && (it.name || it.product_name || '').trim() === (poItem.name || poItem.product_name || '').trim())
+        ).length;
+        if (countWithSamePid === 1) {
+          for (let i = unassignedIncoming.length - 1; i >= 0; i--) {
+            const inc = unassignedIncoming[i];
+            const matchPid = inc.product_id === poItem.product_id || 
+              (Boolean(inc.product_name) && Boolean(poItem.name || poItem.product_name) && (inc.product_name || '').trim() === (poItem.name || poItem.product_name || '').trim());
+            if (matchPid) {
+              deliveredByIndex.set(pIdx, (deliveredByIndex.get(pIdx) || 0) + Number(inc.quantity || 0));
+              unassignedIncoming.splice(i, 1);
+            }
+          }
+        }
+      });
+
+      let allFullyReceived = true;
+      let anyReceived = false;
+
+      const updatedItems = (targetPO.items || []).map((poItem, pIdx) => {
+        const deliveredQty = deliveredByIndex.get(pIdx) || 0;
+        const baseReceived = preStockInResolvedItems[pIdx]?.effective_received_quantity ?? (Number(poItem.received_quantity) || 0);
+        const currentReceived = baseReceived + deliveredQty;
+        
+        if (currentReceived > 0) anyReceived = true;
+        if (currentReceived < Number(poItem.ordered_quantity || 0)) allFullyReceived = false;
+
+        return {
+          ...poItem,
+          received_quantity: currentReceived
+        };
+      });
+
+      let newStatus: PurchaseOrder['status'] = targetPO.status;
+      if (is_close_remaining_po || allFullyReceived) {
+        newStatus = 'completed';
+      } else if (anyReceived) {
+        newStatus = 'partial';
       }
+
+      await updatePurchaseOrder(targetPO.po_id, {
+        status: newStatus,
+        items: updatedItems,
+        invoice_image_url: invoice_image_url || targetPO.invoice_image_url,
+        ...(invoice_number ? { invoice_number } : {})
+      }, { skipOverwriteTransactions: true, isAutoStockIn: true });
     }
 
-    showToast(`🎉 成功完成 ${items.length} 項商品進貨入庫！`);
+    showToast(`🎉 成功完成 ${validItems.length} 項商品進貨入庫！`);
   },
 
   completeAndStockInAllRemainingPO: async (poId: string) => {
