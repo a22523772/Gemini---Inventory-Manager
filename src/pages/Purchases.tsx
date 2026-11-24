@@ -2362,7 +2362,7 @@ export default function Purchases() {
                       const isBlocked = statusInfo.isPaused;
                       const isAdded = newPOItems.some(it => it.product_id === p.product_id);
                       const inStock = productTotalStockMap.get(p.product_id) || 0;
-                      const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification);
+                      const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, undefined, transactions);
                       return (
                         <button
                           key={p.product_id}
@@ -2487,7 +2487,7 @@ export default function Purchases() {
                           const isBlocked = statusInfo.isPaused;
                           const subSpecs = parseSpecifications(p.specification);
                           const inStock = productTotalStockMap.get(p.product_id) || 0;
-                          const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification, transactions);
+                          const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, undefined, transactions);
                           const addedForProduct = newPOItems.filter(it => it.product_id === p.product_id);
                           const totalAddedQty = addedForProduct.reduce((s, it) => s + Number(it.ordered_quantity || 0), 0);
 
@@ -2562,7 +2562,7 @@ export default function Purchases() {
                                   <span className="text-[10px] text-slate-400 font-medium">可選規格:</span>
                                   {subSpecs.map(spec => {
                                     const specAdded = newPOItems.find(it => it.product_id === p.product_id && (it.specification || '').trim().toLowerCase() === spec.trim().toLowerCase());
-                                    const specStock = (stock || []).filter(s => String(s.product_id || '').toLowerCase() === String(p.product_id).toLowerCase() && isSpecificationMatch(s.specification, spec, p.name)).reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
+                                    const specStock = (stock || []).filter(s => String(s.product_id || '').toLowerCase() === String(p.product_id).toLowerCase() && isSpecificationMatch(s.specification, spec)).reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
                                     return (
                                       <button
                                         key={spec}

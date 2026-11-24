@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Product, Stock } from '../lib/db';
-import { useStore, parseSpecifications, isSpecificationMatch } from '../store/useStore';
+import { useStore, parseSpecifications, isSpecificationMatch, normalizeSpecString } from '../store/useStore';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 
 export interface SpecStockItem {
@@ -11,7 +11,7 @@ export interface SpecStockItem {
 
 /**
  * Computes individual stock quantities for all specifications of a product.
- * Returns both in-stock and out-of-stock specifications.
+ * Returns both in-stock and out-of-stock specifications without double-counting batches.
  */
 export function computeProductSpecBreakdown(
   product: Product,
@@ -32,18 +32,23 @@ export function computeProductSpecBreakdown(
   matchedStocks.forEach((s) => {
     const sSpec = String(s.specification || '').trim();
     if (sSpec) {
-      // If stock specification itself contains delimiters, break it down or use exact string
       stockSpecs.push(sSpec);
     }
   });
 
-  // 3. Build unique list of distinct specifications
-  const uniqueSpecSet = new Set<string>();
-  declaredSpecs.forEach((s) => uniqueSpecSet.add(s.trim()));
-  stockSpecs.forEach((s) => uniqueSpecSet.add(s.trim()));
+  // 3. Build deduplicated list of distinct specifications (case/bracket normalized, preserving first canonical label)
+  const uniqueSpecByNorm = new Map<string, string>();
+  [...declaredSpecs, ...stockSpecs].forEach((raw) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    const norm = normalizeSpecString(trimmed);
+    if (!uniqueSpecByNorm.has(norm)) {
+      uniqueSpecByNorm.set(norm, trimmed);
+    }
+  });
 
   // If no specifications found in either product or stock, treat as single default spec
-  if (uniqueSpecSet.size === 0) {
+  if (uniqueSpecByNorm.size === 0) {
     const totalQty = matchedStocks.reduce(
       (sum, s) => sum + (Number(s.quantity) || 0),
       0
@@ -57,43 +62,58 @@ export function computeProductSpecBreakdown(
     ];
   }
 
-  // 4. Calculate quantity for each specification
-  const results: SpecStockItem[] = [];
-  const processedStockIds = new Set<string>();
+  const specList = Array.from(uniqueSpecByNorm.values());
 
-  const specList = Array.from(uniqueSpecSet);
-  for (const spec of specList) {
-    let specQty = 0;
-    matchedStocks.forEach((s) => {
-      if (isSpecificationMatch(s.specification, spec, product.name)) {
-        specQty += Number(s.quantity) || 0;
-        processedStockIds.add(s.stock_id);
-      }
-    });
+  // 4. Mutually-exclusive assignment: each stock row belongs to at most ONE best-matching specification.
+  // Tier 1: exact normalized equality; Tier 2: strict spec match (no product-name substring fallback).
+  const qtyBySpec = new Map<string, number>();
+  specList.forEach((spec) => qtyBySpec.set(spec, 0));
+  const assignedStockIndices = new Set<number>();
 
-    results.push({
+  // Tier 1: exact normalized match
+  matchedStocks.forEach((s, idx) => {
+    const normStockSpec = normalizeSpecString(s.specification);
+    if (!normStockSpec) return;
+    const exactSpec = uniqueSpecByNorm.get(normStockSpec);
+    if (exactSpec !== undefined) {
+      qtyBySpec.set(exactSpec, (qtyBySpec.get(exactSpec) || 0) + (Number(s.quantity) || 0));
+      assignedStockIndices.add(idx);
+    }
+  });
+
+  // Tier 2: strict promo/word-boundary match for any remaining named stock specs
+  matchedStocks.forEach((s, idx) => {
+    if (assignedStockIndices.has(idx)) return;
+    const rawStockSpec = String(s.specification || '').trim();
+    if (!rawStockSpec) return;
+    const matchedSpec = specList.find((spec) => isSpecificationMatch(rawStockSpec, spec));
+    if (matchedSpec) {
+      qtyBySpec.set(matchedSpec, (qtyBySpec.get(matchedSpec) || 0) + (Number(s.quantity) || 0));
+      assignedStockIndices.add(idx);
+    }
+  });
+
+  const results: SpecStockItem[] = specList.map((spec) => {
+    const specQty = qtyBySpec.get(spec) || 0;
+    return {
       spec,
       quantity: specQty,
       isOutOfStock: specQty <= 0
-    });
-  }
+    };
+  });
 
-  // 5. Catch any unallocated stock entries (e.g. items with blank spec when others have specs)
-  const unallocatedStocks = matchedStocks.filter(
-    (s) => !processedStockIds.has(s.stock_id)
-  );
-  if (unallocatedStocks.length > 0) {
-    const unallocatedQty = unallocatedStocks.reduce(
-      (sum, s) => sum + (Number(s.quantity) || 0),
-      0
-    );
-    if (unallocatedQty > 0) {
-      results.push({
-        spec: '其他/未歸類',
-        quantity: unallocatedQty,
-        isOutOfStock: false
-      });
-    }
+  // 5. Catch any unallocated stock entries (e.g. blank-spec stock when product has multiple declared specs)
+  const unallocatedQty = matchedStocks.reduce((sum, s, idx) => {
+    if (assignedStockIndices.has(idx)) return sum;
+    return sum + (Number(s.quantity) || 0);
+  }, 0);
+
+  if (unallocatedQty > 0) {
+    results.push({
+      spec: '其他/未歸類',
+      quantity: unallocatedQty,
+      isOutOfStock: false
+    });
   }
 
   return results;

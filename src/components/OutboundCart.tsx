@@ -193,10 +193,10 @@ export default function OutboundCart() {
         matched = allProdBatches.filter(s => {
           const sSpec = String(s.specification || '').trim();
           if (!sSpec) return true;
-          return !declaredSpecs.some(ds => isSpecificationMatch(sSpec, ds, product.name));
+          return !declaredSpecs.some(ds => isSpecificationMatch(sSpec, ds));
         });
       } else {
-        matched = allProdBatches.filter(s => isSpecificationMatch(s.specification, trimmedSpec, product.name));
+        matched = allProdBatches.filter(s => isSpecificationMatch(s.specification, trimmedSpec));
         // Fallback if stock has no spec but product name/single-spec matches
         if (matched.length === 0) {
           const unspecified = allProdBatches.filter(
@@ -236,9 +236,9 @@ export default function OutboundCart() {
       .filter(it => {
         if (String(it.product.product_id || '').trim().toLowerCase() !== cleanPid) return false;
         if (!spec) return true;
-        const itSpec = it.stockEntry?.specification || it.product?.specification || '';
+        const itSpec = it.stockEntry ? (it.stockEntry.specification || '') : (it.product?.specification || '');
         if (spec === '其他/未歸類') return !String(itSpec).trim();
-        return isSpecificationMatch(itSpec, spec, it.product?.name);
+        return isSpecificationMatch(itSpec, spec);
       })
       .reduce((sum, it) => sum + Number(it.quantity || 0), 0);
   };
@@ -265,7 +265,7 @@ export default function OutboundCart() {
           String(s.product_id || '').trim().toLowerCase() === cleanPid &&
           Number(s.quantity) > 0 &&
           isExpired(s.expiry_date) &&
-          (!spec || isSpecificationMatch(s.specification, spec, product.name))
+          (!spec || isSpecificationMatch(s.specification, spec))
       );
       if (hasExpiredOnly) {
         showToast(`⚠️ 【${product.name}】${spec ? `(${spec}) ` : ''}現存批次已過期，禁止出貨！`);
@@ -324,11 +324,11 @@ export default function OutboundCart() {
         const it = prev[i];
         if (String(it.product.product_id || '').trim().toLowerCase() !== cleanPid) continue;
         if (spec && spec !== '單一規格') {
-          const itSpec = it.stockEntry?.specification || it.product?.specification || '';
+          const itSpec = it.stockEntry ? (it.stockEntry.specification || '') : (it.product?.specification || '');
           const matched =
             spec === '其他/未歸類'
               ? !String(itSpec).trim()
-              : isSpecificationMatch(itSpec, spec, it.product?.name);
+              : isSpecificationMatch(itSpec, spec);
           if (!matched) continue;
         }
 

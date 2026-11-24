@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useStore, calculateOrderStatus, getProductStatusInfo, getOnOrderStockQty, formatConsistentTxDate, getDominantDateSeparator, isSpecificationMatch, getProductSpecifications, resolveStandardProductSpecification } from '../store/useStore';
+import { useStore, calculateOrderStatus, getProductStatusInfo, getOnOrderStockQty, formatConsistentTxDate, getDominantDateSeparator, isSpecificationMatch, doesProductNameContainSpec, parseSpecifications, getProductSpecifications, resolveStandardProductSpecification } from '../store/useStore';
 import { 
   Package, ArrowDownToLine, ArrowUpFromLine, RefreshCcw, 
   AlertTriangle, BarChart2, Globe, Truck, Trash2, X, PlusCircle, User, Calendar, CheckCircle, Flame, Search, ArrowRight, FileText,
@@ -282,16 +282,17 @@ export default function Home() {
     });
 
     const prodDisplayName = product?.name || itemName || '';
+    const isMultiSpecProduct = parseSpecifications(product?.specification).length > 1;
     let productStock = productStockAll.filter(s => {
       if (itemSpec) {
-        return isSpecificationMatch(s.specification, itemSpec, prodDisplayName);
+        return isSpecificationMatch(s.specification, itemSpec, isMultiSpecProduct ? undefined : prodDisplayName);
       }
       return true;
     });
 
-    if (productStock.length === 0 && itemSpec && productStockAll.length > 0) {
+    if (productStock.length === 0 && itemSpec && productStockAll.length > 0 && !isMultiSpecProduct) {
       const unspecifiedStocks = productStockAll.filter(s => !s.specification || ['-', '無', '預設', '單一規格', '標準'].includes(String(s.specification).trim()));
-      const nameHasSpec = prodDisplayName && prodDisplayName.toLowerCase().includes(itemSpec.toLowerCase());
+      const nameHasSpec = prodDisplayName ? doesProductNameContainSpec(prodDisplayName, itemSpec) : false;
       const isSingleSpecProduct = unspecifiedStocks.length === productStockAll.length;
       if (unspecifiedStocks.length > 0 && (nameHasSpec || isSingleSpecProduct)) {
         productStock = unspecifiedStocks;
@@ -703,19 +704,18 @@ export default function Home() {
         return (resolvedPid && sPid === resolvedPid.toLowerCase()) || (resolvedName && sName === resolvedName.toLowerCase());
       });
 
+      const isMultiSpecProduct = parseSpecifications(matchedProd?.specification).length > 1;
       let matchedStocks = productStocks.filter(s => {
         if (resolvedSpec) {
-          return isSpecificationMatch(s.specification, resolvedSpec, resolvedName);
+          return isSpecificationMatch(s.specification, resolvedSpec, isMultiSpecProduct ? undefined : resolvedName);
         }
         return true;
       });
 
-      // 智慧容錯回溯：若依特定規格未比對到庫存，檢查倉庫中是否有留白無規格的庫存
-      // 條件 1: 商品名稱中已包含該規格詞 (如 LAPOLO 18吋循環涼風扇 包含 18吋)
-      // 條件 2: 該商品在倉庫中全為無規格庫存 (單一規格商品，未建立其他分流規格)
-      if (matchedStocks.length === 0 && resolvedSpec && productStocks.length > 0) {
+      // 智慧容錯回溯：僅針對非多規格分流商品，檢查倉庫中是否有留白無規格的庫存
+      if (matchedStocks.length === 0 && resolvedSpec && productStocks.length > 0 && !isMultiSpecProduct) {
         const unspecifiedStocks = productStocks.filter(s => !s.specification || ['-', '無', '預設', '單一規格', '標準'].includes(String(s.specification).trim()));
-        const nameHasSpec = resolvedName && resolvedName.toLowerCase().includes(resolvedSpec.toLowerCase());
+        const nameHasSpec = resolvedName ? doesProductNameContainSpec(resolvedName, resolvedSpec) : false;
         const isSingleSpecProduct = unspecifiedStocks.length === productStocks.length;
         if (unspecifiedStocks.length > 0 && (nameHasSpec || isSingleSpecProduct)) {
           matchedStocks = unspecifiedStocks;
@@ -909,17 +909,18 @@ export default function Home() {
           return String(s.product_id || '').trim().toLowerCase() === targetPid;
         }) : [];
 
+        const isMultiSpecProduct = parseSpecifications(p?.specification).length > 1;
         let productStock = productStockAll.filter(s => {
           if (itemSpec) {
-            return isSpecificationMatch(s.specification, itemSpec, p?.name || item.product_name);
+            return isSpecificationMatch(s.specification, itemSpec, isMultiSpecProduct ? undefined : (p?.name || item.product_name));
           }
           return true;
         });
 
-        if (productStock.length === 0 && itemSpec && productStockAll.length > 0) {
+        if (productStock.length === 0 && itemSpec && productStockAll.length > 0 && !isMultiSpecProduct) {
           const prodName = p?.name || item.product_name || '';
           const unspecifiedStocks = productStockAll.filter(s => !s.specification || ['-', '無', '預設', '單一規格', '標準'].includes(String(s.specification).trim()));
-          const nameHasSpec = prodName && prodName.toLowerCase().includes(itemSpec.toLowerCase());
+          const nameHasSpec = prodName ? doesProductNameContainSpec(prodName, itemSpec) : false;
           const isSingleSpecProduct = unspecifiedStocks.length === productStockAll.length;
           if (unspecifiedStocks.length > 0 && (nameHasSpec || isSingleSpecProduct)) {
             productStock = unspecifiedStocks;

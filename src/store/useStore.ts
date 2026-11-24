@@ -1120,17 +1120,68 @@ export const normalizeSpecString = (raw?: string): string => {
     .toLowerCase();
 };
 
+const GENERIC_SPEC_LABELS = new Set(['預設規格', '預設', '無', '無規格', '-', '未指定', '單一規格', '單一', '標準', 'default', 'none', 'single']);
+
+const stripPromoFromSpec = (str: string): string => {
+  let cleaned = str
+    .replace(/[★☆●○◆◇■□▲△▼▽※•·]+/g, ' ')
+    .replace(/\([^)]*(?:現貨|特惠|特價|免運|秒發|促銷|升級|加贈|附贈|贈品|建議|適合|體重|kg|cm|公分|台灣|快速|熱銷|推薦|預購|款)[^)]*\)/gi, ' ')
+    .replace(/^[0-9]+[\.\-、_\)\s]+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Strip trailing size unit (號/碼) on standard letter sizes like "M號" -> "M", "XL碼" -> "XL"
+  cleaned = cleaned.replace(/^([0-9]*x*[smlf]|free)[號碼]$/i, '$1');
+  return cleaned.replace(/[\s\-_/]+/g, '').trim();
+};
+
+export const doesProductNameContainSpec = (productName?: string, specRaw?: string): boolean => {
+  if (!productName || !specRaw) return false;
+  const spec = normalizeSpecString(specRaw);
+  if (!spec || GENERIC_SPEC_LABELS.has(spec)) return false;
+
+  const cleanProd = productName.toLowerCase();
+  const escaped = spec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // Pure ASCII alphanumeric spec (e.g. "S", "M", "L", "XL", "2XL", "M10", "T3")
+  if (/^[a-z0-9.\-+/]+$/i.test(spec)) {
+    if (spec.length === 1) {
+      // Single letter/digit (e.g. "M", "L", "S"): require explicit delimiter or size suffix, never match inside "JUMP" or "LAPOLO"
+      const strictSingleRe = new RegExp(`(?:^|[\\s(\\[【/、,])(${escaped})(?:[號碼]?)(?=$|[\\s)\\]】/、,])`, 'i');
+      return strictSingleRe.test(productName);
+    }
+    const boundaryRe = new RegExp(`(?:^|[^a-z0-9])${escaped}(?=$|[^a-z0-9])`, 'i');
+    return boundaryRe.test(cleanProd);
+  }
+
+  // Starts or ends with ASCII alphanumeric (e.g. "18吋", "50ml", "TYPE-C線"): enforce non-alphanumeric boundary on ASCII edge(s)
+  const startsWithAlnum = /^[a-z0-9]/i.test(spec);
+  const endsWithAlnum = /[a-z0-9]$/i.test(spec);
+  if (startsWithAlnum || endsWithAlnum) {
+    const left = startsWithAlnum ? '(?:^|[^a-z0-9])' : '';
+    const right = endsWithAlnum ? '(?=$|[^a-z0-9])' : '';
+    const mixedRe = new RegExp(`${left}${escaped}${right}`, 'i');
+    return mixedRe.test(cleanProd);
+  }
+
+  // Pure non-ASCII (CJK): single character needs delimiter boundary so "大" won't match "大容量"; >=2 chars exact match
+  if (spec.length === 1) {
+    const singleCjkRe = new RegExp(`(?:^|[\\s(\\[【/、,])(${escaped})(?:[色款號碼]?)(?=$|[\\s)\\]】/、,])`, 'i');
+    return singleCjkRe.test(cleanProd);
+  }
+
+  return cleanProd.includes(spec);
+};
+
 export const isSpecificationMatch = (itemSpecRaw?: string, targetSpecRaw?: string, productName?: string): boolean => {
   const norm1 = normalizeSpecString(itemSpecRaw);
   const norm2 = normalizeSpecString(targetSpecRaw);
   if (!norm1 && !norm2) return true;
   if (norm1 === norm2) return true;
 
-  // 品名包含規格之智慧比對 (例如: 庫存無規格留白，訂單為「18吋」，但品名為「LAPOLO 18吋循環涼風扇 FT-1801」)
+  // 品名包含規格之智慧比對 (僅限安全詞界比對，避免 "JUMP" 誤配 "M" 或 "LAPOLO" 誤配 "L")
   if (productName && (!norm1 || !norm2)) {
-    const presentSpec = (norm1 || norm2).toLowerCase().trim();
-    const cleanProd = productName.toLowerCase();
-    if (presentSpec && cleanProd.includes(presentSpec)) {
+    const presentSpec = (norm1 || norm2).trim();
+    if (presentSpec && doesProductNameContainSpec(productName, presentSpec)) {
       return true;
     }
   }
@@ -1141,29 +1192,25 @@ export const isSpecificationMatch = (itemSpecRaw?: string, targetSpecRaw?: strin
   const clean2 = norm2.replace(/[\(\)]/g, ' ').replace(/\s+/g, ' ').trim();
   if (clean1 === clean2) return true;
 
-  // 智慧過濾促銷字詞與前綴 (例如: 【現貨免運】、01. 、加贈收納袋等)
-  const stripPromo = (str: string) => {
-    return str
-      .replace(/\(.*?(?:現貨|特惠|特價|免運|秒發|促銷|升級款|加贈|附贈|贈品|建議).*?\)/gi, ' ')
-      .replace(/^[0-9]+[\.\-、_]\s*/, '')
-      .replace(/[\s\-_/]+/g, '')
-      .trim();
-  };
-  const promoClean1 = stripPromo(norm1);
-  const promoClean2 = stripPromo(norm2);
+  // 智慧過濾促銷字詞、編號前綴與標準尺碼後綴（精準比對，禁止跨尺碼子字串包含）
+  const promoClean1 = stripPromoFromSpec(norm1);
+  const promoClean2 = stripPromoFromSpec(norm2);
   if (promoClean1 && promoClean2 && promoClean1 === promoClean2) return true;
 
-  const parts1 = parseSpecifications(norm1).map(s => normalizeSpecString(s));
-  const parts2 = parseSpecifications(norm2).map(s => normalizeSpecString(s));
+  // 僅當一側為多規格逗號/斜線清單，另一側為單一規格項目時，才檢查是否精準包含於該清單中
+  const parts1 = parseSpecifications(norm1).map(s => normalizeSpecString(s)).filter(Boolean);
+  const parts2 = parseSpecifications(norm2).map(s => normalizeSpecString(s)).filter(Boolean);
 
-  if (parts1.some(p1 => parts2.includes(p1) || norm2.includes(p1) || clean2.includes(p1.replace(/[\(\)]/g, ' ').trim()))) return true;
-  if (parts2.some(p2 => parts1.includes(p2) || norm1.includes(p2) || clean1.includes(p2.replace(/[\(\)]/g, ' ').trim()))) return true;
+  if (parts1.length > 1 && parts2.length === 1) {
+    if (parts1.some(p1 => p1 === norm2 || (promoClean2 && stripPromoFromSpec(p1) === promoClean2))) {
+      return true;
+    }
+  }
 
-  if (norm1.includes(norm2) || norm2.includes(norm1)) return true;
-  if (clean1.includes(clean2) || clean2.includes(clean1)) return true;
-
-  if (promoClean1 && promoClean2) {
-    if (promoClean1.includes(promoClean2) || promoClean2.includes(promoClean1)) return true;
+  if (parts2.length > 1 && parts1.length === 1) {
+    if (parts2.some(p2 => p2 === norm1 || (promoClean1 && stripPromoFromSpec(p2) === promoClean1))) {
+      return true;
+    }
   }
 
   return false;
@@ -5368,11 +5415,17 @@ export const getOnOrderStockQty = (purchaseOrders: PurchaseOrder[], productId: s
         const itemSpec = String(item.specification || (item as any)['規格'] || '').trim();
         let matchSpec = false;
 
-        if (cleanTargetSpec === undefined || cleanTargetSpec === '') {
-          // Target has no specification
+        if (cleanTargetSpec === undefined) {
+          // Caller did not filter by a specific spec -> sum all active PO items for this product
+          matchSpec = true;
+        } else if (cleanTargetSpec === '__UNSPECIFIED__') {
+          // Explicit bucket for blank / uncategorized spec items
+          matchSpec = !itemSpec || GENERIC_SPEC_LABELS.has(itemSpec.toLowerCase());
+        } else if (cleanTargetSpec === '') {
+          // Target has blank spec
           matchSpec = !itemSpec || allMatchingItems.length === 1 || isSpecificationMatch(itemSpec, '');
         } else {
-          // Target has a specification
+          // Target has a specific specification
           if (isSpecificationMatch(itemSpec, cleanTargetSpec)) {
             matchSpec = true;
           } else if (!itemSpec && allMatchingItems.length === 1) {

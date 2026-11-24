@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import ProductSpecStockBadges from './ProductSpecStockBadges';
+import SearchableFilterSelect, { matchesSearchableFilter, isKeywordFilter, extractFilterKeyword } from './SearchableFilterSelect';
 
 interface ProductCompactViewProps {
   onOpenAdjustModal: (group: any, stockEntry?: any) => void;
@@ -35,6 +36,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
     stock, 
     vendors, 
     purchaseOrders,
+    transactions,
     operator,
     toggleOutOfStock, 
     showToast 
@@ -108,8 +110,8 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
         ? Math.max(minStock * 2 - currentStock, minStock > 0 ? minStock : 10)
         : 0;
 
-      // On-order stock (from pending/partial purchase orders)
-      const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification);
+      // On-order stock (from pending/partial purchase orders across all specs of this product)
+      const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, undefined, transactions);
       const activePOs = purchaseOrders.filter(po => 
         (po.status === 'pending' || po.status === 'partial') &&
         (po.items || []).some(it => {
@@ -156,8 +158,8 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
   // Filtered items
   const filteredItems = useMemo(() => {
     return items.filter(item => {
-      if (selectedVendor !== 'ALL' && item.vendor_id !== selectedVendor) return false;
-      if (selectedCategory !== 'ALL' && item.category !== selectedCategory) return false;
+      if (!matchesSearchableFilter(selectedVendor, item.vendor_id, item.vendor_name, 'ALL')) return false;
+      if (!matchesSearchableFilter(selectedCategory, item.category, item.category, 'ALL')) return false;
       if (hideOutOfStock && item.is_out_of_stock) return false;
       if (onlyLowStock && (item.current_stock > item.min_stock || item.is_out_of_stock)) return false;
 
@@ -257,7 +259,7 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
     }
 
     const vendorLabel = selectedVendor !== 'ALL' 
-      ? (vendorMap.get(selectedVendor) || selectedVendor)
+      ? (isKeywordFilter(selectedVendor) ? `關鍵字:${extractFilterKeyword(selectedVendor)}` : (vendorMap.get(selectedVendor) || selectedVendor))
       : '全部廠商';
 
     const orderCandidates = filteredItems.filter(i => !i.is_out_of_stock && (onlyLowStock ? true : i.suggested_order_qty > 0 || i.current_stock <= i.min_stock));
@@ -318,7 +320,9 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    const vendorSuffix = selectedVendor !== 'ALL' ? `_${(vendorMap.get(selectedVendor) || selectedVendor)}` : '';
+    const vendorSuffix = selectedVendor !== 'ALL'
+      ? `_${isKeywordFilter(selectedVendor) ? extractFilterKeyword(selectedVendor) : (vendorMap.get(selectedVendor) || selectedVendor)}`
+      : '';
     link.setAttribute('download', `商品庫存簡覽_訂貨明細表${vendorSuffix}_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
@@ -430,42 +434,40 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
         <div className="flex flex-col md:flex-row gap-2.5 items-stretch md:items-center justify-between pt-1">
           {/* Vendor Quick Dropdown & Category */}
           <div className="flex flex-wrap items-center gap-2">
-            {/* Vendor Filter */}
-            <div className="flex items-center gap-1.5 bg-black/40 border border-white/10 rounded-xl px-2.5 py-1.5 min-w-0 max-w-full">
-              <Building2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-              <span className="text-xs text-slate-400 font-bold shrink-0">供應商:</span>
-              <select
-                value={selectedVendor}
-                onChange={(e) => setSelectedVendor(e.target.value)}
-                className="bg-transparent text-xs font-bold text-sky-300 outline-none cursor-pointer min-w-0 flex-1 max-w-full sm:max-w-[220px] truncate"
-              >
-                <option value="ALL" className="bg-slate-900 text-white">全部供應商 ({products.length})</option>
-                {vendorOptions.map(v => (
-                  <option key={v.id} value={v.id} className="bg-slate-900 text-white">
-                    {v.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {/* Vendor Filter (Searchable & Typeable) */}
+            <SearchableFilterSelect
+              options={vendorOptions.map(v => ({
+                value: v.id,
+                label: v.name,
+                hint: v.name !== v.id ? v.id : undefined,
+              }))}
+              value={selectedVendor}
+              onChange={setSelectedVendor}
+              allValue="ALL"
+              allLabel={`全部供應商 (${products.length})`}
+              placeholder="輸入或選擇供應商..."
+              prefixLabel="供應商:"
+              icon={<Building2 className="w-3.5 h-3.5 text-sky-400" />}
+              accentColor="sky"
+              className="bg-black/40 border border-white/10 rounded-xl px-2.5 py-1.5 min-w-0 w-full sm:w-[240px]"
+              inputClassName="text-xs font-bold text-sky-300"
+            />
 
-            {/* Category Filter */}
+            {/* Category Filter (Searchable & Typeable) */}
             {categoryOptions.length > 0 && (
-              <div className="flex items-center gap-1.5 bg-black/40 border border-white/10 rounded-xl px-2.5 py-1.5 min-w-0 max-w-full">
-                <Layers className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                <span className="text-xs text-slate-400 font-bold shrink-0">分類:</span>
-                <select
-                  value={selectedCategory}
-                  onChange={(e) => setSelectedCategory(e.target.value)}
-                  className="bg-transparent text-xs font-bold text-indigo-300 outline-none cursor-pointer min-w-0 flex-1 max-w-full sm:max-w-[180px] truncate"
-                >
-                  <option value="ALL" className="bg-slate-900 text-white">全部分類</option>
-                  {categoryOptions.map(c => (
-                    <option key={c} value={c} className="bg-slate-900 text-white">
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <SearchableFilterSelect
+                options={categoryOptions.map(c => ({ value: c, label: c }))}
+                value={selectedCategory}
+                onChange={setSelectedCategory}
+                allValue="ALL"
+                allLabel="全部分類"
+                placeholder="輸入或選擇分類..."
+                prefixLabel="分類:"
+                icon={<Layers className="w-3.5 h-3.5 text-indigo-400" />}
+                accentColor="indigo"
+                className="bg-black/40 border border-white/10 rounded-xl px-2.5 py-1.5 min-w-0 w-full sm:w-[190px]"
+                inputClassName="text-xs font-bold text-indigo-300"
+              />
             )}
 
             {/* Toggle Toggles */}
@@ -536,15 +538,16 @@ export default function ProductCompactView({ onOpenAdjustModal }: ProductCompact
           <div className="text-center py-20 bg-black/20 rounded-2xl border border-white/5 space-y-3">
             <Package className="w-12 h-12 text-slate-600 mx-auto" />
             <p className="text-sm font-bold text-slate-400">沒有找到符合條件的商品</p>
-            {(selectedVendor !== 'ALL' || onlyLowStock || searchTerm) && (
+            {(selectedVendor !== 'ALL' || selectedCategory !== 'ALL' || onlyLowStock || hideOutOfStock || searchTerm) && (
               <button
                 onClick={() => {
                   setSelectedVendor('ALL');
                   setSelectedCategory('ALL');
                   setOnlyLowStock(false);
+                  setHideOutOfStock(false);
                   setSearchTerm('');
                 }}
-                className="px-4 py-2 bg-white/10 hover:bg-white/15 text-xs text-sky-300 font-bold rounded-xl"
+                className="px-4 py-2 bg-white/10 hover:bg-white/15 text-xs text-sky-300 font-bold rounded-xl cursor-pointer"
               >
                 重設所有篩選條件
               </button>

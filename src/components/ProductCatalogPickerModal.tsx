@@ -41,7 +41,7 @@ export default function ProductCatalogPickerModal({
   onAddCustomItem,
   defaultVendorName
 }: ProductCatalogPickerModalProps) {
-  const { purchaseOrders } = useStore();
+  const { purchaseOrders, stock, transactions } = useStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedVendorFilter, setSelectedVendorFilter] = useState<string>(defaultVendorName || 'ALL');
@@ -260,7 +260,7 @@ export default function ProductCatalogPickerModal({
                   .filter(it => it.product_id === p.product_id)
                   .reduce((sum, it) => sum + (Number(it.ordered_quantity) || 0), 0);
                 const inStock = stockMap.get(p.product_id) || 0;
-                const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification);
+                const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, undefined, transactions);
                 const vName = vendorMap.get(p.vendor_id) || (p as any).vendor_name || '';
 
                 return (
@@ -407,9 +407,9 @@ export default function ProductCatalogPickerModal({
                               .filter(it => it.product_id === p.product_id && (it.specification || '').trim().toLowerCase() === spec.trim().toLowerCase())
                               .reduce((sum, it) => sum + (Number(it.ordered_quantity) || 0), 0);
 
-                            const currentSpecStock = (useStore.getState().stock || []).filter(s => 
+                            const currentSpecStock = (stock || []).filter(s => 
                               String(s.product_id || '').toLowerCase() === String(p.product_id).toLowerCase() && 
-                              isSpecificationMatch(s.specification, spec, p.name)
+                              isSpecificationMatch(s.specification, spec)
                             ).reduce((acc, s) => acc + (Number(s.quantity) || 0), 0);
 
                             return (

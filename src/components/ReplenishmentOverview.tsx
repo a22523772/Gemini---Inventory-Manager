@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { subDays } from 'date-fns';
 import { computeProductSpecBreakdown } from './ProductSpecStockBadges';
+import SearchableFilterSelect, { matchesSearchableFilter } from './SearchableFilterSelect';
 
 export default function ReplenishmentOverview() {
   const { products, stock, transactions, vendors, purchaseOrders, toggleDiscontinued, showToast } = useStore();
@@ -153,7 +154,7 @@ export default function ReplenishmentOverview() {
         const targetSpec = isDefaultSingleSpec
           ? (p.specification || '')
           : sb.spec === '其他/未歸類'
-            ? ''
+            ? '__UNSPECIFIED__'
             : sb.spec;
         const specOnOrder = getOnOrderStockQty(purchaseOrders, p.product_id, targetSpec, transactions);
         return {
@@ -164,7 +165,7 @@ export default function ReplenishmentOverview() {
         };
       });
 
-      const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, p.specification, transactions);
+      const onOrderQty = getOnOrderStockQty(purchaseOrders, p.product_id, undefined, transactions);
 
       return {
         product: p,
@@ -206,8 +207,8 @@ export default function ReplenishmentOverview() {
         if (!matches) return false;
       }
 
-      // Vendor
-      if (filterVendor && p.vendor_id !== filterVendor) return false;
+      // Vendor (supports exact pick and typed keyword matching)
+      if (!matchesSearchableFilter(filterVendor, p.vendor_id, vendorMap.get(p.vendor_id) || p.vendor_id)) return false;
 
       // Discontinued Filter
       if (hideDiscontinued && item.isDiscontinued) return false;
@@ -309,20 +310,21 @@ export default function ReplenishmentOverview() {
             />
           </div>
 
-          <div>
-            <select
-              value={filterVendor}
-              onChange={(e) => setFilterVendor(e.target.value)}
-              className="w-full py-2.5 sm:py-2 px-3 bg-white/5 border border-white/10 rounded-xl text-xs text-white outline-none focus:border-emerald-400 cursor-pointer appearance-none"
-            >
-              <option value="" className="bg-slate-900">所有供應商 (補貨對象)</option>
-              {vendorList.map(v => (
-                <option key={v.id} value={v.id} className="bg-slate-900">
-                  {v.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          <SearchableFilterSelect
+            options={vendorList.map(v => ({
+              value: v.id,
+              label: v.name,
+              hint: v.name !== v.id ? v.id : undefined,
+            }))}
+            value={filterVendor}
+            onChange={setFilterVendor}
+            allValue=""
+            allLabel="所有供應商 (補貨對象)"
+            placeholder="所有供應商（可輸入搜尋）"
+            accentColor="emerald"
+            className="w-full py-2 px-3 bg-white/5 border border-white/10 rounded-xl min-h-[40px]"
+            inputClassName="text-xs"
+          />
 
           <div className="flex items-center gap-2">
             <label className="flex items-center gap-1.5 px-3 py-2.5 sm:py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-slate-300 cursor-pointer hover:bg-white/10 transition-all flex-1 select-none">

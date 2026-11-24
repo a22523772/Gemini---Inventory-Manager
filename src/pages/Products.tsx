@@ -7,6 +7,7 @@ import QuantityInput from '../components/QuantityInput';
 import ReplenishmentOverview from '../components/ReplenishmentOverview';
 import ProductCompactView from '../components/ProductCompactView';
 import ProductSpecStockBadges from '../components/ProductSpecStockBadges';
+import SearchableFilterSelect, { matchesSearchableFilter, FilterSelectOption } from '../components/SearchableFilterSelect';
 
 type SortType = 'name_asc' | 'name_desc' | 'newest' | 'stock_low' | 'stock_high';
 
@@ -190,8 +191,8 @@ export default function Products() {
   }, [activeTab, searchTerm, filterBrand, filterCategory, filterVendor, filterDiscontinued, sortOrder, showFilters, setProductsPageState]);
 
   // Extract unique brands and categories for dropdowns
-  const brands = useMemo(() => Array.from(new Set(products.map(p => p.brand).filter(Boolean))), [products]);
-  const categories = useMemo(() => Array.from(new Set(products.map(p => p.category).filter(Boolean))), [products]);
+  const brands = useMemo(() => Array.from(new Set(products.map(p => p.brand).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'zh-HK')), [products]);
+  const categories = useMemo(() => Array.from(new Set(products.map(p => p.category).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'zh-HK')), [products]);
   const uniqueVendors = useMemo(() => Array.from(new Set(products.map(p => p.vendor_id).filter(Boolean))), [products]);
 
   // Vendor map for O(1) vendor name lookup
@@ -201,6 +202,31 @@ export default function Products() {
   const getVendorName = (vid: string) => {
      return vendorMap.get(vid) || vid;
   };
+
+  const categoryFilterOptions: FilterSelectOption[] = useMemo(
+    () => categories.map(c => ({ value: c, label: c })),
+    [categories]
+  );
+
+  const brandFilterOptions: FilterSelectOption[] = useMemo(
+    () => brands.map(b => ({ value: b, label: b })),
+    [brands]
+  );
+
+  const vendorFilterOptions: FilterSelectOption[] = useMemo(
+    () =>
+      uniqueVendors
+        .map(v => {
+          const name = vendorMap.get(v) || v;
+          return {
+            value: v,
+            label: name,
+            hint: name !== v ? v : undefined,
+          };
+        })
+        .sort((a, b) => a.label.localeCompare(b.label, 'zh-HK')),
+    [uniqueVendors, vendorMap]
+  );
 
   // Grouping the products by product_id with O(1) map lookup
   const groupedProducts = useMemo(() => {
@@ -272,10 +298,10 @@ export default function Products() {
                                  p.product_id.toLowerCase().includes(q);
             if (!matchesSearch) return false;
         }
-        // Filters
-        if (filterBrand && p.brand !== filterBrand) return false;
-        if (filterCategory && p.category !== filterCategory) return false;
-        if (filterVendor && p.vendor_id !== filterVendor) return false;
+        // Filters (supports both exact selection and typed keyword matching)
+        if (!matchesSearchableFilter(filterBrand, p.brand, p.brand)) return false;
+        if (!matchesSearchableFilter(filterCategory, p.category, p.category)) return false;
+        if (!matchesSearchableFilter(filterVendor, p.vendor_id, getVendorName(p.vendor_id))) return false;
         
         const statusInfo = getProductStatusInfo(p);
         if (filterDiscontinued === 'active' && statusInfo.isPaused) return false;
@@ -448,9 +474,13 @@ export default function Products() {
                 </button>
                 <button 
                   onClick={() => setShowFilters(!showFilters)} 
-                  className={`p-2 rounded-full transition-colors ${showFilters ? 'bg-white/20 text-white' : 'glass-panel text-slate-400 hover:text-white'}`}
+                  className={`relative p-2 rounded-full transition-colors cursor-pointer ${showFilters || filterCategory || filterBrand || filterVendor ? 'bg-white/20 text-white' : 'glass-panel text-slate-400 hover:text-white'}`}
+                  title="分類 / 品牌 / 供應商篩選"
                 >
                   <Filter className="w-4 h-4" />
+                  {(filterCategory || filterBrand || filterVendor) && (
+                    <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-sky-400 border-2 border-[#0f172a]" />
+                  )}
                 </button>
                 <Link to="/add-product" className="px-3.5 py-1.5 bg-sky-400 hover:bg-sky-300 text-slate-950 font-extrabold rounded-full transition-colors active:scale-95 text-xs shadow-md shadow-sky-400/20 whitespace-nowrap flex items-center gap-1">
                   <span>+ 新增商品</span>
@@ -476,33 +506,42 @@ export default function Products() {
           </div>
 
           {showFilters && (
-            <div className="flex gap-2 animate-in fade-in slide-in-from-top-2 overflow-x-auto pb-1">
-              <select 
-                value={filterCategory} 
-                onChange={e => setFilterCategory(e.target.value)}
-                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none min-w-[100px]"
-              >
-                <option value="" className="bg-[#0f172a]">所有分類</option>
-                {categories.map(c => <option key={c} value={c} className="bg-[#0f172a]">{c}</option>)}
-              </select>
-              
-              <select 
-                value={filterBrand} 
-                onChange={e => setFilterBrand(e.target.value)}
-                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none min-w-[100px]"
-              >
-                <option value="" className="bg-[#0f172a]">所有品牌</option>
-                {brands.map(b => <option key={b} value={b} className="bg-[#0f172a]">{b}</option>)}
-              </select>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 animate-in fade-in slide-in-from-top-2">
+              <SearchableFilterSelect
+                options={categoryFilterOptions}
+                value={filterCategory}
+                onChange={setFilterCategory}
+                allValue=""
+                allLabel="所有分類"
+                placeholder="所有分類（可輸入搜尋）"
+                accentColor="indigo"
+                className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 min-h-[40px]"
+                inputClassName="text-sm"
+              />
 
-              <select 
-                value={filterVendor} 
-                onChange={e => setFilterVendor(e.target.value)}
-                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-[var(--color-text-main)] outline-none focus:border-[var(--color-accent-blue)] appearance-none min-w-[120px]"
-              >
-                <option value="" className="bg-[#0f172a]">所有供應商</option>
-                {uniqueVendors.map(v => <option key={v} value={v} className="bg-[#0f172a]">{getVendorName(v)}</option>)}
-              </select>
+              <SearchableFilterSelect
+                options={brandFilterOptions}
+                value={filterBrand}
+                onChange={setFilterBrand}
+                allValue=""
+                allLabel="所有品牌"
+                placeholder="所有品牌（可輸入搜尋）"
+                accentColor="sky"
+                className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 min-h-[40px]"
+                inputClassName="text-sm"
+              />
+
+              <SearchableFilterSelect
+                options={vendorFilterOptions}
+                value={filterVendor}
+                onChange={setFilterVendor}
+                allValue=""
+                allLabel="所有供應商"
+                placeholder="所有供應商（可輸入搜尋）"
+                accentColor="emerald"
+                className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 min-h-[40px]"
+                inputClassName="text-sm"
+              />
             </div>
           )}
         </div>
