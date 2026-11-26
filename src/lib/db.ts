@@ -135,7 +135,7 @@ export type Transaction = {
 // Queue item type
 export type SyncItem = {
   id: string; // local uuid
-  action: 'stockIn' | 'batchStockIn' | 'stockOut' | 'adjustStock' | 'addProduct' | 'addVendor' | 'editProduct' | 'deleteProduct' | 'editVendor' | 'deleteVendor' | 'addPurchaseOrder' | 'editPurchaseOrder' | 'deletePurchaseOrder' | 'batchShipment' | 'overwriteTransactions' | 'overwriteStock' | 'overwritePurchaseOrders';
+  action: 'stockIn' | 'batchStockIn' | 'stockOut' | 'adjustStock' | 'addProduct' | 'addVendor' | 'editProduct' | 'deleteProduct' | 'editVendor' | 'deleteVendor' | 'addPurchaseOrder' | 'editPurchaseOrder' | 'deletePurchaseOrder' | 'batchShipment' | 'overwriteTransactions' | 'overwriteStock' | 'overwritePurchaseOrders' | 'overwriteProducts' | 'overwriteVendors';
   payload: any;
   timestamp: string;
 };

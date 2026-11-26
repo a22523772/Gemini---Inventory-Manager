@@ -57,7 +57,9 @@ export default function Purchases() {
     refreshPurchaseOrders,
     addVendor,
     operator,
-    showToast 
+    showToast,
+    cloudSyncWarning,
+    clearCloudSyncWarning
   } = useStore();
 
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -265,7 +267,7 @@ export default function Purchases() {
       const totalReceived = resolvedItems.reduce((acc, it) => acc + Number(it.effective_received_quantity || 0), 0);
       const remaining = resolvedItems.reduce((acc, it) => acc + Number(it.remaining_quantity || 0), 0);
 
-      const isManualPriority = Boolean(po.manual_override || po.manual_edited_at);
+      const isManualPriority = Boolean(po.manual_override);
       let effectiveStatus = po.status;
       if (!isManualPriority && po.status !== 'completed' && po.status !== 'cancelled') {
         if (totalReceived > 0 && remaining > 0) {
@@ -722,23 +724,33 @@ export default function Purchases() {
 
     setIsSavingStockIn(true);
     try {
-      // 1. Upload photos to Google Drive (if configured) or keep base64
-      let finalImageUrl = confirmImageUrls[0] || '';
+      // 1. Upload photos to Google Drive (if configured); skip oversized base64 on failure
+      let finalImageUrl = '';
       const uploadedUrls: string[] = [];
+      let failedUploadCount = 0;
+      let firstUploadError = '';
 
       for (let i = 0; i < confirmImageUrls.length; i++) {
         const img = confirmImageUrls[i];
         if (img.startsWith('data:image')) {
+          const optimizedImg = await optimizeImageForUpload(img);
           const fileName = `Invoice_${confirmInvoiceNumber || Date.now()}_p${i + 1}.jpg`;
-          const uploadRes = await uploadInvoiceImage(img, fileName);
-          if (uploadRes.success && uploadRes.url) {
+          const uploadRes = await uploadInvoiceImage(optimizedImg, fileName);
+          if (uploadRes.success && uploadRes.url && !uploadRes.url.startsWith('data:image')) {
             uploadedUrls.push(uploadRes.url);
           } else {
-            uploadedUrls.push(img);
+            failedUploadCount++;
+            if (!firstUploadError) {
+              firstUploadError = uploadRes.error || 'Google Drive 上傳失敗';
+            }
           }
         } else {
           uploadedUrls.push(img);
         }
+      }
+
+      if (failedUploadCount > 0) {
+        showToast(`⚠️ 有 ${failedUploadCount} 張單據照片上傳 Google Drive 失敗（${firstUploadError}），已先完成入庫登記，請稍後在採購單點「補傳單據」補傳照片。`);
       }
 
       if (uploadedUrls.length > 0) {
@@ -1334,6 +1346,34 @@ export default function Purchases() {
       {/* TAB 1: PURCHASE ORDERS LIST */}
       {activeTab === 'list' && (
         <div className="space-y-4">
+          {cloudSyncWarning && (
+            <div className="p-3.5 rounded-xl border border-amber-500/40 bg-amber-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-2.5 text-xs text-amber-200">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="leading-relaxed">
+                  <div className="font-bold text-amber-100">雲端採購單缺漏異常警示</div>
+                  <p className="text-amber-200/85 mt-0.5">{cloudSyncWarning}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Link
+                  to="/setup"
+                  className="px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold transition-colors"
+                >
+                  前往設定修復 →
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => clearCloudSyncWarning()}
+                  className="p-1.5 rounded-lg text-amber-300/70 hover:text-amber-100 hover:bg-white/10 transition-colors cursor-pointer"
+                  title="暫時關閉提示"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Filters & Search */}
           <div className="flex flex-col gap-3 bg-[#0f172a] p-3 rounded-xl border border-white/10">
             {/* Top Row: Search and Status/Vendor filters */}
@@ -1471,7 +1511,7 @@ export default function Purchases() {
                 const remainingOnOrder = resolvedItems.reduce((acc, it) => acc + Number(it.remaining_quantity || 0), 0);
                 const totalCost = resolvedItems.reduce((acc, it) => acc + (Number(it.ordered_quantity || 0) * Number(it.cost_price || 0)), 0);
 
-                const isManualPriority = Boolean(po.manual_override || po.manual_edited_at);
+                const isManualPriority = Boolean(po.manual_override);
                 const effectiveStatus = (!isManualPriority && po.status !== 'completed' && po.status !== 'cancelled')
                   ? (totalReceived > 0 && remainingOnOrder > 0 ? 'partial' : (remainingOnOrder === 0 && totalOrdered > 0 ? 'completed' : po.status))
                   : po.status;

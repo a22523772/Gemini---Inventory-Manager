@@ -114,6 +114,9 @@ export default function PurchaseOrderPhotoModal({
     try {
       setIsUploading(true);
       const finalUrls = [...existingUrls];
+      const failedIndices = new Set<number>();
+      let firstError = '';
+      let uploadedCount = 0;
 
       if (newImagePreviews.length > 0) {
         for (let i = 0; i < newImagePreviews.length; i++) {
@@ -121,14 +124,41 @@ export default function PurchaseOrderPhotoModal({
           const preview = newImagePreviews[i];
           const optimized = await optimizeImageForUpload(preview);
           const fileName = `PO_${po.po_id}_Doc_${Date.now()}_${i + 1}.jpg`;
-          
+
           const uploadRes = await uploadInvoiceImage(optimized, fileName);
-          if (uploadRes.success && uploadRes.url) {
+          if (uploadRes.success && uploadRes.url && !uploadRes.url.startsWith('data:image')) {
             finalUrls.push(uploadRes.url);
+            uploadedCount++;
           } else {
-            finalUrls.push(optimized);
+            failedIndices.add(i);
+            if (!firstError) {
+              firstError = uploadRes.error || '無法上傳至 Google Drive（為保護試算表不超過 50,000 字元上限，已擋下直接寫入）';
+            }
           }
         }
+      }
+
+      const origUrls = po.invoice_image_url
+        ? po.invoice_image_url.split('\n').map(u => u.trim()).filter(Boolean)
+        : [];
+      const existingChanged =
+        existingUrls.length !== origUrls.length ||
+        existingUrls.some((u, idx) => u !== origUrls[idx]);
+
+      if (failedIndices.size > 0) {
+        if (uploadedCount > 0 || existingChanged) {
+          setUploadProgress('正在儲存已成功上傳的照片...');
+          await onSaveImages(po.po_id, finalUrls.join('\n'));
+          setExistingUrls(finalUrls);
+        }
+        setNewImageFiles(prev => prev.filter((_, idx) => failedIndices.has(idx)));
+        setNewImagePreviews(prev => prev.filter((_, idx) => failedIndices.has(idx)));
+        showToast(
+          uploadedCount > 0
+            ? `⚠️ 已存檔 ${uploadedCount} 張照片，但有 ${failedIndices.size} 張上傳 Google Drive 失敗：${firstError}`
+            : `❌ 單據照片上傳 Google Drive 失敗：${firstError}（未變更試算表資料，請重試）`
+        );
+        return;
       }
 
       const mergedUrlString = finalUrls.join('\n');

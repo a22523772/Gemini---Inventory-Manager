@@ -804,12 +804,62 @@ const parseIsoTimestamp = (value?: string): number => {
 const stripInvoiceTagFromNote = (note: string): string =>
   (note || '').replace(/\[(?:單據|發票|單據號|發票號)[:：]\s*[^\]]+\]/g, '').trim();
 
+const MAX_SHEET_CELL_LENGTH = 45000;
+
+export const sanitizeCellImageUrlsForCloud = (raw?: string): { cleanUrl: string; strippedOversizedCount: number } => {
+  if (!raw || !String(raw).trim()) return { cleanUrl: '', strippedOversizedCount: 0 };
+  const lines = String(raw)
+    .split('\n')
+    .map(u => u.trim())
+    .filter(Boolean);
+
+  const kept: string[] = [];
+  let strippedOversizedCount = 0;
+  let runningLen = 0;
+
+  for (const line of lines) {
+    const isOversizedDataUri = line.startsWith('data:image') && line.length > MAX_SHEET_CELL_LENGTH;
+    const wouldExceedTotal = (runningLen + (kept.length > 0 ? 1 : 0) + line.length) > MAX_SHEET_CELL_LENGTH;
+    if (isOversizedDataUri || (line.startsWith('data:image') && wouldExceedTotal)) {
+      strippedOversizedCount++;
+      continue;
+    }
+    if (wouldExceedTotal) {
+      strippedOversizedCount++;
+      continue;
+    }
+    kept.push(line);
+    runningLen += (kept.length > 1 ? 1 : 0) + line.length;
+  }
+
+  return {
+    cleanUrl: kept.join('\n'),
+    strippedOversizedCount
+  };
+};
+
+const normalizeDateOnlyForCompare = (val?: any): string => {
+  const s = String(val ?? '').trim();
+  if (!s) return '';
+  const isoMatch = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
+  }
+  const parsed = parseToDate(s);
+  if (parsed) {
+    return format(parsed, 'yyyy-MM-dd');
+  }
+  return s;
+};
+
 const sanitizeSinglePOForCloud = (po: PurchaseOrder, products: Product[]): PurchaseOrder => {
   const prodNameMap = new Map((products || []).map(p => [String(p.product_id || '').toLowerCase().trim(), p.name]));
   const poNoteClean = (po.note || '').trim();
   const poNoteStripped = stripInvoiceTagFromNote(poNoteClean);
+  const { cleanUrl } = sanitizeCellImageUrlsForCloud(po.invoice_image_url);
   return {
     ...po,
+    invoice_image_url: cleanUrl,
     items: (po.items || []).map(it => {
       const cleanPid = String(it.product_id || '').toLowerCase().trim();
       const resolvedName = (it.name || (it as any).product_name || (cleanPid ? prodNameMap.get(cleanPid) : '') || it.product_id || '').trim();
@@ -862,10 +912,12 @@ const sanitizeTransactionsForCloud = (transactions: Transaction[], products: Pro
     }
     const cleanPid = String(t.product_id || '').toLowerCase().trim();
     const resolvedName = (t.name || t.product_name || (cleanPid ? prodNameMap.get(cleanPid) : '') || t.product_id || '').trim();
+    const { cleanUrl } = sanitizeCellImageUrlsForCloud(t.invoice_image_url);
     return {
       ...t,
       name: resolvedName,
       product_name: resolvedName,
+      invoice_image_url: cleanUrl,
       date: formatConsistentTxDate(t.date),
       cost_price: cp,
       price: Number(t.price) || 0,
@@ -874,16 +926,150 @@ const sanitizeTransactionsForCloud = (transactions: Transaction[], products: Pro
   });
 };
 
+const sanitizeProductsForCloud = (products: Product[]): Product[] =>
+  (products || [])
+    .filter(p => p && p.product_id)
+    .map(p => ({
+      ...p,
+      product_id: String(p.product_id).trim(),
+      barcode: String(p.barcode || '').trim(),
+      name: String(p.name || '').trim(),
+      category: String(p.category || '').trim(),
+      brand: String(p.brand || '').trim(),
+      unit: String(p.unit || '').trim(),
+      specification: String(p.specification || '').trim(),
+      cost_price: Number(p.cost_price) || 0,
+      vendor_id: String(p.vendor_id || '').trim(),
+      has_expiry: Boolean(p.has_expiry),
+      min_stock: p.min_stock !== undefined && p.min_stock !== null && !isNaN(Number(p.min_stock)) ? Number(p.min_stock) : undefined,
+      is_discontinued: Boolean(p.is_discontinued || p.is_out_of_stock),
+      is_out_of_stock: Boolean(p.is_out_of_stock || p.is_discontinued),
+      expected_restock_date: String(p.expected_restock_date || '').trim(),
+      created_at: String(p.created_at || '').trim()
+    }));
+
+const sanitizeVendorsForCloud = (vendors: Vendor[]): Vendor[] =>
+  (vendors || [])
+    .filter(v => v && (v.vendor_id || v.vendor_name || v.name))
+    .map(v => {
+      const vId = String(v.vendor_id || v.vendor_name || v.name || '').trim();
+      const vName = String(v.vendor_name || v.name || vId).trim();
+      return {
+        ...v,
+        vendor_id: vId,
+        vendor_name: vName,
+        name: vName,
+        contact: String(v.contact || '').trim(),
+        phone: String(v.phone || '').trim()
+      };
+    });
+
+export interface FullSiteBackup {
+  app: 'StockApp';
+  schemaVersion: number;
+  exportedAt: string;
+  operator: string;
+  settings: {
+    lowStockAlertEnabled: boolean;
+    expiryThreshold: number;
+  };
+  data: {
+    products: Product[];
+    stock: Stock[];
+    vendors: Vendor[];
+    transactions: Transaction[];
+    purchaseOrders: PurchaseOrder[];
+    onlineOrders: OnlineOrder[];
+  };
+}
+
+export const countBackupPhotos = (purchaseOrders: PurchaseOrder[] = [], transactions: Transaction[] = []): number => {
+  const uniquePhotos = new Set<string>();
+  const collect = (raw?: string) => {
+    if (!raw || typeof raw !== 'string') return;
+    raw.split('\n').map(u => u.trim()).filter(Boolean).forEach(u => uniquePhotos.add(u));
+  };
+  (purchaseOrders || []).forEach(po => collect(po?.invoice_image_url));
+  (transactions || []).forEach(tx => collect(tx?.invoice_image_url));
+  return uniquePhotos.size;
+};
+
+export const validateFullBackupPayload = (raw: any): {
+  valid: boolean;
+  error?: string;
+  backup?: FullSiteBackup;
+  counts?: {
+    products: number;
+    stock: number;
+    vendors: number;
+    transactions: number;
+    purchaseOrders: number;
+    onlineOrders: number;
+    photos: number;
+  };
+} => {
+  if (!raw || typeof raw !== 'object') {
+    return { valid: false, error: '檔案格式錯誤，必須為有效的 JSON 物件' };
+  }
+  const d = raw.data && typeof raw.data === 'object' ? raw.data : raw;
+  const products = Array.isArray(d.products) ? d.products : null;
+  const stock = Array.isArray(d.stock) ? d.stock : null;
+  const vendors = Array.isArray(d.vendors) ? d.vendors : null;
+  const transactions = Array.isArray(d.transactions) ? d.transactions : null;
+  const purchaseOrders = Array.isArray(d.purchaseOrders) ? d.purchaseOrders : null;
+  const onlineOrders = Array.isArray(d.onlineOrders) ? d.onlineOrders : [];
+
+  if (!products || !stock || !vendors || !transactions || !purchaseOrders) {
+    return {
+      valid: false,
+      error: '備份檔缺少必要資料表（需包含 products、stock、vendors、transactions、purchaseOrders）'
+    };
+  }
+
+  const normalized: FullSiteBackup = {
+    app: 'StockApp',
+    schemaVersion: Number(raw.schemaVersion) || 1,
+    exportedAt: String(raw.exportedAt || new Date().toISOString()),
+    operator: String(raw.operator || 'admin'),
+    settings: {
+      lowStockAlertEnabled: raw.settings?.lowStockAlertEnabled !== undefined ? Boolean(raw.settings.lowStockAlertEnabled) : true,
+      expiryThreshold: Number(raw.settings?.expiryThreshold) || 30
+    },
+    data: {
+      products,
+      stock,
+      vendors,
+      transactions,
+      purchaseOrders,
+      onlineOrders
+    }
+  };
+
+  return {
+    valid: true,
+    backup: normalized,
+    counts: {
+      products: products.length,
+      stock: stock.length,
+      vendors: vendors.length,
+      transactions: transactions.length,
+      purchaseOrders: purchaseOrders.length,
+      onlineOrders: onlineOrders.length,
+      photos: countBackupPhotos(purchaseOrders, transactions)
+    }
+  };
+};
+
 const isRemotePOStaleComparedToLocal = (localPO: PurchaseOrder, remotePO: any): boolean => {
   if (!localPO || !remotePO) return false;
   const norm = (v: any) => String(v ?? '').trim();
   if (norm(localPO.vendor_name) !== norm(remotePO.vendor_name)) return true;
   if (norm(localPO.status) !== norm(remotePO.status)) return true;
-  if (norm(localPO.order_date) !== norm(remotePO.order_date)) return true;
-  if (norm(localPO.expected_date) !== norm(remotePO.expected_date)) return true;
+  if (normalizeDateOnlyForCompare(localPO.order_date) !== normalizeDateOnlyForCompare(remotePO.order_date)) return true;
+  if (normalizeDateOnlyForCompare(localPO.expected_date) !== normalizeDateOnlyForCompare(remotePO.expected_date)) return true;
   if (norm(localPO.note) !== norm(remotePO.note)) return true;
   if (norm(localPO.invoice_number) !== norm(remotePO.invoice_number)) return true;
-  if (norm(localPO.invoice_image_url) !== norm(remotePO.invoice_image_url)) return true;
+  if (sanitizeCellImageUrlsForCloud(localPO.invoice_image_url).cleanUrl !== sanitizeCellImageUrlsForCloud(remotePO.invoice_image_url).cleanUrl) return true;
 
   const localItems = Array.isArray(localPO.items) ? localPO.items : [];
   const remoteItems = Array.isArray(remotePO.items) ? remotePO.items : [];
@@ -1792,7 +1978,7 @@ export const getResolvedPoItems = (
     }
   });
 
-  const isManualPriority = Boolean(po.manual_override || po.manual_edited_at);
+  const isManualPriority = Boolean(po.manual_override);
 
   return po.items.map((it, idx) => {
     const fromTx = txReceivedByIndex.get(idx) || 0;
@@ -1824,7 +2010,7 @@ export const reconcilePurchaseOrdersWithTransactions = (
 
     const totalOrdered = resolved.reduce((s, it) => s + Number(it.ordered_quantity || 0), 0);
     const totalReceived = resolved.reduce((s, it) => s + Number(it.effective_received_quantity || 0), 0);
-    const isManualPriority = Boolean(po.manual_override || po.manual_edited_at);
+    const isManualPriority = Boolean(po.manual_override);
 
     let status = po.status;
     if (!isManualPriority && status !== 'completed' && status !== 'cancelled') {
@@ -1876,7 +2062,7 @@ interface AppState {
   refreshTransactions: () => Promise<boolean>;
   refreshVendors: () => Promise<boolean>;
   addPurchaseOrder: (po: Omit<PurchaseOrder, 'created_at' | 'updated_at'>) => Promise<void>;
-  updatePurchaseOrder: (poId: string, updated: Partial<PurchaseOrder>, options?: { skipOverwriteTransactions?: boolean; isAutoStockIn?: boolean }) => Promise<void>;
+  updatePurchaseOrder: (poId: string, updated: Partial<PurchaseOrder>, options?: { skipOverwriteTransactions?: boolean; isAutoStockIn?: boolean; keepManualOverride?: boolean }) => Promise<void>;
   deletePurchaseOrder: (poId: string) => Promise<void>;
   uploadInvoiceImage: (base64Data: string, fileName?: string) => Promise<{ success: boolean; url?: string; viewUrl?: string; fileId?: string; error?: string }>;
   batchStockInFromInvoice: (params: {
@@ -1918,6 +2104,12 @@ interface AppState {
   overwriteCloudStock: () => Promise<boolean>;
   overwriteCloudTransactions: () => Promise<boolean>;
   overwriteCloudPurchaseOrders: () => Promise<boolean>;
+  overwriteCloudProducts: () => Promise<boolean>;
+  overwriteCloudVendors: () => Promise<boolean>;
+  exportFullBackup: () => FullSiteBackup;
+  importFullBackup: (backupData: FullSiteBackup) => Promise<{ success: boolean; counts: Record<string, number>; photoCount: number; error?: string }>;
+  cloudSyncWarning: string | null;
+  clearCloudSyncWarning: () => void;
   editTransaction: (transactionId: string, updatedFields: Partial<Transaction>) => Promise<void>;
   deleteTransaction: (transactionId: string) => Promise<void>;
   deleteTransactionGroup: (groupIdOrIds: string | string[]) => Promise<void>;
@@ -1996,6 +2188,8 @@ export const useStore = create<AppState>((set, get) => ({
   isLoading: false,
   isSyncing: false,
   error: null,
+  cloudSyncWarning: null,
+  clearCloudSyncWarning: () => set({ cloudSyncWarning: null }),
   toastMessage: null,
   lowStockAlertEnabled: true,
   expiryThreshold: 30,
@@ -2217,6 +2411,12 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   enqueueAction: async (action, payload) => {
+    // Cancel any pending background full-remote refresh so sequential actions aren't interrupted
+    if (remoteFetchDebounceTimer) {
+      clearTimeout(remoteFetchDebounceTimer);
+      remoteFetchDebounceTimer = null;
+    }
+
     // Fill in product name for GAS if missing first!
     const { products } = get();
     const cleanPid = String(payload.product_id || '').trim().toLowerCase();
@@ -2232,6 +2432,27 @@ export const useStore = create<AppState>((set, get) => ({
     const targetTxId = updatedPayload.transaction_id || `TX_${Date.now()}_${Math.random().toString(36).substring(2,6)}`;
     const targetUniqueId = updatedPayload.id || (updatedPayload.transaction_id ? `${targetTxId}_${Math.random().toString(36).substring(2,7)}` : targetTxId);
     const finalPayload = { ...updatedPayload, transaction_id: targetTxId, id: targetUniqueId, operator: get().operator };
+
+    // Coalesce unstarted redundant editPurchaseOrder entries for the same po_id so sequential Edit -> Check-in never races or sends stale snapshots
+    if (action === 'editPurchaseOrder' && finalPayload.po_id) {
+      const targetPoId = String(finalPayload.po_id).trim();
+      const startProtectIdx = get().isSyncing ? 1 : 0;
+      const curQ = get().syncQueue;
+      const staleIdsToRemove: string[] = [];
+      for (let qi = startProtectIdx; qi < curQ.length; qi++) {
+        const qItem = curQ[qi];
+        if (qItem.action === 'editPurchaseOrder' && String(qItem.payload?.po_id || '').trim() === targetPoId) {
+          staleIdsToRemove.push(qItem.id);
+        }
+      }
+      if (staleIdsToRemove.length > 0) {
+        for (const rId of staleIdsToRemove) {
+          await dbSyncQueue.removeItem(rId);
+        }
+        const removeSet = new Set(staleIdsToRemove);
+        set(state => ({ syncQueue: state.syncQueue.filter(q => !removeSet.has(q.id)) }));
+      }
+    }
 
     const item: SyncItem = {
       id: targetUniqueId,
@@ -2780,7 +3001,7 @@ export const useStore = create<AppState>((set, get) => ({
           }
         }
 
-        // Purchase Order actions with strict JSON verification + overwritePurchaseOrders fallback
+        // Purchase Order actions with strict JSON verification (NO silent full-sheet overwrite fallback!)
         if (item.action === 'editPurchaseOrder' || item.action === 'addPurchaseOrder' || item.action === 'deletePurchaseOrder') {
           let poSyncSuccess = false;
           let poErrorMsg = '';
@@ -2814,59 +3035,35 @@ export const useStore = create<AppState>((set, get) => ({
             poErrorMsg = poErr?.message || '網路請求異常';
           }
 
-          if (!poSyncSuccess) {
-            console.warn(`${item.action} failed or returned non-JSON, falling back to overwritePurchaseOrders:`, poErrorMsg);
-            try {
-              const sanitizedList = sanitizePurchaseOrdersForCloud(get().purchaseOrders, get().products);
-              const fbRes = await fetch(buildGasActionUrl(gasApiUrl, 'overwritePurchaseOrders'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify(sanitizedList)
-              });
-              if (fbRes.ok) {
-                const fbText = await fbRes.text();
-                try {
-                  const fbJson = JSON.parse(fbText);
-                  if (fbJson && fbJson.success === true) {
-                    poSyncSuccess = true;
-                    const targetPoId = item.payload?.po_id;
-                    if (targetPoId && recentlyEditedPOs.has(targetPoId)) {
-                      const entry = recentlyEditedPOs.get(targetPoId)!;
-                      entry.fallbackTriggered = true;
-                    }
-                  } else {
-                    poErrorMsg = fbJson?.error || poErrorMsg;
-                  }
-                } catch {
-                  poErrorMsg = '備援整表同步回應非 JSON 格式';
-                }
-              } else {
-                poErrorMsg = `備援寫入 HTTP ${fbRes.status}`;
-              }
-            } catch (fbErr: any) {
-              poErrorMsg = fbErr?.message || poErrorMsg;
-            }
-          }
-
           if (poSyncSuccess) {
             await dbSyncQueue.removeItem(item.id);
             set((state) => ({ syncQueue: state.syncQueue.filter(q => q.id !== item.id) }));
           } else {
-            set({ error: `同步失敗： ${item.action} (${poErrorMsg})` });
+            set({ error: `同步失敗： ${item.action} (${poErrorMsg})。為保護試算表資料安全，已停止佇列並保留該筆待重試。` });
             hasError = true;
           }
           continue;
         }
 
-        // Cloud full-sheet overwrite repair tasks (queued when direct cloud overwrite fails)
-        if (item.action === 'overwriteTransactions' || item.action === 'overwriteStock' || item.action === 'overwritePurchaseOrders') {
+        // Cloud full-sheet overwrite repair tasks (explicitly queued when a direct cloud overwrite fails)
+        if (
+          item.action === 'overwriteTransactions' ||
+          item.action === 'overwriteStock' ||
+          item.action === 'overwritePurchaseOrders' ||
+          item.action === 'overwriteProducts' ||
+          item.action === 'overwriteVendors'
+        ) {
           let bodyPayload: any;
           if (item.action === 'overwriteTransactions') {
             bodyPayload = sanitizeTransactionsForCloud(get().transactions, get().products);
           } else if (item.action === 'overwriteStock') {
             bodyPayload = sanitizeStockForCloud(get().stock, get().products);
-          } else {
+          } else if (item.action === 'overwritePurchaseOrders') {
             bodyPayload = sanitizePurchaseOrdersForCloud(get().purchaseOrders, get().products);
+          } else if (item.action === 'overwriteProducts') {
+            bodyPayload = sanitizeProductsForCloud(get().products);
+          } else {
+            bodyPayload = sanitizeVendorsForCloud(get().vendors);
           }
 
           const ovRes = await fetch(buildGasActionUrl(gasApiUrl, item.action), {
@@ -3349,35 +3546,28 @@ export const useStore = create<AppState>((set, get) => ({
         console.warn("Failed to fetch online orders in fetchRemoteData, ignoring:", err);
       }
 
-      // Purchase Orders
+      // Purchase Orders (NO automatic overwritePurchaseOrders fallback — detect divergence and warn explicitly)
       try {
         const rPO = await fetch(buildUrl('getPurchaseOrders'));
         if (rPO.ok) {
           const dPO = await rPO.json();
           if (Array.isArray(dPO)) {
-            // If a recently edited PO was returned stale from GAS (e.g. sheet header mismatch in single-row editPurchaseOrder),
-            // auto-trigger overwritePurchaseOrders once in background so the sheet heals automatically.
-            if (get().syncQueue.length === 0) {
-              const nowMs = Date.now();
-              let needsOverwriteRepair = false;
-              for (const [poId, entry] of recentlyEditedPOs.entries()) {
-                if (entry.expiresAt > nowMs && !entry.fallbackTriggered) {
-                  const remoteMatch = dPO.find((r: any) => String(r?.po_id || '').trim() === poId);
-                  if (!remoteMatch || isRemotePOStaleComparedToLocal(entry.po, remoteMatch)) {
-                    entry.fallbackTriggered = true;
-                    needsOverwriteRepair = true;
-                  }
-                }
-              }
-              if (needsOverwriteRepair) {
-                get().overwriteCloudPurchaseOrders().catch(err =>
-                  console.warn('Auto overwritePurchaseOrders fallback failed:', err)
-                );
-              }
+            const currentPOs = get().purchaseOrders;
+            const currentQueue = get().syncQueue || [];
+            const remotePoIdSet = new Set(dPO.map((r: any) => String(r?.po_id || '').trim()).filter(Boolean));
+            const missingRemotePOs = (currentQueue.length === 0)
+              ? currentPOs.filter(lp => lp?.po_id && !remotePoIdSet.has(lp.po_id) && !recentlyDeletedPOIds.has(lp.po_id))
+              : [];
+
+            if (missingRemotePOs.length > 0) {
+              const missingMsg = `偵測到試算表缺少 ${missingRemotePOs.length} 筆本機採購單（${missingRemotePOs.slice(0, 3).map(m => m.po_id).join(', ')}${missingRemotePOs.length > 3 ? '…' : ''}），本機已自動保留；請確認資料完整後於「設定與同步」手動修復雲端採購單。`;
+              set({ cloudSyncWarning: missingMsg });
+              get().showToast(`⚠️ 雲端試算表缺少 ${missingRemotePOs.length} 筆採購單，本機已自動保護保留！`);
+            } else {
+              set({ cloudSyncWarning: null });
             }
 
-            const currentPOs = get().purchaseOrders;
-            const mergedPOs = mergeAndProtectPurchaseOrders(dPO, currentPOs, get().syncQueue);
+            const mergedPOs = mergeAndProtectPurchaseOrders(dPO, currentPOs, currentQueue);
             const currentTxs = (validT && validT.length > 0) ? validT : (get().transactions || []);
             const reconciledPOs = reconcilePurchaseOrdersWithTransactions(mergedPOs, currentTxs);
             await dbPurchaseOrders.clear();
@@ -3457,6 +3647,10 @@ export const useStore = create<AppState>((set, get) => ({
     const { gasApiUrl, showToast } = get();
     if (!gasApiUrl || !gasApiUrl.trim().startsWith('http')) {
       showToast("ℹ️ 尚未設定 Google Apps Script 網址");
+      return false;
+    }
+    if ((get().syncQueue || []).some(q => q.action === 'overwriteProducts')) {
+      showToast('⚠️ 尚有未同步的商品覆寫修復任務，請先完成同步後再重新整理');
       return false;
     }
     set({ isLoading: true });
@@ -3716,6 +3910,19 @@ export const useStore = create<AppState>((set, get) => ({
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data)) {
+        const remotePoIdSet = new Set(data.map((r: any) => String(r?.po_id || '').trim()).filter(Boolean));
+        const missingRemotePOs = (syncQueue.length === 0)
+          ? purchaseOrders.filter(lp => lp?.po_id && !remotePoIdSet.has(lp.po_id) && !recentlyDeletedPOIds.has(lp.po_id))
+          : [];
+
+        if (missingRemotePOs.length > 0) {
+          set({
+            cloudSyncWarning: `偵測到試算表缺少 ${missingRemotePOs.length} 筆本機採購單（${missingRemotePOs.slice(0, 3).map(m => m.po_id).join(', ')}${missingRemotePOs.length > 3 ? '…' : ''}），本機已保留；可於「設定與同步」手動覆寫修復雲端採購單。`
+          });
+        } else {
+          set({ cloudSyncWarning: null });
+        }
+
         const mergedPOs = mergeAndProtectPurchaseOrders(data, purchaseOrders, syncQueue);
         const reconciledPOs = reconcilePurchaseOrdersWithTransactions(mergedPOs, transactions || []);
         await dbPurchaseOrders.clear();
@@ -3725,7 +3932,11 @@ export const useStore = create<AppState>((set, get) => ({
           }
         }
         set({ purchaseOrders: reconciledPOs });
-        showToast(`✅ 採購訂單已重新整理！(共 ${reconciledPOs.length} 筆採購單)`);
+        showToast(
+          missingRemotePOs.length > 0
+            ? `⚠️ 已整理 ${reconciledPOs.length} 筆採購單（注意：試算表缺少 ${missingRemotePOs.length} 筆，本機已自動保護保留）`
+            : `✅ 採購訂單已重新整理！(共 ${reconciledPOs.length} 筆採購單)`
+        );
         return true;
       }
       return false;
@@ -3864,6 +4075,10 @@ export const useStore = create<AppState>((set, get) => ({
     const { gasApiUrl, showToast } = get();
     if (!gasApiUrl || !gasApiUrl.trim().startsWith('http')) {
       showToast("ℹ️ 尚未設定 Google Apps Script 網址");
+      return false;
+    }
+    if ((get().syncQueue || []).some(q => q.action === 'overwriteVendors')) {
+      showToast('⚠️ 尚有未同步的廠商覆寫修復任務，請先完成同步後再重新整理');
       return false;
     }
     set({ isLoading: true });
@@ -5030,8 +5245,8 @@ export const useStore = create<AppState>((set, get) => ({
       ...(isManualEdit
         ? { manual_edited_at: nowIso, manual_override: true }
         : {
-            manual_edited_at: target.manual_edited_at,
-            manual_override: target.manual_override
+            manual_edited_at: options?.keepManualOverride ? (target.manual_edited_at || nowIso) : '',
+            manual_override: options?.keepManualOverride ? true : false
           })
     };
 
@@ -5092,11 +5307,51 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   overwriteCloudPurchaseOrders: async () => {
-    const { gasApiUrl, purchaseOrders, products } = get();
+    const { gasApiUrl, purchaseOrders, products, uploadInvoiceImage } = get();
     if (!gasApiUrl) return false;
     set({ isLoading: true, error: null });
     try {
-      const sanitized = sanitizePurchaseOrdersForCloud(purchaseOrders, products);
+      // Auto-upgrade any pending inline base64 images to Google Drive URLs before writing to Sheets
+      let workingPOs = [...purchaseOrders];
+      let localUpgraded = false;
+      for (let idx = 0; idx < workingPOs.length; idx++) {
+        const po = workingPOs[idx];
+        if (!po?.invoice_image_url || !po.invoice_image_url.includes('data:image')) continue;
+        const lines = po.invoice_image_url.split('\n').map(u => u.trim()).filter(Boolean);
+        let changed = false;
+        const nextLines: string[] = [];
+        for (let li = 0; li < lines.length; li++) {
+          const line = lines[li];
+          if (line.startsWith('data:image')) {
+            const up = await uploadInvoiceImage(line, `PO_${po.po_id}_Recover_${Date.now()}_${li + 1}.jpg`);
+            if (up.success && up.url && !up.url.startsWith('data:image')) {
+              nextLines.push(up.url);
+              changed = true;
+            } else {
+              nextLines.push(line);
+            }
+          } else {
+            nextLines.push(line);
+          }
+        }
+        if (changed) {
+          const updatedPO = { ...po, invoice_image_url: nextLines.join('\n') };
+          workingPOs[idx] = updatedPO;
+          await dbPurchaseOrders.setItem(po.po_id, updatedPO);
+          localUpgraded = true;
+        }
+      }
+      if (localUpgraded) {
+        set({ purchaseOrders: workingPOs });
+      }
+
+      let strippedTotal = 0;
+      const sanitized = workingPOs.map(po => {
+        const { strippedOversizedCount } = sanitizeCellImageUrlsForCloud(po.invoice_image_url);
+        strippedTotal += strippedOversizedCount;
+        return sanitizeSinglePOForCloud(po, products);
+      });
+
       const res = await fetch(buildGasActionUrl(gasApiUrl, 'overwritePurchaseOrders'), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -5109,14 +5364,211 @@ export const useStore = create<AppState>((set, get) => ({
           d = JSON.parse(resText);
         } catch {}
         if (d && d.success === true) {
-          get().showToast(`✅ 採購訂單工作表已同步更新！共覆載了 ${purchaseOrders.length} 筆採購單。`);
+          set({ cloudSyncWarning: null });
+          if (strippedTotal > 0) {
+            get().showToast(`✅ 已同步 ${workingPOs.length} 筆採購單！（另有 ${strippedTotal} 張離線大圖超過儲存格限制僅保留於本機，請視需求補傳）`);
+          } else {
+            get().showToast(`✅ 採購訂單工作表已同步更新！共覆載了 ${workingPOs.length} 筆採購單。`);
+          }
           return true;
         }
+        throw new Error(d?.error || '伺服器未回傳成功確認');
       }
-      throw new Error('伺服器回應異常，請確認 Web App 已更新為最新代碼！');
+      throw new Error(`伺服器回應異常 (HTTP ${res.status})，請確認 Web App 已更新為最新代碼！`);
     } catch (e: any) {
       set({ error: `強行修復採購單表失敗: ${e.message}` });
       return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  overwriteCloudProducts: async () => {
+    const { gasApiUrl, products } = get();
+    if (!gasApiUrl) return false;
+    set({ isLoading: true, error: null });
+    try {
+      const sanitized = sanitizeProductsForCloud(products);
+      const res = await fetch(buildGasActionUrl(gasApiUrl, 'overwriteProducts'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(sanitized)
+      });
+      if (res.ok) {
+        const resText = await res.text();
+        let d: any = null;
+        try {
+          d = JSON.parse(resText);
+        } catch {}
+        if (d && d.success === true) {
+          get().showToast(`✅ 商品資料庫工作表已同步修復！共覆載了 ${sanitized.length} 筆商品。`);
+          return true;
+        }
+        throw new Error(d?.error || '伺服器未回傳成功確認，請確認 Web App 已更新為 v2.6 最新代碼！');
+      }
+      throw new Error(`伺服器回應異常 (HTTP ${res.status})，請確認 Web App 已更新為最新代碼！`);
+    } catch (e: any) {
+      set({ error: `強行修復商品表失敗: ${e.message}` });
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  overwriteCloudVendors: async () => {
+    const { gasApiUrl, vendors } = get();
+    if (!gasApiUrl) return false;
+    set({ isLoading: true, error: null });
+    try {
+      const sanitized = sanitizeVendorsForCloud(vendors);
+      const res = await fetch(buildGasActionUrl(gasApiUrl, 'overwriteVendors'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(sanitized)
+      });
+      if (res.ok) {
+        const resText = await res.text();
+        let d: any = null;
+        try {
+          d = JSON.parse(resText);
+        } catch {}
+        if (d && d.success === true) {
+          get().showToast(`✅ 供應商名錄工作表已同步修復！共覆載了 ${sanitized.length} 家廠商。`);
+          return true;
+        }
+        throw new Error(d?.error || '伺服器未回傳成功確認，請確認 Web App 已更新為 v2.6 最新代碼！');
+      }
+      throw new Error(`伺服器回應異常 (HTTP ${res.status})，請確認 Web App 已更新為最新代碼！`);
+    } catch (e: any) {
+      set({ error: `強行修復廠商表失敗: ${e.message}` });
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  exportFullBackup: () => {
+    const { products, stock, vendors, transactions, purchaseOrders, onlineOrders, operator, lowStockAlertEnabled, expiryThreshold } = get();
+    return {
+      app: 'StockApp',
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      operator,
+      settings: {
+        lowStockAlertEnabled,
+        expiryThreshold
+      },
+      data: {
+        products: products.map(p => ({ ...p })),
+        stock: stock.map(s => ({ ...s })),
+        vendors: vendors.map(v => ({ ...v })),
+        transactions: transactions.map(t => ({ ...t })),
+        purchaseOrders: purchaseOrders.map(po => ({ ...po, items: (po.items || []).map(it => ({ ...it })) })),
+        onlineOrders: onlineOrders.map(o => ({ ...o }))
+      }
+    };
+  },
+
+  importFullBackup: async (rawData) => {
+    const validation = validateFullBackupPayload(rawData);
+    if (!validation.valid || !validation.backup) {
+      return {
+        success: false,
+        counts: {},
+        photoCount: 0,
+        error: validation.error || '備份檔驗證失敗'
+      };
+    }
+
+    const { backup } = validation;
+    set({ isLoading: true, error: null });
+    try {
+      // Clear local protection windows so restored POs show immediately
+      recentlyEditedPOs.clear();
+      recentlyDeletedPOIds.clear();
+
+      const nextProducts: Product[] = backup.data.products.filter(p => p && p.product_id).map(p => ({ ...p }));
+      const nextStock: Stock[] = backup.data.stock.filter(s => s && (s.stock_id || s.product_id) && Number(s.quantity) !== 0).map(s => ({ ...s }));
+      const nextVendors: Vendor[] = backup.data.vendors.filter(v => v && (v.vendor_id || v.vendor_name || v.name)).map(v => ({ ...v }));
+      const nextTransactions: Transaction[] = backup.data.transactions.filter(Boolean).map(t => ({
+        ...t,
+        id: String(t.id || t.transaction_id || `TX_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`),
+        transaction_id: String(t.transaction_id || t.id || `TX_${Date.now()}`),
+        invoice_image_url: t.invoice_image_url ? String(t.invoice_image_url) : ''
+      })).sort((a, b) => getTxTimestamp(b.date) - getTxTimestamp(a.date));
+
+      const nextPOs: PurchaseOrder[] = backup.data.purchaseOrders.filter(po => po && po.po_id).map(po => ({
+        ...po,
+        invoice_image_url: po.invoice_image_url ? String(po.invoice_image_url) : '',
+        items: Array.isArray(po.items) ? po.items.map(it => ({ ...it })) : []
+      }));
+
+      const nextOnlineOrders: OnlineOrder[] = backup.data.onlineOrders.filter(Boolean).map(o => ({ ...o }));
+
+      await Promise.all([
+        dbProducts.clear(),
+        dbStock.clear(),
+        dbVendors.clear(),
+        dbTransactions.clear(),
+        dbPurchaseOrders.clear(),
+        dbOnlineOrders.clear()
+      ]);
+
+      for (const p of nextProducts) await dbProducts.setItem(p.product_id, p);
+      for (const s of nextStock) {
+        const sid = s.stock_id || `STK_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        await dbStock.setItem(sid, { ...s, stock_id: sid });
+      }
+      for (const v of nextVendors) await dbVendors.setItem(v.vendor_id, v);
+
+      const batchSize = 150;
+      for (let i = 0; i < nextTransactions.length; i += batchSize) {
+        const chunk = nextTransactions.slice(i, i + batchSize);
+        await Promise.all(chunk.map(t => dbTransactions.setItem(t.id, t)));
+      }
+      for (const po of nextPOs) await dbPurchaseOrders.setItem(po.po_id, po);
+      for (let i = 0; i < nextOnlineOrders.length; i++) {
+        const o = nextOnlineOrders[i];
+        await dbOnlineOrders.setItem(`${o.order_id}_${o.product_id || 'unlinked'}_${i}`, o);
+      }
+
+      await dbSettings.setItem('lowStockAlertEnabled', backup.settings.lowStockAlertEnabled);
+      await dbSettings.setItem('expiryThreshold', backup.settings.expiryThreshold);
+
+      set({
+        products: nextProducts,
+        stock: nextStock,
+        vendors: nextVendors,
+        transactions: nextTransactions,
+        purchaseOrders: nextPOs,
+        onlineOrders: nextOnlineOrders,
+        lowStockAlertEnabled: backup.settings.lowStockAlertEnabled,
+        expiryThreshold: backup.settings.expiryThreshold,
+        cloudSyncWarning: null
+      });
+
+      const photoCount = countBackupPhotos(nextPOs, nextTransactions);
+      get().showToast(`✅ 全站 JSON 快照還原完成！（商品 ${nextProducts.length}、庫存 ${nextStock.length}、交易 ${nextTransactions.length}、採購單 ${nextPOs.length}、單據照片 ${photoCount} 張）`);
+      return {
+        success: true,
+        counts: {
+          products: nextProducts.length,
+          stock: nextStock.length,
+          vendors: nextVendors.length,
+          transactions: nextTransactions.length,
+          purchaseOrders: nextPOs.length,
+          onlineOrders: nextOnlineOrders.length
+        },
+        photoCount
+      };
+    } catch (e: any) {
+      set({ error: `還原 JSON 備份失敗: ${e.message}` });
+      return {
+        success: false,
+        counts: {},
+        photoCount: 0,
+        error: e.message
+      };
     } finally {
       set({ isLoading: false });
     }
@@ -5133,11 +5585,11 @@ export const useStore = create<AppState>((set, get) => ({
 
   uploadInvoiceImage: async (base64Data, fileName) => {
     const { gasApiUrl } = get();
-    if (!gasApiUrl) {
-      return { success: true, url: base64Data, viewUrl: base64Data };
+    if (!gasApiUrl || !gasApiUrl.trim().startsWith('http')) {
+      return { success: false, error: '尚未設定 Google Apps Script 網址，無法上傳雲端硬碟' };
     }
     try {
-      const res = await fetch(`${gasApiUrl}?action=uploadInvoiceImage`, {
+      const res = await fetch(buildGasActionUrl(gasApiUrl, 'uploadInvoiceImage'), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
@@ -5147,7 +5599,7 @@ export const useStore = create<AppState>((set, get) => ({
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.success) {
+        if (data && data.success && (data.url || data.viewUrl)) {
           return {
             success: true,
             url: data.url || data.viewUrl,
@@ -5155,11 +5607,12 @@ export const useStore = create<AppState>((set, get) => ({
             fileId: data.fileId
           };
         }
+        return { success: false, error: data?.error || '雲端硬碟未回傳有效連結' };
       }
-      return { success: true, url: base64Data, viewUrl: base64Data };
+      return { success: false, error: `圖片上傳伺服器回應異常 (HTTP ${res.status})` };
     } catch (err: any) {
-      console.warn("Upload image to drive failed, using local base64 fallback:", err);
-      return { success: true, url: base64Data, viewUrl: base64Data };
+      console.warn("Upload image to drive failed:", err);
+      return { success: false, error: err?.message || '網路異常，無法上傳單據圖片至 Google Drive' };
     }
   },
 
@@ -5179,7 +5632,7 @@ export const useStore = create<AppState>((set, get) => ({
           status: 'completed',
           invoice_image_url: invoice_image_url || targetPO.invoice_image_url,
           ...(invoice_number ? { invoice_number } : {})
-        }, { skipOverwriteTransactions: true, isAutoStockIn: true });
+        }, { skipOverwriteTransactions: true, isAutoStockIn: true, keepManualOverride: true });
         showToast(`✅ 採購單 ${targetPO.po_id} 已結案（無新增入庫品項）`);
       } else {
         showToast('⚠️ 本次無大於 0 的進貨數量，已略過入庫！');
@@ -5313,7 +5766,11 @@ export const useStore = create<AppState>((set, get) => ({
         items: updatedItems,
         invoice_image_url: invoice_image_url || targetPO.invoice_image_url,
         ...(invoice_number ? { invoice_number } : {})
-      }, { skipOverwriteTransactions: true, isAutoStockIn: true });
+      }, {
+        skipOverwriteTransactions: true,
+        isAutoStockIn: true,
+        keepManualOverride: Boolean(is_close_remaining_po && !allFullyReceived)
+      });
     }
 
     showToast(`🎉 成功完成 ${validItems.length} 項商品進貨入庫！`);
@@ -5363,7 +5820,7 @@ export const useStore = create<AppState>((set, get) => ({
 
     if (itemsToStockIn.length === 0) {
       // All items were already fully received! Directly complete PO without adding duplicate inventory.
-      await updatePurchaseOrder(po.po_id, { status: 'completed' }, { skipOverwriteTransactions: true, isAutoStockIn: true });
+      await updatePurchaseOrder(po.po_id, { status: 'completed' }, { skipOverwriteTransactions: true, isAutoStockIn: true, keepManualOverride: false });
       showToast(`✅ 採購單 ${po.po_id} 所有品項先前已全數到貨，已直接標記為結案！`);
       return;
     }

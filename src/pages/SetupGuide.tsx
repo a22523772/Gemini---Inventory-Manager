@@ -1,10 +1,29 @@
-import { useState, useEffect } from 'react';
-import { useStore } from '../store/useStore';
-import { Save, Check, RefreshCw, FileCode2, AlertTriangle, X, Key, Eye, EyeOff, Trash2, ListFilter, AlertCircle, Copy, CheckCheck } from 'lucide-react';
+import { useState, useEffect, useRef, ChangeEvent } from 'react';
+import { useStore, validateFullBackupPayload, countBackupPhotos, FullSiteBackup } from '../store/useStore';
+import { Save, Check, RefreshCw, FileCode2, AlertTriangle, X, Key, Eye, EyeOff, Trash2, ListFilter, AlertCircle, Copy, CheckCheck, Download, Upload, Database, ShieldCheck, Image as ImageIcon } from 'lucide-react';
 import { getGeminiAPIKey, setGeminiAPIKey as saveGeminiKey, clearGeminiAPIKey } from '../lib/geminiClient';
 
 export default function SetupGuide() {
-  const { gasApiUrl, setGasApiUrl, syncData, syncQueue, clearSyncQueue, removeFromSyncQueue, error, operator, setOperator, isLoading, stock, transactions, purchaseOrders } = useStore();
+  const {
+    gasApiUrl,
+    setGasApiUrl,
+    syncData,
+    syncQueue,
+    clearSyncQueue,
+    removeFromSyncQueue,
+    error,
+    operator,
+    setOperator,
+    isLoading,
+    products,
+    vendors,
+    stock,
+    transactions,
+    purchaseOrders,
+    onlineOrders,
+    exportFullBackup,
+    importFullBackup
+  } = useStore();
   const [url, setUrl] = useState(gasApiUrl);
   const [geminiKey, setGeminiKey] = useState(getGeminiAPIKey() || '');
   const [showGeminiKey, setShowGeminiKey] = useState(false);
@@ -13,13 +32,29 @@ export default function SetupGuide() {
   const [showQueueDetails, setShowQueueDetails] = useState(false);
   const [copiedScript, setCopiedScript] = useState(false);
   const [tab, setTab] = useState<'settings' | 'docs'>('settings');
+  const backupFileInputRef = useRef<HTMLInputElement>(null);
 
   const [confirmAction, setConfirmAction] = useState<{
-    type: 'stock' | 'transactions' | 'purchase_orders' | null;
+    type: 'stock' | 'transactions' | 'purchase_orders' | 'products' | 'vendors' | null;
     title: string;
     message: string;
     targetCount: number;
   }>({ type: null, title: '', message: '', targetCount: 0 });
+
+  const [pendingBackupImport, setPendingBackupImport] = useState<{
+    fileName: string;
+    backup: FullSiteBackup;
+    counts: {
+      products: number;
+      stock: number;
+      vendors: number;
+      transactions: number;
+      purchaseOrders: number;
+      onlineOrders: number;
+      photos: number;
+    };
+  } | null>(null);
+  const [isImportingBackup, setIsImportingBackup] = useState(false);
 
   useEffect(() => {
     setUrl(gasApiUrl);
@@ -45,7 +80,7 @@ export default function SetupGuide() {
   const handleExecuteOverwrite = async () => {
     const type = confirmAction.type;
     setConfirmAction({ type: null, title: '', message: '', targetCount: 0 });
-    
+
     if (type === 'stock') {
       const success = await useStore.getState().overwriteCloudStock();
       if (success) {
@@ -61,6 +96,82 @@ export default function SetupGuide() {
       if (success) {
         useStore.getState().showToast("✅ 採購單同步成功！雲端採購單工作表（purchase_orders）已完全同步補齊。");
       }
+    } else if (type === 'products') {
+      const success = await useStore.getState().overwriteCloudProducts();
+      if (success) {
+        useStore.getState().showToast("✅ 商品主檔同步成功！雲端商品工作表（products）已完全覆寫補齊。");
+      }
+    } else if (type === 'vendors') {
+      const success = await useStore.getState().overwriteCloudVendors();
+      if (success) {
+        useStore.getState().showToast("✅ 供應商同步成功！雲端廠商工作表（vendors）已完全覆寫補齊。");
+      }
+    }
+  };
+
+  const handleExportFullBackup = () => {
+    try {
+      const backup = exportFullBackup();
+      const photoCount = countBackupPhotos(backup.data.purchaseOrders, backup.data.transactions);
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      const fileName = `StockApp_Backup_${stamp}.json`;
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' });
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+      useStore.getState().showToast(
+        `✅ 已匯出全站完整 JSON 備份（商品 ${backup.data.products.length}、庫存 ${backup.data.stock.length}、廠商 ${backup.data.vendors.length}、採購單 ${backup.data.purchaseOrders.length}、交易 ${backup.data.transactions.length}、單據照片 ${photoCount} 張）`
+      );
+    } catch (err: any) {
+      useStore.getState().showToast(`❌ 匯出 JSON 備份失敗：${err?.message || '未知錯誤'}`);
+    }
+  };
+
+  const handleSelectBackupFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const validation = validateFullBackupPayload(parsed);
+      if (!validation.valid || !validation.backup || !validation.counts) {
+        useStore.getState().showToast(`❌ 備份檔驗證失敗：${validation.error || '格式無效'}`);
+        return;
+      }
+      setPendingBackupImport({
+        fileName: file.name,
+        backup: validation.backup,
+        counts: validation.counts
+      });
+    } catch (err: any) {
+      useStore.getState().showToast(`❌ 無法讀取 JSON 備份檔：${err?.message || '檔案格式錯誤'}`);
+    }
+  };
+
+  const handleConfirmImportBackup = async () => {
+    if (!pendingBackupImport) return;
+    setIsImportingBackup(true);
+    try {
+      const res = await importFullBackup(pendingBackupImport.backup);
+      if (res.success) {
+        useStore.getState().showToast(
+          `✅ 全站資料還原完成！（商品 ${res.counts.products}、庫存 ${res.counts.stock}、採購單 ${res.counts.purchaseOrders}、交易 ${res.counts.transactions}、單據照片 ${res.photoCount} 張）`
+        );
+        setPendingBackupImport(null);
+      } else {
+        useStore.getState().showToast(`❌ 還原失敗：${res.error || '未知錯誤'}`);
+      }
+    } finally {
+      setIsImportingBackup(false);
     }
   };
 
@@ -90,8 +201,8 @@ export default function SetupGuide() {
             onClick={() => setTab('docs')}
           >
             <span>後端代碼與文件</span>
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
-              v2.4 更新
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+              v2.6 更新
             </span>
           </button>
         </div>
@@ -108,11 +219,11 @@ export default function SetupGuide() {
                 </div>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-sm font-bold text-amber-200">Google Apps Script 腳本版本已更新 (v2.4)</h3>
-                    <span className="px-2 py-0.5 text-[10px] font-black bg-amber-400 text-slate-950 rounded-full">重要更新</span>
+                    <h3 className="text-sm font-bold text-amber-200">Google Apps Script 腳本版本已更新 (v2.6)</h3>
+                    <span className="px-2 py-0.5 text-[10px] font-black bg-amber-400 text-slate-950 rounded">資料防遺失防護</span>
                   </div>
                   <p className="text-xs text-amber-200/80 mt-1 leading-relaxed">
-                    本次升級包含採購單<strong>極速核對入庫 (<code className="bg-black/30 px-1 py-0.5 rounded font-mono text-amber-200">batchStockIn</code>)</strong> 與<strong>交易紀錄冪等防重保護</strong>。系統已內建雙軌相容機制，建議您前往更新試算表以獲得最佳效能！
+                    本次升級包含採購單與覆寫寫入的<strong>記憶體先備快照＋失敗自動回滾保護</strong>、儲存格 45,000 字元安全防呆、日期格式正規化，以及新增 <code className="bg-black/30 px-1 py-0.5 rounded font-mono text-amber-200">overwriteProducts</code> / <code className="bg-black/30 px-1 py-0.5 rounded font-mono text-amber-200">overwriteVendors</code> 雲端修復接口。強烈建議先更新部署腳本！
                   </p>
                 </div>
               </div>
@@ -326,7 +437,15 @@ export default function SetupGuide() {
                         addProduct: '新增商品',
                         editProduct: '編輯商品',
                         deleteProduct: '刪除商品',
-                        batchShipment: '批次訂單出貨'
+                        addVendor: '新增廠商',
+                        editVendor: '編輯廠商',
+                        deleteVendor: '刪除廠商',
+                        batchShipment: '批次訂單出貨',
+                        overwriteStock: '覆寫雲端庫存',
+                        overwriteTransactions: '覆寫雲端交易紀錄',
+                        overwritePurchaseOrders: '覆寫雲端採購單',
+                        overwriteProducts: '覆寫雲端商品主檔',
+                        overwriteVendors: '覆寫雲端廠商清單'
                       };
                       const actionName = actionLabelMap[item.action] || item.action;
                       const p = item.payload || {};
@@ -384,86 +503,215 @@ export default function SetupGuide() {
               </button>
             </div>
 
-            <div className="glass-panel p-4 rounded-2xl border-emerald-500/20 bg-emerald-500/5 space-y-4">
-              <h2 className="text-base font-bold text-emerald-200 flex items-center gap-1.5 animate-pulse">
-                <span>✨ 雲端試算表手動修復與強行校正</span>
-              </h2>
-              <p className="text-xs text-emerald-200/60">
-                如果您的 <strong>stock (庫存)</strong> 或 <strong>transactions (交易紀錄)</strong> 工作表與 APP 顯示的資訊 (APP 目前庫存、紀錄最完整) 不一致，請利用下方工具，以本地快取資料覆寫雲端：
+            <div className="glass-panel p-4 rounded-2xl border border-emerald-500/25 bg-emerald-500/5 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <h2 className="text-base font-bold text-emerald-200 flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+                  <span>雲端試算表手動修復與強行校正</span>
+                </h2>
+                <span className="text-[11px] font-mono text-emerald-300/80">覆寫前請先更新 GAS v2.6</span>
+              </div>
+              <p className="text-xs text-emerald-200/70 leading-relaxed">
+                若 Google 試算表發生資料缺漏或與最完整裝置不一致，可於該裝置點擊下方對應工作表，以本機資料安全覆寫還原至雲端（支援 5 大核心資料表，覆寫採快照防遺失機制）。
               </p>
-              
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 font-semibold text-xs text-emerald-100">
-                <div className="p-3 bg-black/40 rounded-xl border border-white/5 space-y-2 flex flex-col justify-between">
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 font-semibold text-xs text-emerald-100">
+                <div className="p-3.5 bg-black/40 rounded-xl border border-white/10 space-y-2.5 flex flex-col justify-between">
                   <div>
                     <div className="flex justify-between items-center mb-1">
                       <span>1. 庫存工作表 (stock) 校正</span>
                     </div>
-                    <p className="text-[10px] text-zinc-400 font-mono mb-2">APP 本地庫存批次數：{stock.length} 筆</p>
+                    <p className="text-[11px] text-zinc-400 font-mono tabular-nums">本機批次數：{stock.length} 筆</p>
                   </div>
                   <button
                     onClick={() => {
                       setConfirmAction({
                         type: 'stock',
                         title: '確定強制覆寫雲端庫存嗎？',
-                        message: '確定要將雲端試算表的 stock 工作表完全覆蓋為此 APP 上之庫存嗎？雲端現有 stock 資料將被完全清除並重新寫入，本系統將以本地現有最新庫存資料覆蓋雲端！並同步修正。',
+                        message: '確定要將雲端試算表的 stock 工作表覆蓋為此裝置上的庫存資料嗎？GAS v2.6 會先備份快照驗證後再寫入。',
                         targetCount: stock.length
                       });
                     }}
                     disabled={isLoading || !gasApiUrl}
-                    className="w-full flex items-center justify-center py-2 px-3 rounded-lg text-xs font-bold transition-all border border-emerald-500/40 text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/30 disabled:opacity-50 cursor-pointer"
+                    className="w-full flex items-center justify-center py-2 px-3 rounded-lg text-xs font-bold transition-colors border border-emerald-500/40 text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-50 cursor-pointer"
                   >
-                    以本地快取強制覆寫雲端庫存
+                    以本地快取覆寫雲端庫存
                   </button>
                 </div>
 
-                <div className="p-3 bg-black/40 rounded-xl border border-white/5 space-y-2 flex flex-col justify-between">
+                <div className="p-3.5 bg-black/40 rounded-xl border border-white/10 space-y-2.5 flex flex-col justify-between">
                   <div>
                     <div className="flex justify-between items-center mb-1">
                       <span>2. 交易紀錄 (transactions) 補齊</span>
                     </div>
-                    <p className="text-[10px] text-zinc-400 font-mono mb-2">APP 本地紀錄：{transactions.length} 筆</p>
+                    <p className="text-[11px] text-zinc-400 font-mono tabular-nums">本機紀錄數：{transactions.length} 筆</p>
                   </div>
                   <button
                     onClick={() => {
                       setConfirmAction({
                         type: 'transactions',
                         title: '確定強制還原雲端交易紀錄嗎？',
-                        message: '確定要將雲端試算表的 transactions 交易歷史工作表完全覆蓋並完整補回來嗎？雲端現有交易紀錄將被完全清除，本系統將以本地的正常運行歷史紀錄覆寫。',
+                        message: '確定要將雲端試算表的 transactions 交易紀錄覆蓋並補齊為此裝置上的紀錄嗎？GAS v2.6 會先備份快照驗證後再寫入。',
                         targetCount: transactions.length
                       });
                     }}
                     disabled={isLoading || !gasApiUrl}
-                    className="w-full flex items-center justify-center py-2 px-3 rounded-lg text-xs font-bold transition-all border border-emerald-500/40 text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/30 disabled:opacity-50 cursor-pointer"
+                    className="w-full flex items-center justify-center py-2 px-3 rounded-lg text-xs font-bold transition-colors border border-emerald-500/40 text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-50 cursor-pointer"
                   >
-                    以本地快取強制還原雲端交易紀錄
+                    以本地快取還原雲端交易
                   </button>
                 </div>
 
-                <div className="p-3 bg-black/40 rounded-xl border border-white/5 space-y-2 flex flex-col justify-between">
+                <div className="p-3.5 bg-black/40 rounded-xl border border-white/10 space-y-2.5 flex flex-col justify-between">
                   <div>
                     <div className="flex justify-between items-center mb-1">
                       <span>3. 採購單 (purchase_orders) 同步</span>
                     </div>
-                    <p className="text-[10px] text-zinc-400 font-mono mb-2">APP 本地採購單：{purchaseOrders.length} 筆 (含單據號)</p>
+                    <p className="text-[11px] text-zinc-400 font-mono tabular-nums">本機採購單：{purchaseOrders.length} 筆（含單據號與照片連結）</p>
                   </div>
                   <button
                     onClick={() => {
                       setConfirmAction({
                         type: 'purchase_orders',
                         title: '確定強制同步雲端採購單嗎？',
-                        message: '確定要將雲端試算表的 purchase_orders 採購單工作表完全覆蓋並補齊所有單據號碼與品項嗎？本系統將以本地完整之採購單歷史紀錄覆寫。',
+                        message: '確定要將雲端試算表的 purchase_orders 工作表覆蓋並補齊為此裝置的採購單歷史紀錄嗎？GAS v2.6 會先嘗試上傳待存照片並以快照安全寫入。',
                         targetCount: purchaseOrders.length
                       });
                     }}
                     disabled={isLoading || !gasApiUrl}
-                    className="w-full flex items-center justify-center py-2 px-3 rounded-lg text-xs font-bold transition-all border border-emerald-500/40 text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/30 disabled:opacity-50 cursor-pointer"
+                    className="w-full flex items-center justify-center py-2 px-3 rounded-lg text-xs font-bold transition-colors border border-emerald-500/40 text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-50 cursor-pointer"
                   >
-                    以本地快取強制同步雲端採購單
+                    以本地快取同步雲端採購單
+                  </button>
+                </div>
+
+                <div className="p-3.5 bg-black/40 rounded-xl border border-white/10 space-y-2.5 flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <span>4. 商品主檔 (products) 同步</span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 font-mono tabular-nums">本機商品數：{products.length} 筆</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setConfirmAction({
+                        type: 'products',
+                        title: '確定強制同步雲端商品主檔嗎？',
+                        message: '確定要將雲端試算表的 products 商品主檔工作表覆蓋並補齊為此裝置上的商品清單（含規格、安全庫存與供應狀態）嗎？',
+                        targetCount: products.length
+                      });
+                    }}
+                    disabled={isLoading || !gasApiUrl}
+                    className="w-full flex items-center justify-center py-2 px-3 rounded-lg text-xs font-bold transition-colors border border-emerald-500/40 text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-50 cursor-pointer"
+                  >
+                    以本地快取覆寫雲端商品
+                  </button>
+                </div>
+
+                <div className="p-3.5 bg-black/40 rounded-xl border border-white/10 space-y-2.5 flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <span>5. 供應商名單 (vendors) 同步</span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 font-mono tabular-nums">本機廠商數：{vendors.length} 筆</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setConfirmAction({
+                        type: 'vendors',
+                        title: '確定強制同步雲端供應商嗎？',
+                        message: '確定要將雲端試算表的 vendors 供應商工作表覆蓋並補齊為此裝置上的廠商資料嗎？',
+                        targetCount: vendors.length
+                      });
+                    }}
+                    disabled={isLoading || !gasApiUrl}
+                    className="w-full flex items-center justify-center py-2 px-3 rounded-lg text-xs font-bold transition-colors border border-emerald-500/40 text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-50 cursor-pointer"
+                  >
+                    以本地快取覆寫雲端廠商
                   </button>
                 </div>
               </div>
-              <p className="text-[10px] text-emerald-300/60 leading-relaxed md:leading-normal">
-                * 提醒：強行覆寫功能需要最新的 Apps Script 代碼。請點選上方「後端代碼與文件」，完整拷貝程式碼至 Apps Script 取代並儲存部署（部署為網頁應用程式 & 權限設定為任何人）。
+              <p className="text-[11px] text-emerald-300/65 leading-relaxed">
+                * 提醒：覆寫功能需搭配 Google Apps Script v2.6 代碼。請點選上方「後端代碼與文件」，複製最新腳本更新部署後再執行復原。
+              </p>
+            </div>
+
+            {/* Full-Site JSON Snapshot Backup & Restore */}
+            <div className="glass-panel p-4 rounded-2xl border border-sky-500/25 bg-sky-500/5 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <h2 className="text-base font-bold text-sky-200 flex items-center gap-2">
+                  <Database className="w-5 h-5 text-sky-400 shrink-0" />
+                  <span>全站資料 JSON 快照備份與還原</span>
+                </h2>
+                <span className="text-[11px] font-mono text-sky-300/80 tabular-nums">
+                  含 6 大資料表與 {countBackupPhotos(purchaseOrders, transactions)} 張單據照片
+                </span>
+              </div>
+              <p className="text-xs text-sky-200/75 leading-relaxed">
+                完整匯出或還原所有本地資料（商品、廠商、庫存、採購單、交易紀錄、網路訂單、設定），並<strong>完整保留全部採購單與進貨單據照片（含 Google Drive 連結與離線影像資料）</strong>。建議在進行大規模調整前先匯出一份本機 JSON 快照。
+              </p>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 text-[11px] font-mono">
+                <div className="px-2.5 py-2 rounded-lg bg-black/35 border border-white/10 flex items-center justify-between">
+                  <span className="text-slate-400">商品</span>
+                  <span className="text-slate-100 font-bold tabular-nums">{products.length}</span>
+                </div>
+                <div className="px-2.5 py-2 rounded-lg bg-black/35 border border-white/10 flex items-center justify-between">
+                  <span className="text-slate-400">廠商</span>
+                  <span className="text-slate-100 font-bold tabular-nums">{vendors.length}</span>
+                </div>
+                <div className="px-2.5 py-2 rounded-lg bg-black/35 border border-white/10 flex items-center justify-between">
+                  <span className="text-slate-400">庫存</span>
+                  <span className="text-slate-100 font-bold tabular-nums">{stock.length}</span>
+                </div>
+                <div className="px-2.5 py-2 rounded-lg bg-black/35 border border-white/10 flex items-center justify-between">
+                  <span className="text-slate-400">採購單</span>
+                  <span className="text-slate-100 font-bold tabular-nums">{purchaseOrders.length}</span>
+                </div>
+                <div className="px-2.5 py-2 rounded-lg bg-black/35 border border-white/10 flex items-center justify-between">
+                  <span className="text-slate-400">交易</span>
+                  <span className="text-slate-100 font-bold tabular-nums">{transactions.length}</span>
+                </div>
+                <div className="px-2.5 py-2 rounded-lg bg-black/35 border border-white/10 flex items-center justify-between">
+                  <span className="text-slate-400">網單</span>
+                  <span className="text-slate-100 font-bold tabular-nums">{onlineOrders.length}</span>
+                </div>
+                <div className="px-2.5 py-2 rounded-lg bg-sky-950/50 border border-sky-500/30 flex items-center justify-between">
+                  <span className="text-sky-300 flex items-center gap-1"><ImageIcon className="w-3 h-3" />照片</span>
+                  <span className="text-sky-200 font-bold tabular-nums">{countBackupPhotos(purchaseOrders, transactions)}</span>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2.5">
+                <button
+                  type="button"
+                  onClick={handleExportFullBackup}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 text-slate-950 transition-colors cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>匯出全站完整 JSON 備份（含單據照片）</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => backupFileInputRef.current?.click()}
+                  disabled={isImportingBackup}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-bold bg-white/10 hover:bg-white/15 text-slate-100 border border-white/15 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  <Upload className="w-4 h-4 text-sky-400" />
+                  <span>匯入並還原 JSON 快照檔案</span>
+                </button>
+
+                <input
+                  ref={backupFileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={handleSelectBackupFile}
+                />
+              </div>
+              <p className="text-[11px] text-sky-300/65 leading-relaxed">
+                * 匯入 JSON 快照後將優先還原本機資料庫與所有單據照片，不會直接覆動試算表；若需將還原後的資料同步寫回 Google 試算表，請接著點擊上方對應工作表的「覆寫雲端」修復按鈕。
               </p>
             </div>
           </>
@@ -501,8 +749,8 @@ export default function SetupGuide() {
                   <div>
                     <h3 className="text-base font-bold text-[var(--color-text-main)] flex items-center gap-2">
                       <span>2. Google Apps Script 伺服器代碼</span>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-slate-950">
-                        v2.4 最新版
+                      <span className="px-2 py-0.5 rounded text-[10px] font-black bg-amber-400 text-slate-950">
+                        v2.6 最新版
                       </span>
                     </h3>
                     <p className="text-[var(--color-text-dim)] mt-0.5 text-xs">在 Google 試算表中點選「擴充功能 &gt; Apps Script」，將以下代碼覆蓋貼上並部署為網頁應用程式：</p>
@@ -519,20 +767,21 @@ export default function SetupGuide() {
                 {/* Prominent Apps Script Update Reminder Notice */}
                 <div className="p-4 bg-gradient-to-r from-amber-500/15 via-sky-500/10 to-indigo-500/10 border-2 border-amber-500/40 rounded-2xl mb-3 space-y-3 shadow-lg shadow-amber-500/5">
                   <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-1 rounded-full text-xs font-black bg-amber-400 text-slate-950 flex items-center gap-1.5 shadow-sm">
+                    <span className="px-2.5 py-1 rounded text-xs font-black bg-amber-400 text-slate-950 flex items-center gap-1.5 shadow-sm">
                       <AlertTriangle className="w-3.5 h-3.5 fill-slate-950 stroke-none" />
-                      腳本更新提醒 (v2.5)
+                      腳本更新提醒 (v2.6)
                     </span>
-                    <span className="text-xs font-bold text-amber-300">2026-11-17 最新版</span>
+                    <span className="text-xs font-bold text-amber-300">2026-11-25 最新版（防遺失防護）</span>
                   </div>
 
                   <div className="text-xs text-slate-200 leading-relaxed bg-black/40 p-3 rounded-xl border border-white/5 space-y-1.5">
                     <div className="font-bold text-amber-200 flex items-center gap-1.5">
-                      🚀 本次腳本重點升級（庫存調整完整性與交易刪除寫回保護）：
+                      🚀 本次腳本重點升級（原子快照防遺失、45K 儲存格保護與全表修復）：
                     </div>
                     <ul className="list-disc pl-5 space-y-1 text-slate-300">
-                      <li><strong>強化 <code className="text-sky-300 font-mono">adjustStock</code> 庫存調整</strong>：支援無庫存批次時自動建立新批次、調為 0 自動刪除批次、同步更新儲位/效期/規格，並補齊 <code className="text-sky-300 font-mono">delta</code> / <code className="text-sky-300 font-mono">final_quantity</code> 欄位與交易冪等防重。</li>
-                      <li><strong>保護 <code className="text-sky-300 font-mono">overwriteStock</code> / <code className="text-sky-300 font-mono">overwriteTransactions</code></strong>：加入 <code className="text-sky-300 font-mono">LockService</code> 併發鎖定、自動過濾歸零批次並保留 <code className="text-sky-300 font-mono">po_id</code> / <code className="text-sky-300 font-mono">delta</code> / <code className="text-sky-300 font-mono">final_quantity</code> 欄位，確保刪除交易紀錄與採購單回推完整寫回。</li>
+                      <li><strong>原子快照與錯誤回滾保護（Never Clear Before Build）</strong>：所有 <code className="text-sky-300 font-mono">overwrite*</code> 與採購單寫入（<code className="text-sky-300 font-mono">addPurchaseOrder</code> / <code className="text-sky-300 font-mono">editPurchaseOrder</code>）改為先在記憶體驗證整理所有列資料、並對原表進行 <code className="text-sky-300 font-mono">snapshotSheetData</code> 快照備份後才覆寫；寫入若遇例外即自動以 <code className="text-sky-300 font-mono">restoreSheetData</code> 還原，杜絕清表後中斷造成試算表資料消失。</li>
+                      <li><strong>儲存格長度防呆與日期正規化</strong>：對所有寫入儲存格加入 45,000 字元防呆（過濾超限未上傳 base64 同時完整保留 Google Drive 圖片連結），採購單 <code className="text-sky-300 font-mono">order_date</code> / <code className="text-sky-300 font-mono">expected_date</code> 統一以純文字 <code className="text-sky-300 font-mono">yyyy-MM-dd</code> 格式存讀。</li>
+                      <li><strong>新增商品與廠商雲端修復接口</strong>：加入 <code className="text-sky-300 font-mono">overwriteProducts</code> 與 <code className="text-sky-300 font-mono">overwriteVendors</code>，配合系統設定頁 5 大工作表手動覆寫還原。</li>
                     </ul>
                     <div className="text-[11px] text-amber-300/90 font-medium pt-1 border-t border-white/10 mt-2">
                       📌 <strong>更新步驟</strong>：
@@ -599,6 +848,69 @@ function normalizePoHeader(h) {
   if (key === 'manual_edited_at') return 'manual_edited_at';
   if (key === 'manual_override') return 'manual_override';
   return String(h || '').trim();
+}
+
+function clampSheetCell(val, maxLen) {
+  var limit = maxLen || 45000;
+  if (val === undefined || val === null) return '';
+  if (typeof val === 'number' || typeof val === 'boolean') return val;
+  var str = String(val);
+  if (str.length <= limit) return str;
+  return str.substring(0, limit);
+}
+
+function sanitizeSheetImageUrlCell(val) {
+  if (val === undefined || val === null) return '';
+  var raw = String(val).trim();
+  if (!raw) return '';
+  var lines = raw.split('\\n');
+  var kept = [];
+  var totalLen = 0;
+  for (var i = 0; i < lines.length; i++) {
+    var line = String(lines[i] || '').trim();
+    if (!line) continue;
+    if (line.indexOf('data:image') === 0 && line.length > 45000) {
+      continue;
+    }
+    var nextTotal = totalLen + (kept.length > 0 ? 1 : 0) + line.length;
+    if (nextTotal > 45000) {
+      continue;
+    }
+    kept.push(line);
+    totalLen = nextTotal;
+  }
+  return kept.join('\\n');
+}
+
+function formatPoDateCell(val) {
+  if (val === undefined || val === null || val === '') return '';
+  if (Object.prototype.toString.call(val) === '[object Date]' && !isNaN(val.getTime())) {
+    return Utilities.formatDate(val, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  var s = String(val).trim();
+  if (!s) return '';
+  var m = s.match(/^(\\d{4})[\\/\\-](\\d{1,2})[\\/\\-](\\d{1,2})/);
+  if (m) {
+    var mm = m[2].length === 1 ? '0' + m[2] : m[2];
+    var dd = m[3].length === 1 ? '0' + m[3] : m[3];
+    return m[1] + '-' + mm + '-' + dd;
+  }
+  return s;
+}
+
+function snapshotSheetData(sheet) {
+  if (!sheet || sheet.getLastRow() === 0 || sheet.getLastColumn() === 0) return null;
+  return sheet.getDataRange().getValues();
+}
+
+function restoreSheetData(sheet, snapshot) {
+  if (!sheet || !snapshot || snapshot.length === 0 || !snapshot[0] || snapshot[0].length === 0) return;
+  try {
+    sheet.clearContents();
+    sheet.getRange(1, 1, snapshot.length, snapshot[0].length).setValues(snapshot);
+  } catch (restoreErr) {
+    // Best-effort restore
+  }
 }
 
 function doPost(e) {
@@ -1691,6 +2003,9 @@ function doPost(e) {
   }
 
   if (action === 'overwriteStock') {
+    if (!Array.isArray(data)) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: '無效的庫存資料陣列，已中止覆寫' })).setMimeType(ContentService.MimeType.JSON);
+    }
     var lock = LockService.getScriptLock();
     try {
       lock.waitLock(30000);
@@ -1698,49 +2013,53 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({ success: false, error: '系統忙碌中，請稍候重試' })).setMimeType(ContentService.MimeType.JSON);
     }
 
+    var stockSheet = null;
+    var backupSnapshot = null;
     try {
-      var stockSheet = ss.getSheetByName('stock');
+      stockSheet = ss.getSheetByName('stock');
       if (!stockSheet) stockSheet = ss.insertSheet('stock');
+      var stockHeaders = ['stock_id', 'product_id', 'name', 'location', 'floor', 'area', 'quantity', 'expiry_date', 'specification', 'last_update'];
+      var prodNameMapStockOv = getProdNameMap(ss);
+      var rows = [];
+      for (var i = 0; i < data.length; i++) {
+        var item = data[i];
+        if (!item) continue;
+        var itemQty = Number(item.quantity);
+        if (isNaN(itemQty) || itemQty <= 0) continue;
+        var cleanStockPid = String(item.product_id || '').trim().toLowerCase();
+        var row = [];
+        for (var j = 0; j < stockHeaders.length; j++) {
+          var hKey = stockHeaders[j];
+          var val = item[hKey];
+          if ((val === undefined || val === '') && hKey === 'name') {
+            val = item.name || item.product_name || (cleanStockPid ? prodNameMapStockOv[cleanStockPid] : '') || '';
+          }
+          if (hKey === 'quantity') {
+            val = itemQty;
+          } else {
+            val = clampSheetCell(val);
+          }
+          row.push(val !== undefined ? val : '');
+        }
+        rows.push(row);
+      }
+
+      backupSnapshot = snapshotSheetData(stockSheet);
       if (stockSheet.getLastRow() > 0) {
         stockSheet.clear();
         stockSheet.clearFormats();
       }
-      var stockHeaders = ['stock_id', 'product_id', 'name', 'location', 'floor', 'area', 'quantity', 'expiry_date', 'specification', 'last_update'];
       stockSheet.appendRow(stockHeaders);
-      var prodNameMapStockOv = getProdNameMap(ss);
-      var writtenCount = 0;
-      if (data && data.length > 0) {
-        var rows = [];
-        for (var i = 0; i < data.length; i++) {
-          var item = data[i];
-          var itemQty = Number(item.quantity);
-          if (isNaN(itemQty) || itemQty <= 0) continue;
-          var cleanStockPid = String(item.product_id || '').trim().toLowerCase();
-          var row = [];
-          for (var j = 0; j < stockHeaders.length; j++) {
-            var hKey = stockHeaders[j];
-            var val = item[hKey];
-            if ((val === undefined || val === '') && hKey === 'name') {
-              val = item.name || item.product_name || (cleanStockPid ? prodNameMapStockOv[cleanStockPid] : '') || '';
-            }
-            if (hKey === 'quantity') {
-              val = itemQty;
-            }
-            row.push(val !== undefined ? val : '');
-          }
-          rows.push(row);
-        }
-        writtenCount = rows.length;
-        if (rows.length > 0) {
-          stockSheet.getRange(2, 1, rows.length, stockHeaders.length).setValues(rows);
-          stockSheet.getRange(2, 1, rows.length, 2).setNumberFormat('@');
-          stockSheet.getRange(2, 7, rows.length, 1).setNumberFormat('0');
-          stockSheet.getRange(2, 8, rows.length, 1).setNumberFormat('@');
-          stockSheet.getRange(2, 10, rows.length, 1).setNumberFormat('@');
-        }
+      if (rows.length > 0) {
+        stockSheet.getRange(2, 1, rows.length, stockHeaders.length).setValues(rows);
+        stockSheet.getRange(2, 1, rows.length, 2).setNumberFormat('@');
+        stockSheet.getRange(2, 7, rows.length, 1).setNumberFormat('0');
+        stockSheet.getRange(2, 8, rows.length, 1).setNumberFormat('@');
+        stockSheet.getRange(2, 10, rows.length, 1).setNumberFormat('@');
       }
-      return ContentService.createTextOutput(JSON.stringify({ success: true, count: writtenCount })).setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, count: rows.length })).setMimeType(ContentService.MimeType.JSON);
     } catch (err) {
+      restoreSheetData(stockSheet, backupSnapshot);
       return ContentService.createTextOutput(JSON.stringify({ success: false, error: err && err.message ? err.message : String(err) })).setMimeType(ContentService.MimeType.JSON);
     } finally {
       lock.releaseLock();
@@ -1748,6 +2067,9 @@ function doPost(e) {
   }
 
   if (action === 'overwriteTransactions') {
+    if (!Array.isArray(data)) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: '無效的交易資料陣列，已中止覆寫' })).setMimeType(ContentService.MimeType.JSON);
+    }
     var lock = LockService.getScriptLock();
     try {
       lock.waitLock(30000);
@@ -1755,14 +2077,16 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({ success: false, error: '系統忙碌中，請稍候重試' })).setMimeType(ContentService.MimeType.JSON);
     }
 
+    var transSheet = null;
+    var backupSnapshot = null;
     try {
-      var transSheet = ss.getSheetByName('transactions');
+      transSheet = ss.getSheetByName('transactions');
       if (!transSheet) transSheet = ss.insertSheet('transactions');
       var transHeaders = ['transaction_id', 'online_order_id', 'platform', 'product_id', 'name', 'type', 'quantity', 'delta', 'final_quantity', 'price', 'location', 'floor', 'area', 'expiry_date', 'specification', 'cost_price', 'vendor_id', 'po_id', 'date', 'note', 'operator'];
       if (transSheet.getLastRow() > 0) {
         var existingTH = transSheet.getRange(1, 1, 1, transSheet.getLastColumn()).getValues()[0];
         if (existingTH && existingTH.length > 0 && String(existingTH[0]).trim()) {
-          transHeaders = existingTH;
+          transHeaders = existingTH.slice();
           if (transHeaders.indexOf('name') === -1) {
             var foundAlias = false;
             for (var th = 0; th < transHeaders.length; th++) {
@@ -1782,32 +2106,42 @@ function doPost(e) {
             }
           });
         }
+      }
+
+      var prodNameMapOverwrite = getProdNameMap(ss);
+      var rows = [];
+      for (var i = 0; i < data.length; i++) {
+        var item = data[i];
+        if (!item) continue;
+        var cleanTxPid = String(item.product_id || '').trim().toLowerCase();
+        var row = [];
+        for (var j = 0; j < transHeaders.length; j++) {
+          var k = transHeaders[j];
+          var val = item[k];
+          if ((val === undefined || val === '') && (k === 'name' || k === 'product_name')) {
+            val = item.name || item.product_name || (cleanTxPid ? prodNameMapOverwrite[cleanTxPid] : '') || '';
+          }
+          if (k === 'cost_price' || k === 'price' || k === 'quantity') {
+            val = (val !== undefined && val !== null && val !== '') ? Number(val) || 0 : 0;
+          } else if (k === 'delta' || k === 'final_quantity') {
+            val = (val !== undefined && val !== null && val !== '') ? Number(val) || 0 : '';
+          } else if (k === 'invoice_image_url') {
+            val = sanitizeSheetImageUrlCell(val);
+          } else {
+            val = clampSheetCell(val);
+          }
+          row.push(val !== undefined ? val : '');
+        }
+        rows.push(row);
+      }
+
+      backupSnapshot = snapshotSheetData(transSheet);
+      if (transSheet.getLastRow() > 0) {
         transSheet.clear();
         transSheet.clearFormats();
       }
       transSheet.appendRow(transHeaders);
-      if (data && data.length > 0) {
-        var prodNameMapOverwrite = getProdNameMap(ss);
-        var rows = [];
-        for (var i = 0; i < data.length; i++) {
-          var item = data[i];
-          var cleanTxPid = String(item.product_id || '').trim().toLowerCase();
-          var row = [];
-          for (var j = 0; j < transHeaders.length; j++) {
-            var k = transHeaders[j];
-            var val = item[k];
-            if ((val === undefined || val === '') && (k === 'name' || k === 'product_name')) {
-              val = item.name || item.product_name || (cleanTxPid ? prodNameMapOverwrite[cleanTxPid] : '') || '';
-            }
-            if (k === 'cost_price' || k === 'price' || k === 'quantity') {
-              val = (val !== undefined && val !== null && val !== '') ? Number(val) || 0 : 0;
-            } else if (k === 'delta' || k === 'final_quantity') {
-              val = (val !== undefined && val !== null && val !== '') ? Number(val) || 0 : '';
-            }
-            row.push(val !== undefined ? val : '');
-          }
-          rows.push(row);
-        }
+      if (rows.length > 0) {
         transSheet.getRange(2, 1, rows.length, transHeaders.length).setValues(rows);
         var txIdCol = transHeaders.indexOf('transaction_id') + 1;
         var poIdCol = transHeaders.indexOf('po_id') + 1;
@@ -1828,8 +2162,145 @@ function doPost(e) {
         if (dateCol > 0) transSheet.getRange(2, dateCol, rows.length, 1).setNumberFormat('@');
         if (expiryCol > 0) transSheet.getRange(2, expiryCol, rows.length, 1).setNumberFormat('@');
       }
-      return ContentService.createTextOutput(JSON.stringify({ success: true, count: data.length })).setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, count: rows.length })).setMimeType(ContentService.MimeType.JSON);
     } catch (err) {
+      restoreSheetData(transSheet, backupSnapshot);
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: err && err.message ? err.message : String(err) })).setMimeType(ContentService.MimeType.JSON);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
+  if (action === 'overwriteProducts') {
+    if (!Array.isArray(data)) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: '無效的商品資料陣列，已中止覆寫' })).setMimeType(ContentService.MimeType.JSON);
+    }
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(30000);
+    } catch (e) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: '系統忙碌中，請稍候重試' })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    var prodSheet = null;
+    var backupSnapshot = null;
+    try {
+      prodSheet = ss.getSheetByName('products');
+      if (!prodSheet) prodSheet = ss.insertSheet('products');
+      var prodHeaders = ['product_id', 'barcode', 'name', 'category', 'brand', 'unit', 'cost_price', 'vendor_id', 'has_expiry', 'specification', 'min_stock', 'is_discontinued', 'expected_restock_date', 'created_at'];
+      if (prodSheet.getLastRow() > 0) {
+        var existingPH = prodSheet.getRange(1, 1, 1, prodSheet.getLastColumn()).getValues()[0];
+        if (existingPH && existingPH.length > 0 && String(existingPH[0]).trim()) {
+          prodHeaders = existingPH.slice();
+          var ensureProdCols = ['brand', 'specification', 'min_stock', 'is_discontinued', 'expected_restock_date', 'created_at'];
+          ensureProdCols.forEach(function(col) {
+            if (prodHeaders.indexOf(col) === -1) prodHeaders.push(col);
+          });
+        }
+      }
+
+      var rows = [];
+      for (var i = 0; i < data.length; i++) {
+        var p = data[i];
+        if (!p || !p.product_id) continue;
+        var row = [];
+        for (var j = 0; j < prodHeaders.length; j++) {
+          var key = prodHeaders[j];
+          var val = p[key];
+          if (key === 'cost_price' || key === 'min_stock') {
+            val = Number(val) || 0;
+          } else if (key === 'has_expiry' || key === 'is_discontinued') {
+            val = (val === true || String(val).toUpperCase() === 'TRUE');
+          } else {
+            val = clampSheetCell(val);
+          }
+          row.push(val !== undefined ? val : '');
+        }
+        rows.push(row);
+      }
+
+      backupSnapshot = snapshotSheetData(prodSheet);
+      if (prodSheet.getLastRow() > 0) {
+        prodSheet.clear();
+        prodSheet.clearFormats();
+      }
+      prodSheet.appendRow(prodHeaders);
+      if (rows.length > 0) {
+        prodSheet.getRange(2, 1, rows.length, prodHeaders.length).setValues(rows);
+        var pidCol = prodHeaders.indexOf('product_id') + 1;
+        var barcodeCol = prodHeaders.indexOf('barcode') + 1;
+        var costCol = prodHeaders.indexOf('cost_price') + 1;
+        var restockCol = prodHeaders.indexOf('expected_restock_date') + 1;
+        if (pidCol > 0) prodSheet.getRange(2, pidCol, rows.length, 1).setNumberFormat('@');
+        if (barcodeCol > 0) prodSheet.getRange(2, barcodeCol, rows.length, 1).setNumberFormat('@');
+        if (costCol > 0) prodSheet.getRange(2, costCol, rows.length, 1).setNumberFormat('0.##');
+        if (restockCol > 0) prodSheet.getRange(2, restockCol, rows.length, 1).setNumberFormat('@');
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, count: rows.length })).setMimeType(ContentService.MimeType.JSON);
+    } catch (err) {
+      restoreSheetData(prodSheet, backupSnapshot);
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: err && err.message ? err.message : String(err) })).setMimeType(ContentService.MimeType.JSON);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
+  if (action === 'overwriteVendors') {
+    if (!Array.isArray(data)) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: '無效的廠商資料陣列，已中止覆寫' })).setMimeType(ContentService.MimeType.JSON);
+    }
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(30000);
+    } catch (e) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: '系統忙碌中，請稍候重試' })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    var vendorSheet = null;
+    var backupSnapshot = null;
+    try {
+      vendorSheet = ss.getSheetByName('vendors');
+      if (!vendorSheet) vendorSheet = ss.insertSheet('vendors');
+      var vendorHeaders = ['vendor_id', 'vendor_name', 'contact', 'phone'];
+      if (vendorSheet.getLastRow() > 0) {
+        var existingVH = vendorSheet.getRange(1, 1, 1, vendorSheet.getLastColumn()).getValues()[0];
+        if (existingVH && existingVH.length > 0 && String(existingVH[0]).trim()) {
+          vendorHeaders = existingVH.slice();
+        }
+      }
+
+      var rows = [];
+      for (var i = 0; i < data.length; i++) {
+        var v = data[i];
+        if (!v || !v.vendor_id) continue;
+        var row = [];
+        for (var j = 0; j < vendorHeaders.length; j++) {
+          var key = vendorHeaders[j];
+          var val = v[key];
+          if ((val === undefined || val === '') && key === 'vendor_name') {
+            val = v.vendor_name || v.name || '';
+          }
+          row.push(clampSheetCell(val));
+        }
+        rows.push(row);
+      }
+
+      backupSnapshot = snapshotSheetData(vendorSheet);
+      if (vendorSheet.getLastRow() > 0) {
+        vendorSheet.clear();
+        vendorSheet.clearFormats();
+      }
+      vendorSheet.appendRow(vendorHeaders);
+      if (rows.length > 0) {
+        vendorSheet.getRange(2, 1, rows.length, vendorHeaders.length).setValues(rows);
+        var vidCol = vendorHeaders.indexOf('vendor_id') + 1;
+        var phoneCol = vendorHeaders.indexOf('phone') + 1;
+        if (vidCol > 0) vendorSheet.getRange(2, vidCol, rows.length, 1).setNumberFormat('@');
+        if (phoneCol > 0) vendorSheet.getRange(2, phoneCol, rows.length, 1).setNumberFormat('@');
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, count: rows.length })).setMimeType(ContentService.MimeType.JSON);
+    } catch (err) {
+      restoreSheetData(vendorSheet, backupSnapshot);
       return ContentService.createTextOutput(JSON.stringify({ success: false, error: err && err.message ? err.message : String(err) })).setMimeType(ContentService.MimeType.JSON);
     } finally {
       lock.releaseLock();
@@ -2213,14 +2684,20 @@ function doPost(e) {
   }
 
   if (action === 'addPurchaseOrder' || action === 'savePurchaseOrders' || action === 'editPurchaseOrder') {
+    var poList = Array.isArray(data) ? data : (data ? [data] : []);
+    if (poList.length === 0) {
+      return ContentService.createTextOutput(JSON.stringify({success: false, error: '無效的採購單資料'})).setMimeType(ContentService.MimeType.JSON);
+    }
     var lock = LockService.getScriptLock();
     try {
-      lock.waitLock(15000);
+      lock.waitLock(30000);
     } catch (e) {
       return ContentService.createTextOutput(JSON.stringify({success: false, error: '系統忙碌中，請稍候重試'})).setMimeType(ContentService.MimeType.JSON);
     }
+    var poSheet = null;
+    var poSnapshot = null;
     try {
-      var poSheet = ss.getSheetByName('purchase_orders');
+      poSheet = ss.getSheetByName('purchase_orders');
       if (!poSheet) {
         poSheet = ss.insertSheet('purchase_orders');
         poSheet.appendRow(['po_id', 'vendor_id', 'vendor_name', 'product_id', 'specification', 'name', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_number', 'invoice_image_url', 'updated_at', 'manual_edited_at', 'manual_override']);
@@ -2240,20 +2717,16 @@ function doPost(e) {
         }
       }
       var poIdIdx = normHeaders.indexOf('po_id');
+      var orderDateIdx = normHeaders.indexOf('order_date');
+      var expectedDateIdx = normHeaders.indexOf('expected_date');
+      var invNumIdx = normHeaders.indexOf('invoice_number');
 
-      var poList = Array.isArray(data) ? data : [data];
       var prodNameMapPO = getProdNameMap(ss);
+      var preparedBatches = [];
       for (var p = 0; p < poList.length; p++) {
         var po = poList[p];
-        var targetPoId = String(po.po_id || '').trim();
-        if (poSheet.getLastRow() > 1 && poIdIdx !== -1 && targetPoId) {
-          var values = poSheet.getDataRange().getDisplayValues();
-          for (var r = values.length - 1; r >= 1; r--) {
-            if (String(values[r][poIdIdx] || '').trim() === targetPoId) {
-              poSheet.deleteRow(r + 1);
-            }
-          }
-        }
+        var targetPoId = String((po && po.po_id) || '').trim();
+        if (!targetPoId) continue;
 
         var items = po.items && po.items.length > 0 ? po.items : [{
           product_id: po.product_id || '',
@@ -2265,6 +2738,11 @@ function doPost(e) {
           note: ''
         }];
 
+        var safeImageUrl = sanitizeSheetImageUrlCell(po.invoice_image_url || '');
+        var safeOrderDate = formatPoDateCell(po.order_date || '');
+        var safeExpectedDate = formatPoDateCell(po.expected_date || '');
+        var rowsForPo = [];
+
         for (var it = 0; it < items.length; it++) {
           var item = items[it];
           var cleanPoPid = String(item.product_id || '').trim().toLowerCase();
@@ -2273,31 +2751,58 @@ function doPost(e) {
             var colName = normHeaders[h];
             var val = '';
             if (colName === 'po_id') val = targetPoId;
-            else if (colName === 'vendor_id') val = po.vendor_id || '';
-            else if (colName === 'vendor_name') val = po.vendor_name || '';
-            else if (colName === 'product_id') val = item.product_id || '';
-            else if (colName === 'name') val = item.name || item.product_name || (cleanPoPid ? prodNameMapPO[cleanPoPid] : '') || '';
-            else if (colName === 'specification') val = item.specification || '';
+            else if (colName === 'vendor_id') val = clampSheetCell(po.vendor_id || '');
+            else if (colName === 'vendor_name') val = clampSheetCell(po.vendor_name || '');
+            else if (colName === 'product_id') val = clampSheetCell(item.product_id || '');
+            else if (colName === 'name') val = clampSheetCell(item.name || item.product_name || (cleanPoPid ? prodNameMapPO[cleanPoPid] : '') || '');
+            else if (colName === 'specification') val = clampSheetCell(item.specification || '');
             else if (colName === 'ordered_quantity') val = Number(item.ordered_quantity) || 0;
             else if (colName === 'received_quantity') val = Number(item.received_quantity) || 0;
             else if (colName === 'cost_price') val = Number(item.cost_price) || 0;
-            else if (colName === 'status') val = po.status || 'pending';
-            else if (colName === 'order_date') val = po.order_date || '';
-            else if (colName === 'expected_date') val = po.expected_date || '';
-            else if (colName === 'note') val = po.note !== undefined ? String(po.note || '') : (item.note || '');
-            else if (colName === 'operator') val = po.operator || '';
-            else if (colName === 'invoice_number') val = po.invoice_number || '';
-            else if (colName === 'invoice_image_url') val = po.invoice_image_url || '';
-            else if (colName === 'updated_at') val = po.updated_at || new Date().toISOString();
-            else if (colName === 'manual_edited_at') val = po.manual_edited_at || '';
+            else if (colName === 'status') val = clampSheetCell(po.status || 'pending');
+            else if (colName === 'order_date') val = safeOrderDate;
+            else if (colName === 'expected_date') val = safeExpectedDate;
+            else if (colName === 'note') val = clampSheetCell(po.note !== undefined ? String(po.note || '') : (item.note || ''));
+            else if (colName === 'operator') val = clampSheetCell(po.operator || '');
+            else if (colName === 'invoice_number') val = clampSheetCell(po.invoice_number || '');
+            else if (colName === 'invoice_image_url') val = safeImageUrl;
+            else if (colName === 'updated_at') val = clampSheetCell(po.updated_at || new Date().toISOString());
+            else if (colName === 'manual_edited_at') val = clampSheetCell(po.manual_edited_at || '');
             else if (colName === 'manual_override') val = po.manual_override === true ? 'TRUE' : (po.manual_override === false ? 'FALSE' : '');
             row.push(val);
           }
-          poSheet.appendRow(row);
+          rowsForPo.push(row);
+        }
+        preparedBatches.push({ poId: targetPoId, rows: rowsForPo });
+      }
+
+      if (preparedBatches.length === 0) {
+        return ContentService.createTextOutput(JSON.stringify({success: false, error: '採購單缺乏有效的 po_id'})).setMimeType(ContentService.MimeType.JSON);
+      }
+
+      poSnapshot = snapshotSheetData(poSheet);
+      for (var b = 0; b < preparedBatches.length; b++) {
+        var batch = preparedBatches[b];
+        if (poSheet.getLastRow() > 1 && poIdIdx !== -1) {
+          var values = poSheet.getDataRange().getDisplayValues();
+          for (var r = values.length - 1; r >= 1; r--) {
+            if (String(values[r][poIdIdx] || '').trim() === batch.poId) {
+              poSheet.deleteRow(r + 1);
+            }
+          }
+        }
+        if (batch.rows.length > 0) {
+          var startRow = poSheet.getLastRow() + 1;
+          poSheet.getRange(startRow, 1, batch.rows.length, normHeaders.length).setValues(batch.rows);
+          if (poIdIdx !== -1) poSheet.getRange(startRow, poIdIdx + 1, batch.rows.length, 1).setNumberFormat('@');
+          if (orderDateIdx !== -1) poSheet.getRange(startRow, orderDateIdx + 1, batch.rows.length, 1).setNumberFormat('@');
+          if (expectedDateIdx !== -1) poSheet.getRange(startRow, expectedDateIdx + 1, batch.rows.length, 1).setNumberFormat('@');
+          if (invNumIdx !== -1) poSheet.getRange(startRow, invNumIdx + 1, batch.rows.length, 1).setNumberFormat('@');
         }
       }
       return ContentService.createTextOutput(JSON.stringify({success: true})).setMimeType(ContentService.MimeType.JSON);
     } catch (err) {
+      restoreSheetData(poSheet, poSnapshot);
       return ContentService.createTextOutput(JSON.stringify({success: false, error: err.toString()})).setMimeType(ContentService.MimeType.JSON);
     } finally {
       lock.releaseLock();
@@ -2305,20 +2810,25 @@ function doPost(e) {
   }
 
   if (action === 'overwritePurchaseOrders') {
+    if (!Array.isArray(data)) {
+      return ContentService.createTextOutput(JSON.stringify({success: false, error: '無效的採購單陣列，已中止覆寫'})).setMimeType(ContentService.MimeType.JSON);
+    }
     var lock = LockService.getScriptLock();
     try {
-      lock.waitLock(15000);
+      lock.waitLock(30000);
     } catch (e) {
       return ContentService.createTextOutput(JSON.stringify({success: false, error: '系統忙碌中，請稍候重試'})).setMimeType(ContentService.MimeType.JSON);
     }
+    var poSheet = null;
+    var poSnapshot = null;
     try {
-      var poSheet = ss.getSheetByName('purchase_orders');
+      poSheet = ss.getSheetByName('purchase_orders');
       if (!poSheet) poSheet = ss.insertSheet('purchase_orders');
       var poHeaders = ['po_id', 'vendor_id', 'vendor_name', 'product_id', 'specification', 'name', 'ordered_quantity', 'received_quantity', 'cost_price', 'status', 'order_date', 'expected_date', 'note', 'operator', 'invoice_number', 'invoice_image_url', 'updated_at', 'manual_edited_at', 'manual_override'];
       if (poSheet.getLastRow() > 0) {
         var existingPOH = poSheet.getRange(1, 1, 1, poSheet.getLastColumn()).getValues()[0];
         if (existingPOH && existingPOH.length > 0 && String(existingPOH[0]).trim()) {
-          poHeaders = existingPOH;
+          poHeaders = existingPOH.slice();
           var existingNorm = [];
           for (var ehi = 0; ehi < poHeaders.length; ehi++) {
             existingNorm.push(normalizePoHeader(poHeaders[ehi]));
@@ -2331,65 +2841,81 @@ function doPost(e) {
             }
           }
         }
-        poSheet.clear();
-        poSheet.clearFormats();
       }
-      poSheet.appendRow(poHeaders);
       var poNormHeaders = [];
       for (var pnh = 0; pnh < poHeaders.length; pnh++) {
         poNormHeaders.push(normalizePoHeader(poHeaders[pnh]));
       }
-      if (data && data.length > 0) {
-        var prodNameMapPOOverwrite = getProdNameMap(ss);
-        var rows = [];
-        for (var p = 0; p < data.length; p++) {
-          var po = data[p];
-          var items = po.items && po.items.length > 0 ? po.items : [{
-            product_id: po.product_id || '',
-            name: po.name || po.product_name || '',
-            specification: po.specification || '',
-            ordered_quantity: po.ordered_quantity || po.quantity || 1,
-            received_quantity: po.received_quantity || 0,
-            cost_price: po.cost_price || 0,
-            note: ''
-          }];
-          for (var it = 0; it < items.length; it++) {
-            var item = items[it];
-            var cleanPoItPid = String(item.product_id || '').trim().toLowerCase();
-            var row = [];
-            for (var h = 0; h < poNormHeaders.length; h++) {
-              var colName = poNormHeaders[h];
-              var val = '';
-              if (colName === 'po_id') val = po.po_id;
-              else if (colName === 'vendor_id') val = po.vendor_id || '';
-              else if (colName === 'vendor_name') val = po.vendor_name || '';
-              else if (colName === 'product_id') val = item.product_id || '';
-              else if (colName === 'name') val = item.name || item.product_name || (cleanPoItPid ? prodNameMapPOOverwrite[cleanPoItPid] : '') || '';
-              else if (colName === 'specification') val = item.specification || '';
-              else if (colName === 'ordered_quantity') val = Number(item.ordered_quantity) || 0;
-              else if (colName === 'received_quantity') val = Number(item.received_quantity) || 0;
-              else if (colName === 'cost_price') val = Number(item.cost_price) || 0;
-              else if (colName === 'status') val = po.status || 'pending';
-              else if (colName === 'order_date') val = po.order_date || '';
-              else if (colName === 'expected_date') val = po.expected_date || '';
-              else if (colName === 'note') val = po.note !== undefined ? String(po.note || '') : (item.note || '');
-              else if (colName === 'operator') val = po.operator || '';
-              else if (colName === 'invoice_number') val = po.invoice_number || '';
-              else if (colName === 'invoice_image_url') val = po.invoice_image_url || '';
-              else if (colName === 'updated_at') val = po.updated_at || new Date().toISOString();
-              else if (colName === 'manual_edited_at') val = po.manual_edited_at || '';
-              else if (colName === 'manual_override') val = po.manual_override === true ? 'TRUE' : (po.manual_override === false ? 'FALSE' : '');
-              row.push(val);
-            }
-            rows.push(row);
+
+      var prodNameMapPOOverwrite = getProdNameMap(ss);
+      var rows = [];
+      for (var p = 0; p < data.length; p++) {
+        var po = data[p];
+        if (!po || !po.po_id) continue;
+        var safeImgCell = sanitizeSheetImageUrlCell(po.invoice_image_url || '');
+        var safeOrderD = formatPoDateCell(po.order_date || '');
+        var safeExpectedD = formatPoDateCell(po.expected_date || '');
+        var items = po.items && po.items.length > 0 ? po.items : [{
+          product_id: po.product_id || '',
+          name: po.name || po.product_name || '',
+          specification: po.specification || '',
+          ordered_quantity: po.ordered_quantity || po.quantity || 1,
+          received_quantity: po.received_quantity || 0,
+          cost_price: po.cost_price || 0,
+          note: ''
+        }];
+        for (var it = 0; it < items.length; it++) {
+          var item = items[it];
+          var cleanPoItPid = String(item.product_id || '').trim().toLowerCase();
+          var row = [];
+          for (var h = 0; h < poNormHeaders.length; h++) {
+            var colName = poNormHeaders[h];
+            var val = '';
+            if (colName === 'po_id') val = clampSheetCell(po.po_id);
+            else if (colName === 'vendor_id') val = clampSheetCell(po.vendor_id || '');
+            else if (colName === 'vendor_name') val = clampSheetCell(po.vendor_name || '');
+            else if (colName === 'product_id') val = clampSheetCell(item.product_id || '');
+            else if (colName === 'name') val = clampSheetCell(item.name || item.product_name || (cleanPoItPid ? prodNameMapPOOverwrite[cleanPoItPid] : '') || '');
+            else if (colName === 'specification') val = clampSheetCell(item.specification || '');
+            else if (colName === 'ordered_quantity') val = Number(item.ordered_quantity) || 0;
+            else if (colName === 'received_quantity') val = Number(item.received_quantity) || 0;
+            else if (colName === 'cost_price') val = Number(item.cost_price) || 0;
+            else if (colName === 'status') val = clampSheetCell(po.status || 'pending');
+            else if (colName === 'order_date') val = safeOrderD;
+            else if (colName === 'expected_date') val = safeExpectedD;
+            else if (colName === 'note') val = clampSheetCell(po.note !== undefined ? String(po.note || '') : (item.note || ''));
+            else if (colName === 'operator') val = clampSheetCell(po.operator || '');
+            else if (colName === 'invoice_number') val = clampSheetCell(po.invoice_number || '');
+            else if (colName === 'invoice_image_url') val = safeImgCell;
+            else if (colName === 'updated_at') val = clampSheetCell(po.updated_at || new Date().toISOString());
+            else if (colName === 'manual_edited_at') val = clampSheetCell(po.manual_edited_at || '');
+            else if (colName === 'manual_override') val = po.manual_override === true ? 'TRUE' : (po.manual_override === false ? 'FALSE' : '');
+            row.push(val);
           }
-        }
-        if (rows.length > 0) {
-          poSheet.getRange(2, 1, rows.length, poHeaders.length).setValues(rows);
+          rows.push(row);
         }
       }
-      return ContentService.createTextOutput(JSON.stringify({success:true, count: data ? data.length : 0})).setMimeType(ContentService.MimeType.JSON);
+
+      poSnapshot = snapshotSheetData(poSheet);
+      if (poSheet.getLastRow() > 0) {
+        poSheet.clear();
+        poSheet.clearFormats();
+      }
+      poSheet.appendRow(poHeaders);
+      if (rows.length > 0) {
+        poSheet.getRange(2, 1, rows.length, poHeaders.length).setValues(rows);
+        var ovPoIdCol = poNormHeaders.indexOf('po_id') + 1;
+        var ovOrdDateCol = poNormHeaders.indexOf('order_date') + 1;
+        var ovExpDateCol = poNormHeaders.indexOf('expected_date') + 1;
+        var ovInvCol = poNormHeaders.indexOf('invoice_number') + 1;
+        if (ovPoIdCol > 0) poSheet.getRange(2, ovPoIdCol, rows.length, 1).setNumberFormat('@');
+        if (ovOrdDateCol > 0) poSheet.getRange(2, ovOrdDateCol, rows.length, 1).setNumberFormat('@');
+        if (ovExpDateCol > 0) poSheet.getRange(2, ovExpDateCol, rows.length, 1).setNumberFormat('@');
+        if (ovInvCol > 0) poSheet.getRange(2, ovInvCol, rows.length, 1).setNumberFormat('@');
+      }
+      return ContentService.createTextOutput(JSON.stringify({success: true, count: data.length})).setMimeType(ContentService.MimeType.JSON);
     } catch (err) {
+      restoreSheetData(poSheet, poSnapshot);
       return ContentService.createTextOutput(JSON.stringify({success: false, error: err.toString()})).setMimeType(ContentService.MimeType.JSON);
     } finally {
       lock.releaseLock();
@@ -2579,8 +3105,8 @@ function doGet(e) {
               vendor_id: poObj.vendor_id || '',
               vendor_name: poObj.vendor_name || '',
               status: poObj.status || 'pending',
-              order_date: poObj.order_date || '',
-              expected_date: poObj.expected_date || '',
+              order_date: formatPoDateCell(poObj.order_date || ''),
+              expected_date: formatPoDateCell(poObj.expected_date || ''),
               note: poObj.note || '',
               operator: poObj.operator || '',
               invoice_number: invNum,
@@ -2785,8 +3311,8 @@ function doGet(e) {
           vendor_id: obj.vendor_id || '',
           vendor_name: obj.vendor_name || '',
           status: obj.status || 'pending',
-          order_date: obj.order_date || '',
-          expected_date: obj.expected_date || '',
+          order_date: formatPoDateCell(obj.order_date || ''),
+          expected_date: formatPoDateCell(obj.expected_date || ''),
           note: obj.note || '',
           operator: obj.operator || '',
           invoice_number: invNum,
@@ -2878,7 +3404,7 @@ class ScannerScreen extends StatelessWidget {
 
             <div className="bg-white/5 rounded-xl p-3 border border-white/5 flex justify-between items-center text-xs font-mono">
               <span className="text-zinc-500 font-sans">本地預備寫入筆數</span>
-              <span className="text-emerald-400 font-bold">{confirmAction.targetCount} 筆</span>
+              <span className="text-emerald-400 font-bold tabular-nums">{confirmAction.targetCount} 筆</span>
             </div>
 
             <div className="flex gap-3 pt-2">
@@ -2893,6 +3419,95 @@ class ScannerScreen extends StatelessWidget {
                 className="flex-1 py-2 px-4 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-[#0f172a] rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-500/15 cursor-pointer"
               >
                 確認執行覆寫
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingBackupImport && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[105] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-[#0f172a] border border-sky-500/30 rounded-2xl overflow-hidden shadow-2xl p-6 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="p-2 bg-sky-500/20 border border-sky-500/30 rounded-xl shrink-0">
+                  <Database className="w-5 h-5 text-sky-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">確認還原全站 JSON 快照備份？</h3>
+                  <p className="text-xs text-slate-400 mt-1 break-all">
+                    檔案：<span className="text-slate-200 font-mono">{pendingBackupImport.fileName}</span>
+                  </p>
+                  <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+                    備份時間：{pendingBackupImport.backup.exportedAt}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !isImportingBackup && setPendingBackupImport(null)}
+                disabled={isImportingBackup}
+                className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs font-mono">
+              <div className="bg-white/5 rounded-lg p-2.5 border border-white/10 flex justify-between">
+                <span className="text-slate-400 font-sans">商品主檔</span>
+                <span className="text-white font-bold tabular-nums">{pendingBackupImport.counts.products}</span>
+              </div>
+              <div className="bg-white/5 rounded-lg p-2.5 border border-white/10 flex justify-between">
+                <span className="text-slate-400 font-sans">廠商名單</span>
+                <span className="text-white font-bold tabular-nums">{pendingBackupImport.counts.vendors}</span>
+              </div>
+              <div className="bg-white/5 rounded-lg p-2.5 border border-white/10 flex justify-between">
+                <span className="text-slate-400 font-sans">庫存批次</span>
+                <span className="text-white font-bold tabular-nums">{pendingBackupImport.counts.stock}</span>
+              </div>
+              <div className="bg-white/5 rounded-lg p-2.5 border border-white/10 flex justify-between">
+                <span className="text-slate-400 font-sans">採購訂單</span>
+                <span className="text-white font-bold tabular-nums">{pendingBackupImport.counts.purchaseOrders}</span>
+              </div>
+              <div className="bg-white/5 rounded-lg p-2.5 border border-white/10 flex justify-between">
+                <span className="text-slate-400 font-sans">交易紀錄</span>
+                <span className="text-white font-bold tabular-nums">{pendingBackupImport.counts.transactions}</span>
+              </div>
+              <div className="bg-white/5 rounded-lg p-2.5 border border-white/10 flex justify-between">
+                <span className="text-slate-400 font-sans">網路訂單</span>
+                <span className="text-white font-bold tabular-nums">{pendingBackupImport.counts.onlineOrders}</span>
+              </div>
+            </div>
+
+            <div className="bg-sky-500/10 rounded-xl p-3 border border-sky-500/30 flex justify-between items-center text-xs">
+              <span className="text-sky-200 flex items-center gap-1.5 font-semibold">
+                <ImageIcon className="w-4 h-4 text-sky-400" />
+                包含單據照片數量（完整還原留存）
+              </span>
+              <span className="text-sky-300 font-mono font-bold tabular-nums">{pendingBackupImport.counts.photos} 張</span>
+            </div>
+
+            <p className="text-[11px] text-amber-200/80 leading-relaxed bg-amber-500/10 border border-amber-500/25 rounded-xl p-3">
+              還原後會覆寫目前這台裝置的本機資料並清空舊的待同步佇列（不會立即蓋掉 Google 試算表）。若要將還原資料寫回雲端試算表，請接著點擊「雲端試算表手動修復」各表的覆寫按鈕。
+            </p>
+
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setPendingBackupImport(null)}
+                disabled={isImportingBackup}
+                className="flex-1 py-2.5 px-4 bg-white/5 border border-white/10 hover:bg-white/10 rounded-xl text-xs font-bold text-zinc-300 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmImportBackup}
+                disabled={isImportingBackup}
+                className="flex-1 py-2.5 px-4 bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-xl text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {isImportingBackup ? '正在還原資料...' : '確認匯入還原本機資料'}
               </button>
             </div>
           </div>
